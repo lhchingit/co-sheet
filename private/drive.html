@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Co-Sheet</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<!-- i18n FOUC guard: hide the UI until the chosen language is applied (see the
+     editor's index.html for rationale). The timeout reveals the page even if
+     i18n initialization fails, so it is never stuck blank. -->
+<style id="i18n-fouc-guard">html:not(.i18n-ready) body{visibility:hidden}</style>
+<script>setTimeout(function(){document.documentElement.classList.add('i18n-ready');},1500);</script>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+    // A compact subset of the editor's Material Design 3 light palette so the file
+    // manager shares the spreadsheet UI's look and feel.
+    tailwind.config = {
+        darkMode: "class",
+        theme: {
+            extend: {
+                colors: {
+                    "primary": "#0b57d0",
+                    "on-primary": "#ffffff",
+                    "primary-container": "#dae2ff",
+                    "on-primary-container": "#001a41",
+                    "surface": "#f7f9ff",
+                    "surface-bright": "#f7f9ff",
+                    "surface-container-lowest": "#ffffff",
+                    "surface-container-low": "#f1f4fa",
+                    "surface-container": "#ebeef4",
+                    "surface-container-high": "#e5e8ee",
+                    "surface-container-highest": "#dfe3e8",
+                    "on-surface": "#181c20",
+                    "on-surface-variant": "#424654",
+                    "outline": "#737785",
+                    "outline-variant": "#c3c6d6",
+                    "secondary-container": "#d8e2ff",
+                    "on-secondary-container": "#001a41",
+                    "error": "#ba1a1a",
+                    "on-error": "#ffffff"
+                },
+                fontFamily: {
+                    sans: ['Roboto', 'sans-serif']
+                }
+            }
+        }
+    };
+</script>
+<style>
+    body { font-family: 'Roboto', sans-serif; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    /* Faint placeholder "grid" used as the card thumbnail (no fabricated data). */
+    .sheet-thumb {
+        background-image:
+            linear-gradient(to right, #e3e7ee 1px, transparent 1px),
+            linear-gradient(to bottom, #e3e7ee 1px, transparent 1px);
+        background-size: 22px 18px;
+    }
+    /* Left-rail navigation items. The active item is a solid filled pill
+       (matching the reference screenshots); inactive items are subtle. */
+    .nav-item { color: #424654; }
+    .nav-item:hover { background-color: #ebeef4; }
+    .nav-item.active { background-color: #0b57d0; color: #ffffff; }
+    .nav-item.active:hover { background-color: #0b57d0; }
+    .nav-item .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400; }
+    .nav-item.active .material-symbols-outlined { font-variation-settings: 'FILL' 1, 'wght' 500; }
+</style>
+</head>
+<body class="bg-surface text-on-surface min-h-screen">
+
+<!-- ============ Top app bar (default state) ============ -->
+<header id="app-bar" class="sticky top-0 z-40 flex items-center justify-between w-full h-16 px-4 sm:px-6 bg-surface border-b border-outline-variant">
+    <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center text-on-primary-container">
+            <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">table_chart</span>
+        </div>
+        <span class="text-xl font-medium text-on-surface" data-i18n="drive.appName">Co-Sheet</span>
+    </div>
+    <div class="flex items-center gap-2">
+        <!-- Language switch (dropdown, consistent with the sheet editor) -->
+        <div class="relative inline-block">
+            <button id="lang-switch-btn" title="Language / 語言" class="flex items-center gap-1 px-3 py-2 rounded-full text-sm font-medium text-on-surface-variant hover:bg-surface-container transition-colors">
+                <span class="material-symbols-outlined text-[20px]">language</span>
+                <span id="lang-switch-label">中文</span>
+                <span class="material-symbols-outlined text-[18px]">arrow_drop_down</span>
+            </button>
+            <div id="lang-switch-menu" class="hidden absolute right-0 top-full mt-1 w-36 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-1 z-50">
+                <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left text-sm text-on-surface hover:bg-surface-container transition-colors" data-lang="zh">
+                    <span>中文</span><span class="lang-check material-symbols-outlined text-[18px] text-primary">check</span>
+                </button>
+                <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left text-sm text-on-surface hover:bg-surface-container transition-colors" data-lang="en">
+                    <span>English</span><span class="lang-check material-symbols-outlined text-[18px] text-primary hidden">check</span>
+                </button>
+            </div>
+        </div>
+        <!-- Avatar + menu -->
+        <div class="relative">
+            <button id="avatar-btn" class="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center font-medium overflow-hidden hover:brightness-95 transition-all" title="Account">
+                <span id="avatar-initial">?</span>
+            </button>
+            <div id="avatar-menu" class="hidden absolute right-0 top-full mt-2 w-60 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-2 z-50">
+                <div class="px-4 py-2 border-b border-outline-variant">
+                    <div id="user-name" class="text-sm font-medium text-on-surface truncate">&nbsp;</div>
+                    <div id="user-email" class="text-xs text-on-surface-variant truncate">&nbsp;</div>
+                </div>
+                <!-- Visible only to admins / super admins (toggled in drive.js). -->
+                <button id="perm-menu-item" class="hidden w-full items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+                    <span class="material-symbols-outlined text-[20px]">admin_panel_settings</span>
+                    <span data-i18n="drive.permissions">Permissions</span>
+                </button>
+                <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors">
+                    <span class="material-symbols-outlined text-[20px]">logout</span>
+                    <span data-i18n="drive.signout">Sign out</span>
+                </a>
+            </div>
+        </div>
+    </div>
+</header>
+
+<!-- ============ Selection action bar (shown when a file is selected) ============ -->
+<div id="selection-bar" class="hidden sticky top-0 z-40 flex items-center gap-1 w-full h-16 px-4 sm:px-6 bg-secondary-container text-on-secondary-container border-b border-outline-variant">
+    <button id="sel-clear" class="w-10 h-10 rounded-full flex items-center justify-center hover:bg-black/5 transition-colors" data-i18n-title="drive.deselect" title="Clear selection">
+        <span class="material-symbols-outlined">close</span>
+    </button>
+    <span id="sel-count" class="ml-1 mr-4 text-base font-medium whitespace-nowrap">1 selected</span>
+    <div class="flex items-center gap-1">
+        <button id="sel-open" class="h-10 px-4 rounded-full flex items-center gap-2 hover:bg-black/5 transition-colors" data-i18n-title="drive.open" title="Open">
+            <span class="material-symbols-outlined text-[20px]">open_in_new</span>
+            <span class="text-sm font-medium hidden sm:inline" data-i18n="drive.open">Open</span>
+        </button>
+        <button id="sel-link" class="w-10 h-10 rounded-full flex items-center justify-center hover:bg-black/5 transition-colors" data-i18n-title="drive.copyLink" title="Copy link">
+            <span class="material-symbols-outlined text-[20px]">link</span>
+        </button>
+        <button id="sel-rename" class="w-10 h-10 rounded-full flex items-center justify-center hover:bg-black/5 transition-colors" data-i18n-title="drive.rename" title="Rename">
+            <span class="material-symbols-outlined text-[20px]">drive_file_rename_outline</span>
+        </button>
+        <button id="sel-delete" class="w-10 h-10 rounded-full flex items-center justify-center hover:bg-black/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" data-i18n-title="drive.delete" title="Delete">
+            <span class="material-symbols-outlined text-[20px]">delete</span>
+        </button>
+    </div>
+</div>
+
+<!-- ============ Main content (left nav rail + content area) ============ -->
+<div class="max-w-6xl mx-auto flex gap-2 sm:gap-4">
+    <!-- ============ Left navigation rail ============ -->
+    <aside id="side-nav" class="shrink-0 w-16 sm:w-60 px-2 sm:px-3 py-6 sm:py-8">
+        <nav class="flex flex-col gap-1">
+            <button id="nav-home" data-view="home" class="nav-item flex items-center gap-0 sm:gap-3 justify-center sm:justify-start h-11 px-0 sm:px-4 rounded-full text-sm font-medium transition-colors" title="Home">
+                <span class="material-symbols-outlined text-[22px]">home</span>
+                <span class="hidden sm:inline" data-i18n="drive.navHome">Home</span>
+            </button>
+            <button id="nav-shared" data-view="shared" class="nav-item flex items-center gap-0 sm:gap-3 justify-center sm:justify-start h-11 px-0 sm:px-4 rounded-full text-sm font-medium transition-colors" title="Shared with me">
+                <span class="material-symbols-outlined text-[22px]">group</span>
+                <span class="hidden sm:inline" data-i18n="drive.navShared">Shared with me</span>
+            </button>
+            <button id="nav-starred" data-view="starred" class="nav-item flex items-center gap-0 sm:gap-3 justify-center sm:justify-start h-11 px-0 sm:px-4 rounded-full text-sm font-medium transition-colors" title="Starred">
+                <span class="material-symbols-outlined text-[22px]">star</span>
+                <span class="hidden sm:inline" data-i18n="drive.navStarred">Starred</span>
+            </button>
+        </nav>
+    </aside>
+
+    <!-- ============ Content area ============ -->
+    <main class="flex-1 min-w-0 px-4 sm:px-6 py-8">
+    <!-- ============ Files view ============ -->
+    <div id="files-view">
+        <div class="flex items-center justify-between mb-6 min-h-12">
+            <h1 id="files-heading" class="text-2xl font-medium text-on-surface" data-i18n="drive.title">My files</h1>
+            <button id="new-file-btn" class="flex items-center gap-2 h-12 pl-4 pr-5 rounded-2xl bg-primary text-on-primary text-sm font-medium shadow-sm hover:brightness-105 transition-all">
+                <span class="material-symbols-outlined">add</span>
+                <span data-i18n="drive.newFile">New</span>
+            </button>
+        </div>
+
+        <!-- Empty state -->
+        <div id="empty-state" class="hidden flex-col items-center justify-center text-center text-on-surface-variant py-24">
+            <span class="material-symbols-outlined text-6xl mb-4 text-outline">folder_open</span>
+            <p class="text-base" data-i18n="drive.empty">No files yet. Create one to get started.</p>
+        </div>
+
+        <!-- Error state -->
+        <div id="error-state" class="hidden text-center text-error py-24">
+            <span class="material-symbols-outlined text-5xl mb-3 block">error</span>
+            <p data-i18n="drive.loadError">Could not load your files. Please try again.</p>
+        </div>
+
+        <!-- File card grid -->
+        <div id="file-grid" class="grid gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"></div>
+    </div>
+
+    <!-- ============ Permissions management view (admins / super admins only) ============ -->
+    <div id="admin-view" class="hidden">
+        <div class="flex items-center gap-3 mb-6">
+            <button id="perm-back" class="w-10 h-10 rounded-full flex items-center justify-center hover:bg-surface-container transition-colors" data-i18n-title="drive.backToFiles" title="Back to files">
+                <span class="material-symbols-outlined">arrow_back</span>
+            </button>
+            <h1 class="text-2xl font-medium text-on-surface" data-i18n="perm.title">Permissions management</h1>
+        </div>
+
+        <!-- Error / empty states -->
+        <div id="perm-error" class="hidden text-center text-error py-16">
+            <span class="material-symbols-outlined text-5xl mb-3 block">error</span>
+            <p data-i18n="perm.loadError">Could not load users.</p>
+        </div>
+        <div id="perm-empty" class="hidden text-center text-on-surface-variant py-16">
+            <span class="material-symbols-outlined text-6xl mb-4 text-outline block">group</span>
+            <p data-i18n="perm.empty">No users yet.</p>
+        </div>
+
+        <!-- Users table -->
+        <div id="perm-table-wrap" class="overflow-x-auto rounded-xl border border-outline-variant bg-surface-container-lowest">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-outline-variant text-left text-on-surface-variant">
+                        <th class="px-4 py-3 font-medium" data-i18n="perm.user">User</th>
+                        <th class="px-4 py-3 font-medium hidden sm:table-cell" data-i18n="perm.provider">Sign-in</th>
+                        <th class="px-4 py-3 font-medium hidden md:table-cell" data-i18n="perm.lastLogin">Last active</th>
+                        <th class="px-4 py-3 font-medium" data-i18n="perm.role">Role</th>
+                    </tr>
+                </thead>
+                <tbody id="perm-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+    </main>
+</div>
+
+<!-- ============ Per-card overflow menu (single, repositioned on open) ============ -->
+<div id="card-menu" class="hidden fixed w-48 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-2 z-50">
+    <button data-action="open" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+        <span class="material-symbols-outlined text-[20px]">open_in_new</span><span data-i18n="drive.open">Open</span>
+    </button>
+    <button data-action="link" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+        <span class="material-symbols-outlined text-[20px]">link</span><span data-i18n="drive.copyLink">Copy link</span>
+    </button>
+    <button data-action="rename" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+        <span class="material-symbols-outlined text-[20px]">drive_file_rename_outline</span><span data-i18n="drive.rename">Rename</span>
+    </button>
+    <button data-action="delete" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-error hover:bg-surface-container transition-colors text-left disabled:opacity-30 disabled:cursor-not-allowed">
+        <span class="material-symbols-outlined text-[20px]">delete</span><span data-i18n="drive.delete">Delete</span>
+    </button>
+</div>
+
+<!-- ============ Generic modal (rename / share / confirm) ============ -->
+<div id="modal-overlay" class="hidden fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-surface-container-lowest rounded-2xl shadow-xl p-6">
+        <h2 id="modal-title" class="text-lg font-medium text-on-surface mb-2"></h2>
+        <p id="modal-desc" class="text-sm text-on-surface-variant mb-4"></p>
+        <input id="modal-input" type="text" class="hidden w-full mb-2 px-3 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"/>
+        <div id="modal-link-row" class="hidden items-center gap-2 mb-2">
+            <input id="modal-link" type="text" readonly class="flex-1 px-3 py-2.5 rounded-lg border border-outline-variant bg-surface-container text-on-surface-variant text-sm focus:outline-none"/>
+            <button id="modal-copy" class="h-10 px-4 rounded-lg bg-primary text-on-primary text-sm font-medium hover:brightness-105 transition-all whitespace-nowrap" data-i18n="drive.copy">Copy</button>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+            <button id="modal-cancel" class="h-10 px-4 rounded-full text-sm font-medium text-primary hover:bg-surface-container transition-colors" data-i18n="dialog.cancel">Cancel</button>
+            <button id="modal-ok" class="h-10 px-5 rounded-full text-sm font-medium bg-primary text-on-primary hover:brightness-105 transition-all" data-i18n="dialog.confirm">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-3 rounded-lg bg-on-surface text-surface text-sm shadow-lg"></div>
+
+<script src="/i18n.js"></script>
+<script src="/drive.js"></script>
+</body>
+</html>

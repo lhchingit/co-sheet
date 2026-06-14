@@ -1,0 +1,41 @@
+services:
+  app:
+    build: .
+    image: co-sheet:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Point the app at the bundled Postgres service. This overrides any
+      # DATABASE_URL defined in .env (compose `environment` wins over env_file).
+      DATABASE_URL: postgres://co-sheet:co-sheet@db:5432/co-sheet
+    # Load Google OAuth credentials (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
+    # and any other settings from your local .env file.
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: co-sheet
+      POSTGRES_PASSWORD: co-sheet
+      POSTGRES_DB: co-sheet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Expose locally for debugging with a DB client; remove if not needed.
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U co-sheet -d co-sheet"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

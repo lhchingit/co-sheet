@@ -1,0 +1,34 @@
+# Dependency directories
+node_modules/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Superpowers Brainstorm files
+.superpowers/
+docs/superpowers/
+images/
+k8s/
+
+# Test-run artifacts (per-file workbook registry / version / users sidecars)
+*.files.json
+*.versions.json
+*.users.json
+*.shares.json
+store.*.test.json
+store.test*.json
+
+# Runtime data store
+store.json
+
+# Test-run output logs
+*.out

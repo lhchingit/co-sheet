@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Co-Sheet</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<!-- i18n FOUC guard: keep the UI hidden until the chosen language is applied so
+     the toolbar never flashes its English fallback text before switching. The
+     reveal happens in app.js after translation; the timeout below guarantees the
+     page is never stuck blank if i18n initialization fails. -->
+<style id="i18n-fouc-guard">html:not(.i18n-ready) body{visibility:hidden}</style>
+<script>setTimeout(function(){document.documentElement.classList.add('i18n-ready');},1500);</script>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&amp;family=JetBrains+Mono&amp;display=swap" rel="stylesheet"/>
+<!-- Font picker preview fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Alegreya&amp;family=Amatic+SC:wght@700&amp;family=Bree+Serif&amp;family=Comic+Neue&amp;family=Courier+Prime&amp;family=Merriweather&amp;family=Permanent+Marker&amp;family=Pinyon+Script&amp;family=Playfair+Display&amp;family=Roboto+Mono&amp;family=Ultra&amp;family=Varela+Round&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-variant": "#dfe3e8",
+                        "on-secondary": "#ffffff",
+                        "surface-container-low": "#f1f4fa",
+                        "inverse-surface": "#2d3135",
+                        "on-secondary-fixed-variant": "#004493",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed": "#001a41",
+                        "on-secondary-container": "#fefcff",
+                        "surface-container": "#ebeef4",
+                        "secondary-container": "#1471e6",
+                        "primary-fixed-dim": "#b2c5ff",
+                        "tertiary-fixed-dim": "#ffb599",
+                        "on-background": "#181c20",
+                        "inverse-on-surface": "#eef1f7",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#d7dae0",
+                        "tertiary-container": "#a83b00",
+                        "secondary-fixed-dim": "#adc7ff",
+                        "secondary-fixed": "#d8e2ff",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-fixed-variant": "#7f2b00",
+                        "on-tertiary": "#ffffff",
+                        "outline-variant": "#c3c6d6",
+                        "surface-tint": "#0856cf",
+                        "outline": "#737785",
+                        "tertiary-fixed": "#ffdbce",
+                        "primary": "#0041a2",
+                        "surface-bright": "#f7f9ff",
+                        "surface-container-highest": "#dfe3e8",
+                        "secondary": "#0058bb",
+                        "primary-container": "#0b57d0",
+                        "surface": "#f7f9ff",
+                        "on-surface": "#181c20",
+                        "primary-fixed": "#dae2ff",
+                        "inverse-primary": "#b2c5ff",
+                        "on-tertiary-fixed": "#370e00",
+                        "on-primary-fixed-variant": "#0040a1",
+                        "background": "#f7f9ff",
+                        "error-container": "#ffdad6",
+                        "on-primary-container": "#ced9ff",
+                        "on-surface-variant": "#424654",
+                        "on-error-container": "#93000a",
+                        "surface-container-high": "#e5e8ee",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#001847",
+                        "tertiary": "#802b00",
+                        "on-tertiary-container": "#ffcfbe"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "icon-size-sm": "18px",
+                        "cell-padding-x": "6px",
+                        "cell-padding-y": "2px",
+                        "formula-bar-height": "32px",
+                        "gutter-header": "24px",
+                        "toolbar-height": "40px"
+                    },
+                    "fontFamily": {
+                        "mono-data": ["JetBrains Mono"],
+                        "headline-md": ["Roboto"],
+                        "label-md": ["Roboto"],
+                        "label-lg": ["Roboto"],
+                        "body-sm": ["Roboto"],
+                        "body-md": ["Roboto"]
+                    },
+                    "fontSize": {
+                        "mono-data": ["13px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "label-lg": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                        "body-sm": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                        "body-md": ["13px", {"lineHeight": "20px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style id="font-picker-styles">
+        /* Font-family preview classes used inside the Select Font menu */
+        .ff-alegreya { font-family: 'Alegreya', serif; }
+        .ff-amatic { font-family: 'Amatic SC', cursive; font-weight: 700; }
+        .ff-arial { font-family: Arial, sans-serif; }
+        .ff-bree { font-family: 'Bree Serif', serif; }
+        .ff-calibri { font-family: Calibri, 'Carlito', sans-serif; }
+        .ff-cambria { font-family: Cambria, Georgia, serif; }
+        .ff-comic { font-family: 'Comic Sans MS', 'Comic Neue', cursive; }
+        .ff-courier { font-family: 'Courier New', 'Courier Prime', monospace; }
+        .ff-georgia { font-family: Georgia, serif; }
+        .ff-impact { font-family: Impact, 'Arial Narrow Bold', sans-serif; }
+        .ff-merriweather { font-family: 'Merriweather', serif; }
+        .ff-permanent-marker { font-family: 'Permanent Marker', cursive; }
+        .ff-pinyon { font-family: 'Pinyon Script', cursive; }
+        .ff-playfair { font-family: 'Playfair Display', serif; }
+        .ff-proxima { font-family: Helvetica, Arial, sans-serif; }
+        .ff-roboto { font-family: 'Roboto', sans-serif; }
+        .ff-roboto-mono { font-family: 'Roboto Mono', monospace; }
+        .ff-times { font-family: 'Times New Roman', Times, serif; }
+        .ff-trebuchet { font-family: 'Trebuchet MS', sans-serif; }
+        .ff-ultra { font-family: 'Ultra', serif; }
+        .ff-varela { font-family: 'Varela Round', sans-serif; }
+        .ff-verdana { font-family: Verdana, sans-serif; }
+        .ff-mingliu { font-family: '新細明體', 'PMingLiU', serif; }
+        .ff-msjh { font-family: '微軟正黑體', 'Microsoft JhengHei', sans-serif; }
+        .ff-kaiti { font-family: '標楷體', 'DFKai-SB', cursive; }
+
+        /* Thin scrollbar matching the menu aesthetic */
+        .font-menu-scrollbar::-webkit-scrollbar { width: 6px; }
+        .font-menu-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .font-menu-scrollbar::-webkit-scrollbar-thumb { background-color: #c3c6d6; border-radius: 10px; }
+        .font-menu-scrollbar { scrollbar-width: thin; scrollbar-color: #c3c6d6 transparent; }
+
+        /* Visible horizontal & vertical scrollbars for the spreadsheet grid */
+        .grid-scrollbar::-webkit-scrollbar { width: 14px; height: 14px; }
+        .grid-scrollbar::-webkit-scrollbar-track { background: #f1f3f4; }
+        .grid-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #bdc1c6;
+            border-radius: 10px;
+            border: 3px solid #f1f3f4;
+        }
+        .grid-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #9aa0a6; }
+        .grid-scrollbar::-webkit-scrollbar-corner { background: #f1f3f4; }
+        .grid-scrollbar { scrollbar-color: #bdc1c6 #f1f3f4; }
+        /* Colored indicator bar under the text/fill color toolbar buttons,
+           reflecting the active cell's current color (Google Sheets style). */
+        .toolbar-color-swatch {
+            position: absolute;
+            left: 5px;
+            right: 5px;
+            bottom: 6px;
+            height: 3px;
+            border-radius: 1px;
+            border: 1px solid rgba(0, 0, 0, 0.18);
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+        /* Crop the fixed dark bar built into the format_color_text / format_color_fill
+           glyphs so only the dynamic color swatch above remains as the indicator. */
+        #toolbar-color-text > .material-symbols-outlined,
+        #toolbar-color-fill > .material-symbols-outlined {
+            display: inline-block;
+            clip-path: inset(0 0 22% 0);
+        }
+        /* Vertically center every toolbar icon consistently. Some buttons place
+           the glyph inline (baseline-aligned, which adds descender space) and
+           others use flexbox; normalizing vertical-align/line-height keeps them
+           on the same optical centerline. */
+        #main-toolbar .material-symbols-outlined {
+            vertical-align: middle;
+            line-height: 1;
+        }
+    </style>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            font-size: 18px;
+        }
+        /* Read-only (Viewer) mode: gray out and disable editing affordances.
+           Applied to toolbar / menu / sheet-control containers that carry the
+           `wb-readonly-disable` marker once the workbook is opened without edit
+           rights. JS still blocks the underlying actions; this is the visual cue. */
+        .wb-readonly .wb-readonly-disable {
+            opacity: .45;
+            pointer-events: none;
+            user-select: none;
+        }
+        /* Grid container holds all grid headers and cells using CSS grid layout */
+        .grid-container {
+            display: grid;
+            grid-template-columns: 46px repeat(26, 100px);
+            grid-auto-rows: minmax(21px, auto);
+            position: relative; /* Enabled for absolute range positioning */
+        }
+        /* Style for cells that are part of the currently selected cell range.
+           The light-blue tint is laid down first (last shadow), then the cell's
+           original light-gray right/bottom gridlines are re-drawn on top of it
+           so the borders between selected cells stay visible. */
+        .grid-cell-selected {
+            box-shadow: inset -1px -1px 0 0 #dadce0, inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
+        }
+        /* The anchor cell (a single click, or the first cell when dragging out a
+           range) keeps a thick 2px border — twice the width of the thinner outer
+           range border (1px), matching Google Sheets. Its interior is left
+           untinted so a blank cell stays white; the light-blue range fill is
+           applied only to the OTHER selected cells (.grid-cell-selected). The
+           border is an inset shadow so the cell's own gridline borders survive. */
+        .grid-cell-active {
+            box-shadow: inset 0 0 0 2px #1a73e8 !important;
+            z-index: 6;
+        }
+        /* When the anchor is part of a multi-cell range it carries BOTH the 2px
+           border and the light-blue range fill, so a blank anchor reflects the
+           tint and a colored one keeps its background — matching the other
+           selected cells. This two-class selector outranks .grid-cell-active
+           alone, whose border-only shadow would otherwise suppress the fill. */
+        .grid-cell-active.grid-cell-selected {
+            box-shadow: inset 0 0 0 2px #1a73e8, inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
+        }
+        /* Overlay border showing the current cell selection range. The outer
+           border is intentionally thinner than the active (first-selected)
+           cell's 2px border, matching Google Sheets. */
+        #selection-range-overlay {
+            position: absolute;
+            border: 1px solid #1a73e8;
+            box-sizing: border-box; /* Draw the 1px border inside the range rect so
+                                       it doesn't stack beside the anchor's border. */
+            pointer-events: none;
+            /* Sit above the active cell's 2px frame (z-index 6) so the fill-handle
+               dot at the bottom-right corner isn't clipped by that frame. */
+            z-index: 7;
+        }
+        .grid-header {
+            background-color: #f8f9fa;
+            border-right: 1px solid #c3c6d6;
+            border-bottom: 1px solid #c3c6d6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #424654;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .grid-cell {
+            border-right: 1px solid #dadce0;
+            border-bottom: 1px solid #dadce0;
+            background-color: white;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end; /* Default vertical alignment: Bottom */
+            line-height: normal;
+            padding: 0.2em 0.5em;
+            box-sizing: border-box;
+            /* Keep content on a single line and overflow horizontally (like
+               Google Sheets / Excel) instead of wrapping and growing the row. */
+            white-space: nowrap;
+            overflow: visible;
+        }
+        .presence-tag {
+            position: absolute;
+            top: -16px;
+            left: -1px;
+            padding: 0 4px;
+            font-size: 10px;
+            font-weight: 700;
+            color: white;
+            border-radius: 2px 2px 2px 0;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .active-cell-border {
+            position: absolute;
+            inset: -1px;
+            border: 2px solid;
+            pointer-events: none;
+            z-index: 5;
+        }
+        /* Active row and column header highlight styles */
+        .grid-header.active-header {
+            background-color: #e8f0fe;
+            color: #1a73e8;
+            font-weight: 700;
+        }
+        /* Solid-blue header for a full-column (or full-row) header selection. */
+        .grid-header.header-selected {
+            background-color: #1a73e8;
+            color: #ffffff;
+            font-weight: 700;
+        }
+        /* Dropdown menu button revealed when hovering a column header. It sits
+           at the far right of the header and opens the same context menu as a
+           right-click on the sheet. Hidden by default; .show reveals it. */
+        .col-header-menu {
+            position: absolute;
+            right: 1px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 16px;
+            font-size: 18px;
+            line-height: 1;
+            border-radius: 3px;
+            cursor: pointer;
+            color: #424654;
+            background-color: #e2e4ec;
+        }
+        .col-header-menu.show {
+            display: flex;
+        }
+        .col-header-menu:hover {
+            background-color: #d3d6e0;
+        }
+        .grid-header.header-selected .col-header-menu {
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.25);
+        }
+        .grid-header.header-selected .col-header-menu:hover {
+            background-color: rgba(255, 255, 255, 0.4);
+        }
+        /* Solid round "fill handle" dot at the bottom-right corner of a
+           selection (single or multi-cell), matching Google Sheets. It is
+           nudged inward so the circle overlaps the corner of the selection
+           border instead of floating just outside it. */
+        .fill-handle {
+            position: absolute;
+            bottom: -3px;
+            right: -3px;
+            width: 8px;
+            height: 8px;
+            background-color: #1a73e8;
+            border-radius: 50%;
+            z-index: 6;
+        }
+        /* Find/Replace Tailwind custom styles */
+        /* Secondary button styling for less prominent actions */
+        .btn-secondary {
+            border: 1px solid #e5e7eb;
+            color: #4b5563;
+            background-color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            min-width: 80px;
+            transition-property: color, background-color, border-color;
+            transition-duration: 150ms;
+            cursor: pointer;
+        }
+        /* Hover state for secondary buttons */
+        .btn-secondary:hover {
+            color: #111827;
+            border-color: #d1d5db;
+        }
+        /* Primary button styling for the main action (green brand color) */
+        .btn-primary {
+            background-color: #006633;
+            color: white;
+            padding: 0.5rem 1.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition-property: color, background-color;
+            transition-duration: 150ms;
+            cursor: pointer;
+        }
+        /* Hover state for primary buttons */
+        .btn-primary:hover {
+            background-color: #00552b;
+        }
+        /* Styling for text inputs inside the modal */
+        .input-field {
+            width: 100%;
+            border: 1px solid #d1d5db;
+            border-radius: 0.25rem;
+            padding: 0.375rem 0.5rem;
+            font-size: 0.875rem;
+            background-color: transparent;
+            color: inherit;
+        }
+        /* Focus state with outline and ring for input fields */
+        .input-field:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 1px #3b82f6;
+        }
+        /* Label styling for alignment and checkbox placement */
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 14px;
+            color: inherit;
+            cursor: pointer;
+            margin-bottom: 0.75rem;
+            user-select: none;
+        }
+        /* Custom styled checkbox borders and color */
+        .custom-checkbox {
+            width: 1rem;
+            height: 1rem;
+            border-width: 2px;
+            border-color: #9ca3af;
+            border-radius: 0.125rem;
+            color: #2563eb;
+        }
+        /* Style for cell changes highlighted in history mode */
+        .grid-cell-history-highlight {
+            background-color: #80cbc4 !important;
+        }
+        .unedited-row-bar {
+            grid-column: 1 / -1; /* spans all columns */
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #c3c6d6;
+            display: flex;
+            align-items: center;
+            height: 21px;
+            font-style: italic;
+            color: #70757a;
+            font-size: 12px;
+        }
+        .unedited-row-gutter {
+            width: 46px;
+            border-right: 1px solid #c3c6d6;
+            border-bottom: 1px solid #c3c6d6;
+            background-color: #f8f9fa;
+            height: 100%;
+            flex-shrink: 0;
+        }
+        .unedited-row-label {
+            padding-left: 12px;
+        }
+        /* Custom styled tooltip (replaces native title tooltips) */
+        #app-tooltip {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
+            background-color: #000000;
+            color: #ffffff;
+            font-size: 12px;
+            line-height: 1.2;
+            font-weight: 500;
+            padding: 5px 8px;
+            border-radius: 6px;
+            max-width: 280px;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            opacity: 0;
+            transition: opacity 120ms ease;
+        }
+        #app-tooltip.visible {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface overflow-hidden flex flex-col h-screen">
+<!-- TopAppBar -->
+<header class="flex flex-col w-full h-[120px] px-4 pt-3 justify-center bg-surface dark:bg-surface-dim z-50">
+<!-- Top Row: Logo, Title, Actions -->
+<div class="flex items-center justify-between w-full pb-2">
+<div class="flex items-center gap-3">
+<a href="/" title="Back to files" data-i18n-title="drive.backToFiles" class="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center text-on-primary-container hover:brightness-95 transition-all">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">table_chart</span>
+</a>
+<div class="flex flex-col">
+<div class="flex items-center gap-2">
+<span id="file-name" title="Rename" data-i18n-title="tip.rename" class="text-headline-md font-headline-md font-bold text-on-surface dark:text-on-surface-variant cursor-text rounded px-1 -mx-1 border-2 border-transparent hover:border-primary hover:bg-surface-container-high focus:outline-none focus:border-primary focus:bg-surface-container-high transition-colors">{{FILE_NAME}}</span>
+<span id="star-toggle" role="button" tabindex="0" title="Add to Starred" data-i18n-title="tip.star" class="material-symbols-outlined text-outline cursor-pointer select-none hover:text-primary transition-colors">star</span>
+</div>
+<nav class="flex items-center gap-0.5 mt-0.5">
+<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.file">File</button>
+   <!-- Edit menu item with dropdown options -->
+   <div class="relative inline-block">
+     <!-- Edit button triggering the dropdown -->
+     <button id="menu-edit-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.edit">Edit</button>
+     <!-- Dropdown options container (hidden by default) -->
+     <div id="menu-edit-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-60 z-50">
+       <!-- Redo action button -->
+       <button id="edit-redo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">redo</span><span data-i18n="edit.redo">Redo</span></span><span class="text-xs text-outline">Ctrl+Y</span>
+       </button>
+       <!-- Undo action button -->
+       <button id="edit-undo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">undo</span><span data-i18n="edit.undo">Undo</span></span><span class="text-xs text-outline">Ctrl+Z</span>
+       </button>
+       <!-- Divider -->
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Cut action button -->
+       <button id="edit-cut" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_cut</span><span data-i18n="edit.cut">Cut-off</span></span><span class="text-xs text-outline">Ctrl+X</span>
+       </button>
+       <!-- Copy action button -->
+       <button id="edit-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_copy</span><span data-i18n="edit.copy">Copy</span></span><span class="text-xs text-outline">Ctrl+C</span>
+       </button>
+       <!-- Paste action button -->
+       <button id="edit-paste" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_paste</span><span data-i18n="edit.paste">Paste</span></span><span class="text-xs text-outline">Ctrl+V</span>
+       </button>
+       <!-- Divider -->
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Search and Replace option to open modal -->
+       <button id="edit-search-replace" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">find_replace</span><span data-i18n="edit.searchReplace">Search and replace</span></span><span class="text-xs text-outline">Ctrl+H</span>
+       </button>
+     </div>
+   </div>
+<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.view">View</button>
+<!-- Insert menu item with dropdown options -->
+   <div class="relative inline-block">
+     <button id="menu-insert-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.insert">Insert</button>
+     <div id="menu-insert-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+       <!-- Cells submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">select_all</span><span data-i18n="ins.cell">Cells</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50">
+           <button id="ins-cell-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">arrow_forward</span><span data-i18n="ins.cellRight">Insert cells and shift right</span>
+           </button>
+           <button id="ins-cell-down" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">arrow_downward</span><span data-i18n="ins.cellDown">Insert cells and shift down</span>
+           </button>
+         </div>
+       </div>
+       <!-- Rows submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">table_rows</span><span data-i18n="ins.row">Rows</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
+           <button id="ins-row-above" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">add_row_above</span><span id="ins-row-above-label"></span>
+           </button>
+           <button id="ins-row-below" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">add_row_below</span><span id="ins-row-below-label"></span>
+           </button>
+         </div>
+       </div>
+       <!-- Columns submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">view_column</span><span data-i18n="ins.col">Columns</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
+           <button id="ins-col-left" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">add_column_left</span><span id="ins-col-left-label"></span>
+           </button>
+           <button id="ins-col-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">add_column_right</span><span id="ins-col-right-label"></span>
+           </button>
+         </div>
+       </div>
+     </div>
+   </div>
+<!-- Format menu item with dropdown options -->
+   <div class="relative inline-block">
+     <button id="menu-format-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.format">Format</button>
+     <div id="menu-format-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
+       <!-- Theme (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">palette</span><span data-i18n="fmt.theme">Theme</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Number submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">123</span><span data-i18n="fmt.number">Number</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50 max-h-[80vh] overflow-y-auto">
+           <button id="fmt-num-auto" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.auto">Automatic</span></button>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.plainText">Plain text</span></div>
+           <div class="border-t border-outline-variant my-1"></div>
+           <button id="fmt-num-number" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.number">Number</span><span class="text-xs text-outline" data-fmt-eg="number"></span></button>
+           <button id="fmt-num-percent" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.percent">Percent</span><span class="text-xs text-outline" data-fmt-eg="percent"></span></button>
+           <button id="fmt-num-scientific" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.scientific">Scientific</span><span class="text-xs text-outline" data-fmt-eg="scientific"></span></button>
+           <div class="border-t border-outline-variant my-1"></div>
+           <button id="fmt-num-accounting" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.accounting">Accounting</span><span class="text-xs text-outline" data-fmt-eg="accounting"></span></button>
+           <button id="fmt-num-financial" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.financial">Financial</span><span class="text-xs text-outline" data-fmt-eg="financial"></span></button>
+           <button id="fmt-num-currency" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.currency">Currency</span><span class="text-xs text-outline" data-fmt-eg="currency"></span></button>
+           <button id="fmt-num-currency-rounded" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.currencyRounded">Currency (rounded)</span><span class="text-xs text-outline" data-fmt-eg="currencyRounded"></span></button>
+           <div class="border-t border-outline-variant my-1"></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.date">Date</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.time">Time</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.datetime">Date time</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.duration">Duration</span></div>
+           <div class="border-t border-outline-variant my-1"></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.customNumber">Custom number format</span></div>
+         </div>
+       </div>
+       <!-- Text submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_bold</span><span data-i18n="fmt.text">Text</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <button id="fmt-text-bold" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_bold</span><span data-i18n="fmt.text.bold">Bold</span></span><span class="text-xs text-outline">Ctrl+B</span></button>
+           <button id="fmt-text-italic" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_italic</span><span data-i18n="fmt.text.italic">Italic</span></span><span class="text-xs text-outline">Ctrl+I</span></button>
+           <button id="fmt-text-underline" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_underlined</span><span data-i18n="fmt.text.underline">Underline</span></span><span class="text-xs text-outline">Ctrl+U</span></button>
+           <button id="fmt-text-strike" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_strikethrough</span><span data-i18n="fmt.text.strike">Strikethrough</span></span><span class="text-xs text-outline">Alt+Shift+5</span></button>
+         </div>
+       </div>
+       <!-- Alignment submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_left</span><span data-i18n="fmt.align">Alignment</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <button id="fmt-align-left" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_left</span><span data-i18n="fmt.align.left">Left</span></span><span class="text-xs text-outline">Ctrl+Shift+L</span></button>
+           <button id="fmt-align-center" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_center</span><span data-i18n="fmt.align.center">Center</span></span><span class="text-xs text-outline">Ctrl+Shift+C</span></button>
+           <button id="fmt-align-right" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_right</span><span data-i18n="fmt.align.right">Right</span></span><span class="text-xs text-outline">Ctrl+Shift+R</span></button>
+           <div class="border-t border-outline-variant my-1"></div>
+           <button id="fmt-valign-top" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_top</span><span data-i18n="fmt.align.top">Top</span></button>
+           <button id="fmt-valign-middle" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_center</span><span data-i18n="fmt.align.middle">Middle</span></button>
+           <button id="fmt-valign-bottom" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_bottom</span><span data-i18n="fmt.align.bottom">Bottom</span></button>
+         </div>
+       </div>
+       <!-- Wrapping submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">wrap_text</span><span data-i18n="fmt.wrap">Wrapping</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <button id="fmt-wrap-overflow" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">format_align_justify</span><span data-i18n="fmt.wrap.overflow">Overflow</span></button>
+           <button id="fmt-wrap-wrap" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">wrap_text</span><span data-i18n="fmt.wrap.wrap">Wrap</span></button>
+           <button id="fmt-wrap-clip" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">content_cut</span><span data-i18n="fmt.wrap.clip">Clip</span></button>
+         </div>
+       </div>
+       <!-- Rotation (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">rotate_left</span><span data-i18n="fmt.rotation">Rotation</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Smart chips (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">smart_button</span><span data-i18n="fmt.smartChip">Smart chips</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Font size submenu (flyout) -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_size</span><span data-i18n="fmt.fontSize">Font size</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div id="fmt-fontsize-list" class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-32 z-50 max-h-[80vh] overflow-y-auto"></div>
+       </div>
+       <!-- Merge cells (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge">Merge cells</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Convert to table (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">table</span><span data-i18n="fmt.convertTable">Convert to table</span></span>
+         <span class="text-xs">Ctrl+Alt+T</span>
+       </div>
+       <!-- Conditional formatting (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">rule</span><span data-i18n="fmt.conditional">Conditional formatting</span></span>
+       </div>
+       <!-- Alternating colors (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_color_fill</span><span data-i18n="fmt.altColors">Alternating colors</span></span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Clear formatting (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_clear</span><span data-i18n="fmt.clear">Clear formatting</span></span>
+         <span class="text-xs">Ctrl+\</span>
+       </div>
+     </div>
+   </div>
+<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.data">Data</button>
+<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.help">Help</button>
+</nav>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-1">
+<!-- Language Switcher -->
+<div class="relative inline-block">
+  <button id="lang-switch-btn" title="Language / 語言" class="flex items-center gap-1 px-2 py-1.5 hover:bg-surface-container-high dark:hover:bg-inverse-surface rounded-full transition-colors">
+    <span class="material-symbols-outlined">language</span>
+    <span id="lang-switch-label" class="text-label-md font-label-md">中文</span>
+    <span class="material-symbols-outlined text-[18px]">arrow_drop_down</span>
+  </button>
+  <div id="lang-switch-menu" class="hidden absolute right-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-36 z-50">
+    <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant" data-lang="zh">
+      <span>中文</span><span class="lang-check material-symbols-outlined text-[18px] text-primary">check</span>
+    </button>
+    <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant" data-lang="en">
+      <span>English</span><span class="lang-check material-symbols-outlined text-[18px] text-primary hidden">check</span>
+    </button>
+  </div>
+</div>
+<button id="header-history-btn" class="p-2 hover:bg-surface-container-high dark:hover:bg-inverse-surface rounded-full transition-colors" title="版本紀錄" data-i18n-title="tip.history">
+<span class="material-symbols-outlined">history</span>
+</button>
+<button class="p-2 hover:bg-surface-container-high dark:hover:bg-inverse-surface rounded-full transition-colors" title="顯示所有註解" data-i18n-title="tip.comments">
+<span class="material-symbols-outlined">comment</span>
+</button>
+</div>
+<button id="share-btn" class="bg-secondary-container text-on-secondary px-6 py-2 rounded-full flex items-center gap-2 hover:brightness-95 transition-all font-label-lg text-label-lg">
+<span class="material-symbols-outlined" style="font-size: 20px;">lock</span>
+                    <span data-i18n="btn.share">Share</span>
+                </button>
+<div class="relative">
+  <img id="user-avatar" alt="User avatar" class="w-10 h-10 rounded-full border-2 border-surface cursor-pointer" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCjO6N2ChnLqIyhe7lTGphF_tx5ssOMs5930RfacKN2QFsXGZkt3Wloyc92qRtQ4_I4lTrRVtawZKEKRUmCLdkcYLJS6Hc-jaGsDeu7bFF9l32WbYv6HdTx9TU-5xisTBhpOzbFHJWU5-aqbdN0Aj6qkAHoc3sewv-Eo-CuIc9CoqTYdQGawd6CDN5TzxuU6BkOtHmse0YllBHxC8lhdlZUjKBmIPU40UwKYLIVYbnd_dM-Rz0nmoqL6jVK_R1T9iaQppwB0KioEulP"/>
+  <div class="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-surface rounded-full"></div>
+
+  <!-- Hover tooltip: Google account info card (shown on avatar hover) -->
+  <div id="avatar-tooltip" class="hidden absolute right-0 mt-2 bg-[#3c4043] rounded-lg p-3 shadow-lg z-50 w-max max-w-xs select-none pointer-events-none">
+    <div class="flex flex-col space-y-0.5">
+      <h2 id="avatar-tooltip-title" class="text-white text-sm font-medium tracking-tight" data-i18n="profile.googleAccount">Google Account</h2>
+      <p id="avatar-tooltip-name" class="text-[#bdc1c6] text-sm font-normal"></p>
+      <p id="avatar-tooltip-email" class="text-[#9aa0a6] text-xs font-normal truncate"></p>
+    </div>
+  </div>
+
+  <!-- Profile Dropdown Menu -->
+  <div id="profile-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white dark:bg-inverse-surface border border-slate-200 dark:border-outline-variant rounded-xl shadow-lg py-2 z-50">
+    <div class="px-4 py-2.5 border-b border-slate-100 dark:border-outline-variant">
+      <p id="profile-username" class="text-slate-800 dark:text-inverse-on-surface font-semibold text-sm truncate">Loading...</p>
+      <p id="profile-provider" class="text-slate-500 dark:text-outline text-xs mt-0.5 capitalize" data-i18n="profile.session">OIDC Session</p>
+    </div>
+    <a href="/logout" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-slate-50 dark:hover:bg-surface-variant transition-colors font-medium no-underline" data-i18n="profile.signout">
+      Sign out
+    </a>
+  </div>
+</div>
+</div>
+</div>
+<!-- Toolbar Row -->
+<div id="main-toolbar" class="flex items-center gap-1 bg-surface-container-low px-3 py-1.5 rounded-full mt-2">
+<!-- Toolbar Undo and Redo buttons, initially disabled and styled accordingly -->
+<button id="toolbar-undo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Undo (Ctrl+Z)" data-i18n-title="tip.undo"><span class="material-symbols-outlined">undo</span></button>
+<button id="toolbar-redo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Redo (Ctrl+Y)" data-i18n-title="tip.redo"><span class="material-symbols-outlined">redo</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">print</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">imagesearch_roller</span></button>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+  <!-- Zoom Selector Container -->
+  <div class="relative inline-block">
+    <div class="flex items-center hover:bg-surface-variant rounded px-1.5 py-0.5 gap-0.5 border border-transparent hover:border-outline-variant" title="縮放" data-i18n-title="tip.zoom">
+      <!-- Editable Zoom Input -->
+      <input type="text" id="toolbar-zoom-input" class="w-10 bg-transparent border-none focus:ring-0 text-label-md font-label-md text-center p-0 cursor-pointer" value="100%">
+      <!-- Dropdown Menu Toggle Arrow -->
+      <span id="toolbar-zoom-arrow" class="material-symbols-outlined text-[14px] cursor-pointer hover:bg-surface-variant rounded p-0.5">arrow_drop_down</span>
+    </div>
+    <!-- Floating Dropdown Menu containing options -->
+    <div id="toolbar-zoom-menu" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg p-1 flex flex-col gap-1 z-50 min-w-[80px]">
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="50">50%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="75">75%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="90">90%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="100">100%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="125">125%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="150">150%</button>
+      <button class="toolbar-zoom-option text-left px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-zoom="200">200%</button>
+    </div>
+  </div>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">attach_money</span></button>
+<button id="toolbar-format-percent" title="Format as percentage" data-i18n-title="tip.formatPercent" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">percent</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">exposure_neg_1</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">exposure_plus_1</span></button>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+<!-- Font Family Selector Container -->
+<div class="relative inline-block">
+  <!-- Select Font toggle button -->
+  <button id="toolbar-font-btn" title="Select Font" data-i18n-title="tip.selectFont" class="flex items-center hover:bg-surface-variant rounded px-2 py-0.5 cursor-pointer min-w-[110px] justify-between border border-transparent hover:border-outline-variant">
+    <span id="toolbar-font-label" class="text-label-md font-label-md truncate">Arial</span>
+    <span class="material-symbols-outlined text-[14px]">arrow_drop_down</span>
+  </button>
+  <!-- Floating font selection menu -->
+  <div id="toolbar-font-menu" class="hidden absolute left-0 top-full mt-1 w-[240px] bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg flex flex-col max-h-[420px] z-50 text-[13px] text-on-surface">
+    <!-- Header -->
+    <div class="px-4 py-3 flex items-center border-b border-outline-variant">
+      <span class="mr-3 font-bold text-lg leading-none">A<span class="text-xs align-top">+</span></span>
+      <span class="flex-grow" data-i18n="font.more">更多字型</span>
+    </div>
+    <!-- Scrollable list -->
+    <div class="overflow-y-auto font-menu-scrollbar flex-grow py-2">
+      <div class="px-4 py-1 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider" data-i18n="font.theme">主題</div>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant flex items-center ff-arial" data-font="Arial">
+        <span data-i18n="font.default">預設 (Arial)</span>
+      </button>
+      <hr class="my-2 border-outline-variant"/>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-alegreya text-base" data-font="Alegreya">Alegreya</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-amatic text-xl" data-font="Amatic SC">AMATIC SC</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-arial" data-font="Arial">Arial</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-bree text-base" data-font="Bree Serif">Bree Serif</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-calibri" data-font="Calibri">Calibri</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-cambria" data-font="Cambria">Cambria</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-comic italic" data-font="Comic Sans MS">Comic Sans MS</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-courier" data-font="Courier New">Courier New</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-georgia" data-font="Georgia">Georgia</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-impact text-lg" data-font="Impact">Impact</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-merriweather" data-font="Merriweather">Merriweather</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-permanent-marker text-sm" data-font="Permanent Marker">PERMANENT MARKER</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-pinyon text-lg" data-font="Pinyon Script">Pinyon Script</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-playfair" data-font="Playfair Display">Playfair Display</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-proxima" data-font="Proxima Nova">Proxima Nova</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-roboto" data-font="Roboto">Roboto</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-roboto-mono" data-font="Roboto Mono">Roboto Mono</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-times" data-font="Times New Roman">Times New Roman</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-trebuchet" data-font="Trebuchet MS">Trebuchet MS</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-ultra text-lg" data-font="Ultra">Ultra</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-varela" data-font="Varela Round">Varela Round</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-verdana" data-font="Verdana">Verdana</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-msjh" data-font="微軟正黑體">微軟正黑體</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-mingliu" data-font="新細明體">新細明體</button>
+      <button class="toolbar-font-option w-full text-left pl-11 pr-4 py-2 hover:bg-surface-variant ff-kaiti" data-font="標楷體">標楷體</button>
+    </div>
+  </div>
+</div>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+<!-- Font Size Controls -->
+<div class="flex items-center gap-0.5">
+  <!-- Decrease font size -->
+  <button id="toolbar-font-size-decrease" type="button" title="Decrease font size (Ctrl+Shift+,)" data-i18n-title="tip.decreaseFont" class="p-1 hover:bg-surface-variant rounded transition-colors flex items-center justify-center">
+    <span class="material-symbols-outlined text-[18px]">remove</span>
+  </button>
+  <!-- Editable size input that reveals a preset menu -->
+  <div class="relative inline-block">
+    <input id="toolbar-font-size-input" type="text" value="10" title="Font size" data-i18n-title="tip.fontSize"
+      class="w-12 bg-transparent border border-outline-variant rounded focus:ring-1 focus:ring-primary focus:outline-none text-label-md font-label-md text-center py-0.5 cursor-pointer">
+    <!-- Preset font size menu -->
+    <div id="toolbar-font-size-menu" class="hidden absolute left-1/2 -translate-x-1/2 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg p-1 flex flex-col gap-0.5 z-50 min-w-[56px]">
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="6">6</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="7">7</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="8">8</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="9">9</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="10">10</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="11">11</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="12">12</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="14">14</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="18">18</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="24">24</button>
+      <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="36">36</button>
+    </div>
+  </div>
+  <!-- Increase font size -->
+  <button id="toolbar-font-size-increase" type="button" title="Increase font size (Ctrl+Shift+.)" data-i18n-title="tip.increaseFont" class="p-1 hover:bg-surface-variant rounded transition-colors flex items-center justify-center">
+    <span class="material-symbols-outlined text-[18px]">add</span>
+  </button>
+</div>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+<button id="toolbar-bold" title="Bold (Ctrl+B)" data-i18n-title="tip.bold" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">format_bold</span></button>
+<button id="toolbar-italic" title="Italic (Ctrl+I)" data-i18n-title="tip.italic" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">format_italic</span></button>
+<button id="toolbar-strikethrough" title="Strikethrough (Alt+Shift+5)" data-i18n-title="tip.strikethrough" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">format_strikethrough</span></button>
+<!-- Text Color Picker Button (opens a Google Sheets–style palette popup; the
+     hidden native <input type="color"> is reused for the "Custom" option). -->
+<div id="toolbar-color-text" role="button" tabindex="0" title="Text color" data-i18n-title="tip.textColor" class="p-1 hover:bg-surface-variant rounded transition-colors relative inline-block cursor-pointer">
+  <span class="material-symbols-outlined">format_color_text</span>
+  <span id="toolbar-color-text-swatch" class="toolbar-color-swatch" style="background-color: #000000;"></span>
+  <input type="color" id="toolbar-color-text-input" class="absolute w-0 h-0 opacity-0 pointer-events-none" value="#000000" tabindex="-1" aria-hidden="true">
+</div>
+<!-- Fill Color Picker Button -->
+<div id="toolbar-color-fill" role="button" tabindex="0" title="Fill color" data-i18n-title="tip.fillColor" class="p-1 hover:bg-surface-variant rounded transition-colors relative inline-block cursor-pointer">
+  <span class="material-symbols-outlined">format_color_fill</span>
+  <span id="toolbar-color-fill-swatch" class="toolbar-color-swatch" style="background-color: #ffffff;"></span>
+  <input type="color" id="toolbar-color-fill-input" class="absolute w-0 h-0 opacity-0 pointer-events-none" value="#ffffff" tabindex="-1" aria-hidden="true">
+</div>
+<div class="w-px h-5 bg-outline-variant mx-1"></div>
+<button id="toolbar-border" title="Borders" data-i18n-title="tip.border" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">border_all</span></button>
+  <!-- Alignment Dropdown Selector -->
+  <div class="relative inline-block">
+    <!-- Alignment Dropdown Toggle Button -->
+    <button id="toolbar-align" title="Horizontal alignment" data-i18n-title="tip.align" class="p-1 hover:bg-surface-variant rounded transition-colors flex items-center gap-0.5">
+      <span id="toolbar-align-icon" class="material-symbols-outlined">format_align_left</span>
+      <span class="text-[10px] text-on-surface-variant font-bold">▼</span>
+    </button>
+    <!-- Floating Dropdown Menu containing options -->
+    <div id="toolbar-align-menu" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg p-1 flex gap-1 z-50">
+      <!-- Align Left Button -->
+      <button id="toolbar-align-left" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Left" data-i18n-title="tip.alignLeft">
+        <span class="material-symbols-outlined">format_align_left</span>
+      </button>
+      <!-- Align Center Button -->
+      <button id="toolbar-align-center" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Center" data-i18n-title="tip.alignCenter">
+        <span class="material-symbols-outlined">format_align_center</span>
+      </button>
+      <!-- Align Right Button -->
+      <button id="toolbar-align-right" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Right" data-i18n-title="tip.alignRight">
+        <span class="material-symbols-outlined">format_align_right</span>
+      </button>
+    </div>
+  </div>
+  <!-- Vertical Alignment Dropdown Selector -->
+  <div class="relative inline-block">
+    <!-- Vertical Alignment Dropdown Toggle Button -->
+    <button id="toolbar-valign" class="p-1 hover:bg-surface-variant rounded transition-colors flex items-center gap-0.5" title="Vertical Alignment" data-i18n-title="tip.valign">
+      <span id="toolbar-valign-icon" class="material-symbols-outlined">vertical_align_bottom</span>
+      <span class="text-[10px] text-on-surface-variant font-bold">▼</span>
+    </button>
+    <!-- Floating Dropdown Menu containing options -->
+    <div id="toolbar-valign-menu" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg p-1 flex gap-1 z-50">
+      <!-- Align Top Button -->
+      <button id="toolbar-valign-top" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Top" data-i18n-title="tip.alignTop">
+        <span class="material-symbols-outlined">vertical_align_top</span>
+      </button>
+      <!-- Align Center Button -->
+      <button id="toolbar-valign-center" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Center" data-i18n-title="tip.valignCenter">
+        <span class="material-symbols-outlined">vertical_align_center</span>
+      </button>
+      <!-- Align Bottom Button -->
+      <button id="toolbar-valign-bottom" class="p-1 hover:bg-surface-variant rounded transition-colors" title="Align Bottom" data-i18n-title="tip.alignBottom">
+        <span class="material-symbols-outlined">vertical_align_bottom</span>
+      </button>
+    </div>
+  </div>
+<button id="toolbar-link" title="Insert Link (Ctrl+K)" data-i18n-title="tip.link" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">link</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">add_comment</span></button>
+<button title="插入圖表" data-i18n-title="tip.chart" disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">bar_chart</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">filter_alt</span></button>
+<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">functions</span></button>
+</div>
+</header>
+<!-- Version History Preview Top Bar (hidden by default) -->
+<div id="history-top-bar" class="hidden h-[60px] bg-white dark:bg-inverse-surface border-b border-outline-variant px-6 flex items-center justify-between z-[60] w-full shrink-0">
+  <div class="flex items-center gap-4">
+    <!-- Back button to exit history mode -->
+    <button id="history-exit-btn" class="p-2 hover:bg-surface-variant rounded-full transition-colors flex items-center justify-center" title="結束版本紀錄模式" data-i18n-title="tip.exitHistory">
+      <span class="material-symbols-outlined">arrow_back</span>
+    </button>
+    <div class="flex flex-col">
+      <span class="text-xs text-outline" data-i18n="history.from">版本紀錄自</span>
+      <span id="history-title-date" class="text-sm font-semibold text-on-surface dark:text-inverse-on-surface">今天，晚上7:26</span>
+    </div>
+  </div>
+  <!-- Restore this version button -->
+  <button id="history-restore-btn" class="bg-primary hover:bg-primary-fixed-dim text-white px-5 py-2 rounded-xl text-label-lg font-label-lg transition-colors hidden shadow-md" data-i18n="history.restore">
+    還原這個版本
+  </button>
+</div>
+<!-- Main Content (Formula Bar & Grid) -->
+<main class="flex-grow flex flex-col min-h-0 pb-[40px]">
+<!-- Formula Bar -->
+<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant px-2 shrink-0">
+<div id="name-box" class="w-12 text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
+<div class="px-2 text-primary h-full flex items-center">
+<span class="material-symbols-outlined leading-none" style="font-size: 20px;">function</span>
+</div>
+<div class="flex-grow h-full">
+<!-- Formula Bar Input element used for displaying and editing cell formulas -->
+<input id="formula-bar-input" class="w-full h-full bg-transparent border-none focus:ring-0 text-mono-data font-mono-data px-2" type="text" value="=SUM(C4:C20) * 1.15"/>
+</div>
+</div>
+<!-- Resize handle: drag down to grow the formula bar. Thin transparent strip
+     that reveals a primary-colored bar on hover. Min height = initial height. -->
+<div id="formula-resize-handle" class="relative h-1 -mt-px shrink-0 cursor-row-resize group z-20" data-i18n-title="formula.resize" title="拖曳以調整公式列高度">
+<div class="absolute inset-x-0 top-0 h-[3px] bg-transparent group-hover:bg-primary/50 transition-colors"></div>
+</div>
+<!-- Spreadsheet Grid Container -->
+<div class="flex-grow min-h-0 overflow-auto bg-surface-container-low relative grid-scrollbar">
+    <div class="grid-container w-max" id="grid-root">
+      <!-- Top-left corner -->
+      <div class="grid-header sticky top-0 left-0 z-30"></div>
+    </div>
+  </div>
+</main>
+<!-- BottomNavBar -->
+<!-- Footer content is indented to 46px so the first button's left edge aligns
+     with the right border of the row-index gutter (grid-template-columns: 46px …). -->
+<footer class="fixed bottom-0 left-0 w-full z-50 flex items-center h-[40px] pl-[46px] pr-2 bg-surface-container dark:bg-surface-container-high border-t border-outline-variant dark:border-outline">
+  <!-- Button to add a new sheet dynamically -->
+  <button id="add-sheet-btn" class="p-1 hover:bg-surface-variant rounded transition-colors mr-1">
+    <span class="material-symbols-outlined">add</span>
+  </button>
+  <button class="p-1 hover:bg-surface-variant rounded transition-colors mr-2">
+    <span class="material-symbols-outlined">menu</span>
+  </button>
+  <!-- Dynamic tabs container element, to be populated with sheets in app.js -->
+  <div id="sheet-tabs-container" class="flex items-center h-full"></div>
+  <div class="flex-grow"></div>
+  <div class="flex items-center gap-2 pr-4">
+    <span class="text-label-md text-outline" data-i18n="status.allSaved">All changes saved</span>
+    <div class="w-2 h-2 rounded-full bg-green-500"></div>
+  </div>
+</footer>
+
+<!-- Version History Sidebar (hidden by default) -->
+<aside id="history-sidebar" class="hidden fixed right-0 top-[60px] bottom-0 w-[320px] bg-white dark:bg-inverse-surface border-l border-outline-variant flex flex-col z-50 shrink-0 select-none">
+  <!-- Sidebar Header -->
+  <div class="p-4 border-b border-outline-variant dark:border-outline">
+    <h2 class="text-sm font-medium text-gray-700 dark:text-inverse-on-surface mb-4" data-i18n="history.title">版本紀錄</h2>
+    <div class="relative">
+      <select class="w-full text-sm border-gray-300 dark:border-outline rounded-md focus:ring-primary focus:border-primary py-1.5 pl-3 pr-10 bg-transparent text-on-surface dark:text-inverse-on-surface">
+        <option data-i18n="history.allVersions">所有版本</option>
+      </select>
+    </div>
+  </div>
+  <!-- History List (scrollable) -->
+  <div id="history-list" class="flex-grow overflow-y-auto">
+    <!-- Version items will be populated dynamically -->
+  </div>
+  <!-- Sidebar Footer Checkboxes -->
+  <div class="p-4 border-t border-outline-variant dark:border-outline bg-surface-container-lowest dark:bg-inverse-surface" data-purpose="sidebar-controls">
+    <div class="flex items-center mb-3">
+      <input checked class="h-4 w-4 text-primary border-gray-300 dark:border-outline rounded focus:ring-primary cursor-pointer" id="highlightChanges" type="checkbox"/>
+      <label class="ml-2 text-sm text-gray-700 dark:text-inverse-on-surface cursor-pointer select-none" for="highlightChanges" data-i18n="history.highlightChanges">醒目顯示變更</label>
+    </div>
+    <div class="flex items-center">
+      <input class="h-4 w-4 text-primary border-gray-300 dark:border-outline rounded focus:ring-primary cursor-pointer" id="showUnedited" type="checkbox"/>
+      <label class="ml-2 text-sm text-gray-700 dark:text-inverse-on-surface cursor-pointer select-none" for="showUnedited" data-i18n="history.showUnedited">顯示未修改的資料列</label>
+    </div>
+  </div>
+</aside>
+
+<!-- Find and Replace Modal -->
+<!-- Modal overlay that blocks background interactions -->
+<div id="search-replace-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] hidden" data-purpose="modal-overlay">
+  <!-- Modal main container -->
+  <div class="bg-white dark:bg-inverse-surface rounded-lg shadow-xl w-full max-w-[500px] overflow-hidden" data-purpose="modal-container">
+    <!-- Header section with title and close button -->
+    <header class="flex justify-between items-center px-6 pt-6 pb-4">
+      <h1 class="text-xl text-gray-800 dark:text-on-surface" data-purpose="modal-title" data-i18n="find.title">尋找並取代</h1>
+      <!-- Close button (x) -->
+      <button id="find-close-btn" aria-label="Close" data-i18n-aria="find.close" class="text-gray-400 hover:text-gray-600 focus:outline-none">
+        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+        </svg>
+      </button>
+    </header>
+    <!-- Main search and replace options -->
+    <main class="px-8 py-4">
+      <!-- Row for the find/search string input -->
+      <div class="flex items-center mb-5" data-purpose="form-row">
+        <label class="w-20 text-sm text-gray-700 dark:text-on-surface" for="find-input" data-i18n="find.find">尋找</label>
+        <div class="flex-1">
+          <input class="input-field dark:border-outline" id="find-input" type="text"/>
+        </div>
+      </div>
+      <!-- Row for the replace string input -->
+      <div class="flex items-center mb-6" data-purpose="form-row">
+        <label class="w-20 text-sm text-gray-700 dark:text-on-surface" for="replace-input" data-i18n="find.replaceWith">取代為</label>
+        <div class="flex-1">
+          <input class="input-field dark:border-outline" id="replace-input" type="text"/>
+        </div>
+      </div>
+      <!-- Row for selecting the search scope -->
+      <div class="flex items-center mb-6" data-purpose="form-row">
+        <label class="w-20 text-sm text-gray-700 dark:text-on-surface" data-i18n="find.search">搜尋</label>
+        <div class="relative">
+          <select id="find-scope-select" class="appearance-none border border-gray-300 dark:border-outline rounded px-3 py-1.5 pr-10 text-sm text-gray-700 dark:text-on-surface bg-white dark:bg-inverse-surface focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer">
+            <option value="所有工作表" data-i18n="find.allSheets">所有工作表</option>
+            <option value="此工作表" data-i18n="find.thisSheet">此工作表</option>
+          </select>
+          <!-- Custom dropdown arrow SVG -->
+          <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+            <svg class="w-4 h-4 text-gray-600 dark:text-outline" fill="currentColor" viewbox="0 0 20 20">
+              <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+      <!-- List of search option checkboxes -->
+      <div class="mt-8 mb-10 pl-20 flex flex-col gap-3" data-purpose="options-list">
+        <!-- Match case sensitivity -->
+        <label class="checkbox-label">
+          <input id="find-match-case" class="custom-checkbox" type="checkbox"/>
+          <span class="dark:text-on-surface" data-i18n="find.matchCase">大小寫需相符</span>
+        </label>
+        <!-- Match entire cell content -->
+        <label class="checkbox-label">
+          <input id="find-match-entire" class="custom-checkbox" type="checkbox"/>
+          <span class="dark:text-on-surface" data-i18n="find.matchEntire">整個儲存格內容需相符</span>
+        </label>
+        <!-- Match using regular expressions (Regex) -->
+        <label class="checkbox-label">
+          <input id="find-use-regex" class="custom-checkbox" type="checkbox"/>
+          <span class="dark:text-on-surface"><span data-i18n="find.useRegex">使用規則運算式進行搜尋</span> <a class="text-blue-500 hover:underline" href="#" data-i18n="find.help">說明</a></span>
+        </label>
+        <!-- Match within formulas -->
+        <label class="checkbox-label">
+          <input id="find-search-formulas" class="custom-checkbox" type="checkbox"/>
+          <span class="dark:text-on-surface" data-i18n="find.searchFormulas">同時在公式中搜尋</span>
+        </label>
+        <!-- Match within links -->
+        <label class="checkbox-label">
+          <input id="find-search-links" class="custom-checkbox" type="checkbox"/>
+          <span class="dark:text-on-surface" data-i18n="find.searchLinks">一併在連結中搜尋</span>
+        </label>
+      </div>
+    </main>
+    <!-- Footer actions containing Find, Replace, Replace All, Done buttons -->
+    <footer class="px-8 pb-8 flex justify-end gap-3" data-purpose="modal-actions">
+      <button id="find-btn" class="btn-secondary" type="button" data-i18n="find.btnFind">尋找</button>
+      <button id="replace-btn" class="btn-secondary" type="button" data-i18n="find.btnReplace">取代</button>
+      <button id="replace-all-btn" class="btn-secondary" type="button" data-i18n="find.btnReplaceAll">全部取代</button>
+      <button id="find-done-btn" class="btn-primary" type="button" data-i18n="find.btnDone">完成</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ Share dialog ============
+     Mirrors the reference design. Only actions backed by real server features are
+     wired up: "Copy link" (the file's shareable URL), Done/close, and the gear /
+     back navigation between the main view and the settings sub-view. The
+     "People with access" row shows the signed-in user and their real access level
+     (owner / editor / viewer, derived from file ownership + role). Controls with
+     no backing feature (add-people, general-access policy, help, and the settings
+     toggles) are shown disabled/grayed rather than faked. -->
+<div id="share-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] hidden" data-purpose="modal-overlay">
+  <div class="bg-surface-container-lowest dark:bg-inverse-surface rounded-3xl shadow-xl w-full max-w-[512px] overflow-visible">
+
+    <!-- ---- Main view ---- -->
+    <div id="share-main-view">
+      <header class="flex items-start justify-between px-6 pt-6 pb-3">
+        <h1 id="share-title" class="text-xl text-on-surface dark:text-on-surface"></h1>
+        <div class="flex items-center gap-1 shrink-0">
+          <button id="share-help-btn" type="button" disabled data-i18n-title="share.help" title="Help" class="p-2 rounded-full text-on-surface-variant opacity-40 cursor-not-allowed">
+            <span class="material-symbols-outlined">help</span>
+          </button>
+          <button id="share-settings-btn" type="button" data-i18n-title="share.settings" title="Settings" class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container transition-colors">
+            <span class="material-symbols-outlined">settings</span>
+          </button>
+        </div>
+      </header>
+      <main class="px-6 pb-2">
+        <!-- Add people: search + selectable chips. Enabled only for an owner /
+             admin of a real (non-default) file; otherwise disabled. -->
+        <div class="flex items-start gap-3 mb-1">
+          <div id="share-add-box" class="flex-1 min-w-0 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest focus-within:border-primary">
+            <span id="share-chips" style="display:contents"></span>
+            <input id="share-add-input" type="text" autocomplete="off"
+                   class="flex-1 min-w-[8rem] bg-transparent text-on-surface outline-none disabled:cursor-not-allowed disabled:opacity-60"/>
+          </div>
+          <!-- New-people role: choose Editor (can modify) or Viewer (read-only).
+               Defaults to Editor. Visible while composing. -->
+          <div id="share-compose-role" class="hidden shrink-0 relative">
+            <button id="share-compose-role-btn" type="button" class="flex items-center gap-1 h-10 px-3 rounded-lg border border-outline-variant text-sm text-on-surface hover:bg-surface-container transition-colors">
+              <span id="share-compose-role-label" data-role="editor" data-i18n="role.editor">Editor</span>
+              <span class="material-symbols-outlined text-[18px]">arrow_drop_down</span>
+            </button>
+            <div id="share-compose-role-menu" class="hidden absolute right-0 mt-1 w-36 rounded-lg border border-outline-variant bg-surface-container-lowest shadow-md z-10 py-1">
+              <button type="button" class="share-compose-role-opt w-full text-left px-3 py-2 text-sm text-on-surface hover:bg-surface-container" data-role="editor" data-i18n="role.editor">Editor</button>
+              <button type="button" class="share-compose-role-opt w-full text-left px-3 py-2 text-sm text-on-surface hover:bg-surface-container" data-role="viewer" data-i18n="role.viewer">Viewer</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live search results -->
+        <div id="share-search-results" class="hidden mb-2 max-h-52 overflow-auto rounded-lg border border-outline-variant bg-surface-container-lowest shadow-sm"></div>
+
+        <!-- Default section: people with access + general access -->
+        <div id="share-default-section">
+          <h2 class="text-sm font-medium text-on-surface mb-3 mt-4" data-i18n="share.peopleWithAccess">People with access</h2>
+          <div id="share-people" class="flex flex-col gap-3 mb-6"></div>
+
+          <h2 class="text-sm font-medium text-on-surface mb-2" data-i18n="share.generalAccess">General access</h2>
+          <div class="flex items-start gap-3 mb-2">
+            <div id="share-access-icon" class="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
+              <span class="material-symbols-outlined text-[20px]">lock</span>
+            </div>
+            <div class="min-w-0 relative">
+              <!-- General access: Restricted vs Anyone with the link. Functional for
+                   owners/admins; rendered disabled for users who can't manage it. -->
+              <button id="share-access-trigger" type="button" class="flex items-center gap-1 text-sm font-medium text-on-surface rounded px-1 -mx-1 hover:bg-surface-container transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-transparent">
+                <span id="share-access-label" data-i18n="share.restricted">Restricted</span>
+                <span class="material-symbols-outlined text-[18px]">arrow_drop_down</span>
+              </button>
+              <div id="share-access-menu" class="hidden absolute left-0 mt-1 w-56 rounded-lg border border-outline-variant bg-surface-container-lowest shadow-md z-20 py-1">
+                <button type="button" class="share-access-item w-full flex items-center gap-2 px-3 py-2 text-sm text-on-surface hover:bg-surface-container" data-access="restricted">
+                  <span class="material-symbols-outlined text-[18px] text-primary" data-role="check">check</span>
+                  <span data-i18n="share.restricted">Restricted</span>
+                </button>
+                <button type="button" class="share-access-item w-full flex items-center gap-2 px-3 py-2 text-sm text-on-surface hover:bg-surface-container" data-access="anyone">
+                  <span class="material-symbols-outlined text-[18px] text-primary invisible" data-role="check">check</span>
+                  <span data-i18n="share.anyoneWithLink">Anyone with the link</span>
+                </button>
+              </div>
+              <p id="share-access-desc" class="text-xs text-on-surface-variant mt-0.5" data-i18n="share.restrictedDesc">Only people with access can open the file with the link</p>
+            </div>
+          </div>
+        </div>
+      </main>
+      <footer class="flex items-center justify-between px-6 py-5">
+        <button id="share-copy-link" type="button" class="flex items-center gap-2 h-10 px-4 rounded-full border border-outline text-primary text-sm font-medium hover:bg-surface-container transition-colors">
+          <span class="material-symbols-outlined text-[20px]">link</span>
+          <span id="share-copy-link-label" data-i18n="share.copyLink">Copy link</span>
+        </button>
+        <div class="flex items-center gap-2">
+          <div id="share-actions-default">
+            <button id="share-done" type="button" class="h-10 px-6 rounded-full bg-secondary-container text-on-secondary text-sm font-medium hover:brightness-95 transition-all" data-i18n="share.done">Done</button>
+          </div>
+          <div id="share-actions-compose" class="hidden items-center gap-2">
+            <button id="share-cancel" type="button" class="h-10 px-5 rounded-full text-primary text-sm font-medium hover:bg-surface-container transition-colors" data-i18n="share.cancel">Cancel</button>
+            <button id="share-submit" type="button" class="h-10 px-6 rounded-full bg-primary text-on-primary text-sm font-medium hover:brightness-105 transition-all disabled:opacity-40 disabled:cursor-not-allowed" data-i18n="share.share">Share</button>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <!-- ---- Settings sub-view ---- -->
+    <div id="share-settings-view" class="hidden">
+      <header class="flex items-center gap-4 px-6 pt-6 pb-4">
+        <button id="share-settings-back" type="button" data-i18n-title="share.back" title="Back" class="p-1 rounded-full text-on-surface-variant hover:bg-surface-container transition-colors">
+          <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        <h1 id="share-settings-title" class="text-xl text-on-surface"></h1>
+      </header>
+      <main class="px-6 pb-8 pt-2">
+        <h2 class="text-sm font-medium text-on-surface-variant mb-3" data-i18n="share.settingsAccess">Access</h2>
+        <label class="flex items-start gap-3 mb-6 opacity-60 cursor-not-allowed">
+          <input type="checkbox" checked disabled class="mt-1 cursor-not-allowed"/>
+          <span class="text-sm text-on-surface">
+            <span data-i18n="share.allowEditors">Editors can change permissions and share</span>
+            <span class="block text-primary text-xs mt-0.5" data-i18n="share.learnMore">Learn more about sharing settings for editors</span>
+          </span>
+        </label>
+
+        <h2 class="text-sm font-medium text-on-surface-variant mb-3" data-i18n="share.downloadPrintLabel">Who can download, copy, and print</h2>
+        <label class="flex items-center gap-3 mb-4 opacity-60 cursor-not-allowed">
+          <input type="checkbox" checked disabled class="cursor-not-allowed"/>
+          <span class="text-sm text-on-surface" data-i18n="share.editors">Editors</span>
+        </label>
+        <label class="flex items-center gap-3 opacity-60 cursor-not-allowed">
+          <input type="checkbox" checked disabled class="cursor-not-allowed"/>
+          <span class="text-sm text-on-surface" data-i18n="share.commentersViewers">Commenters and viewers</span>
+        </label>
+      </main>
+    </div>
+
+  </div>
+</div>
+
+<!-- Client modules. Deferred scripts execute in document order, so load
+     dependencies first: shared utils → formula engine (needs utils) → i18n,
+     then the main app, then the autocomplete catalog. app.js binds these via
+     the window.CoSheet namespace each module publishes. -->
+<script src="/sheet-utils.js" defer></script>
+<script src="/formula-engine.js" defer></script>
+<script src="/i18n.js" defer></script>
+<script src="/sheet-functions.js" defer></script>
+<script src="/app.js" defer></script>
+</body>
+</html>

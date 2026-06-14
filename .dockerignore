@@ -1,0 +1,31 @@
+# Dependencies (reinstalled inside the image)
+node_modules
+npm-debug.log*
+
+# Version control / IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# Secrets & local env (provided at runtime via env_file / environment)
+.env
+.env.local
+.env.*.local
+
+# Local persistence / test artifacts (real data lives in Postgres)
+store.json
+store.json.versions.json
+*.versions.json
+coverage
+tests
+
+# Design mockups — referenced during development, not served at runtime
+images
+
+# Docker / misc
+Dockerfile
+docker-compose*.yml
+.dockerignore
+tmp_repro.mjs
+*.log
