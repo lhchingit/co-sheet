@@ -64,7 +64,11 @@ test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', (t) => {
         return null;
       },
       addEventListener(event, cb) {
-        documentListeners[event] = cb;
+        // Mirror browser semantics: a single event type can have many listeners,
+        // and all of them fire. Storing only the last one would let a later
+        // registration (e.g. the share dialog's Escape handler) clobber the
+        // clipboard shortcut handler.
+        (documentListeners[event] = documentListeners[event] || []).push(cb);
       },
       createElement() {
         return createMockElement();
@@ -172,8 +176,10 @@ test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', (t) => {
   sandbox.localCells['A1'] = { value: 'Keyboard Value', formula: '', style: { italic: true } };
   sandbox.activeCellId = 'A1';
   sandbox.clipboardData = null;
+  // Dispatch to every registered keydown listener, as a browser would.
+  const dispatchKeydown = (evt) => (documentListeners['keydown'] || []).forEach((cb) => cb(evt));
   let preventDefaultCalled = false;
-  documentListeners['keydown']({
+  dispatchKeydown({
     key: 'c',
     ctrlKey: true,
     metaKey: false,
@@ -189,7 +195,7 @@ test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', (t) => {
   // --- Act 6: Select B2 and trigger Ctrl+V keyboard shortcut ---
   sandbox.activeCellId = 'B2';
   preventDefaultCalled = false;
-  documentListeners['keydown']({
+  dispatchKeydown({
     key: 'v',
     ctrlKey: true,
     metaKey: false,
@@ -205,7 +211,7 @@ test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', (t) => {
   // --- Act 7: Select B2 and trigger Ctrl+X keyboard shortcut ---
   sandbox.activeCellId = 'B2';
   preventDefaultCalled = false;
-  documentListeners['keydown']({
+  dispatchKeydown({
     key: 'x',
     ctrlKey: true,
     metaKey: false,

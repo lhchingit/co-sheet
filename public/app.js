@@ -21,6 +21,11 @@ if (typeof document !== 'undefined' && document) {
   if (!document.documentElement) {
     document.documentElement = { setAttribute: () => {} };
   }
+  // Ensure documentElement has a classList (real browsers always do; some
+  // sandboxed document mocks omit it, so provide a no-op stub).
+  if (!document.documentElement.classList) {
+    document.documentElement.classList = { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false };
+  }
   // Ensure document.body exists with standard appendChild method
   if (!document.body) {
     document.body = { appendChild: () => {} };
@@ -214,7 +219,8 @@ const currentFileId = (() => {
   }
 })();
 const wsBase = `${protocol}//${window.location.host}`;
-socket = new WebSocket(currentFileId ? `${wsBase}/?file=${currentFileId}` : wsBase);
+// The socket is created (and re-created on reconnect) by connectSocket() below.
+const wsUrl = currentFileId ? `${wsBase}/?file=${currentFileId}` : wsBase;
 
 // Whether this client may modify the workbook. Authoritatively set from the server's
 // `init` payload (canEdit). A viewer-shared file arrives with canEdit === false and
@@ -228,23 +234,27 @@ const WB_STATE_CHANGING_TYPES = [
   'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets'
 ];
 
-// Wrap socket.send to automatically inject sheetName in outgoing events
-const originalSend = socket.send;
-socket.send = function(data) {
-  try {
-    const msg = JSON.parse(data);
-    // Read-only safety net: drop state-changing messages regardless of call site.
-    if (!canEditWorkbook && msg && WB_STATE_CHANGING_TYPES.includes(msg.type)) {
-      return;
+// Wrap socket.send to automatically inject sheetName in outgoing events. Applied
+// to each freshly (re)connected socket by connectSocket() so the behavior survives
+// reconnects.
+function applySendWrapper(sock) {
+  const originalSend = sock.send;
+  sock.send = function(data) {
+    try {
+      const msg = JSON.parse(data);
+      // Read-only safety net: drop state-changing messages regardless of call site.
+      if (!canEditWorkbook && msg && WB_STATE_CHANGING_TYPES.includes(msg.type)) {
+        return;
+      }
+      if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move') && msg.payload) {
+        msg.payload.sheetName = activeSheetName;
+      }
+      return originalSend.call(this, JSON.stringify(msg));
+    } catch (e) {
+      return originalSend.call(this, data);
     }
-    if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move') && msg.payload) {
-      msg.payload.sheetName = activeSheetName;
-    }
-    return originalSend.call(this, JSON.stringify(msg));
-  } catch (e) {
-    return originalSend.call(this, data);
-  }
-};
+  };
+}
 
 /**
  * Reflect the current workbook edit rights in the UI. In read-only mode (a viewer
@@ -290,7 +300,7 @@ function applyWorkbookAccessUI() {
 /**
  * Handle incoming WebSocket messages from the server.
  */
-socket.onmessage = (event) => {
+function handleSocketMessage(event) {
   try {
     const { type, payload } = JSON.parse(event.data);
 
@@ -494,7 +504,45 @@ socket.onmessage = (event) => {
   } catch (e) {
     console.error('Error handling WebSocket message:', e.message);
   }
-};
+}
+
+/**
+ * Open (or re-open) the WebSocket connection and wire up its handlers. Called once
+ * on load and again by the reconnect logic after a drop.
+ *
+ * Reconnection is required on hosts like Cloud Run where a connection is bounded by
+ * the request timeout and is also severed by redeploys and instance restarts. The
+ * server re-sends the full `init` payload on every new connection, so a reconnect
+ * transparently re-syncs workbook state with no extra client work.
+ */
+let wsReconnectAttempts = 0;
+let wsReconnectTimer = null;
+function connectSocket() {
+  socket = new WebSocket(wsUrl);
+  applySendWrapper(socket);
+  socket.onmessage = handleSocketMessage;
+
+  socket.onopen = () => {
+    // Connection established: reset the backoff so the next drop retries quickly.
+    wsReconnectAttempts = 0;
+  };
+
+  socket.onclose = () => {
+    // Exponential backoff capped at 30s, plus jitter so that a fleet of clients
+    // reconnecting after an instance restart doesn't stampede the server at once.
+    const delay = Math.min(30000, 1000 * 2 ** wsReconnectAttempts) + Math.random() * 1000;
+    wsReconnectAttempts += 1;
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = setTimeout(connectSocket, delay);
+  };
+
+  socket.onerror = () => {
+    // Let onclose drive reconnection; closing here avoids leaving a half-open socket.
+    try { socket.close(); } catch (e) { /* already closing */ }
+  };
+}
+
+connectSocket();
 
 /**
  * Resets range selection variables and clears selection UI components.
@@ -1587,8 +1635,10 @@ const renderSpreadsheetGrid = () => {
         if (cellData.style.fontFamily) cellEl.style.fontFamily = resolveFontFamily(cellData.style.fontFamily);
         if (cellData.style.fontSize) {
           cellEl.style.fontSize = `${cellData.style.fontSize}pt`;
-          // Grow the row to fit larger fonts (no-op at or below the default size)
-          const minHeight = getCellMinHeight(cellData.style.fontSize);
+          // Grow the row to fit larger fonts (no-op at or below the default size).
+          // Only an empty cell's font size is ignored: a blank cell keeps the base
+          // row height, and the row grows once text is actually entered.
+          const minHeight = val ? getCellMinHeight(cellData.style.fontSize) : null;
           if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
         }
         if (cellData.style.color) cellEl.style.backgroundColor = cellData.style.color;
@@ -1728,8 +1778,10 @@ const updateGridDOMCell = (cellId, value, style) => {
     if (style.fontFamily) cellEl.style.fontFamily = resolveFontFamily(style.fontFamily);
     if (style.fontSize) {
       cellEl.style.fontSize = `${style.fontSize}pt`;
-      // Grow the row to fit larger fonts (no-op at or below the default size)
-      const minHeight = getCellMinHeight(style.fontSize);
+      // Grow the row to fit larger fonts (no-op at or below the default size).
+      // Only an empty cell's font size is ignored: a blank cell keeps the base
+      // row height, and the row grows once text is actually entered.
+      const minHeight = val ? getCellMinHeight(style.fontSize) : null;
       if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
     }
     if (style.color) cellEl.style.backgroundColor = style.color;
@@ -3942,7 +3994,7 @@ function closeAllMenus() {
   ['toolbar-align-menu', 'toolbar-valign-menu', 'toolbar-zoom-menu',
    'toolbar-font-menu', 'toolbar-font-size-menu',
    'menu-edit-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
-   'lang-switch-menu'].forEach((id) => {
+   'lang-switch-menu', 'share-menu'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
   });
@@ -4271,6 +4323,16 @@ window.addEventListener('click', (e) => {
   if (langSwitchMenu && !langSwitchMenu.classList.contains('hidden')) {
     if (langSwitchBtn && !langSwitchBtn.contains(e.target) && !langSwitchMenu.contains(e.target)) {
       langSwitchMenu.classList.add('hidden');
+    }
+  }
+
+  // Dismiss the Share split-button menu if clicking outside it or its caret toggle.
+  const shareMenuEl = document.getElementById('share-menu');
+  const shareMenuToggle = document.getElementById('share-menu-btn');
+  if (shareMenuEl && !shareMenuEl.classList.contains('hidden')) {
+    if (shareMenuToggle && !shareMenuToggle.contains(e.target) && !shareMenuEl.contains(e.target)) {
+      shareMenuEl.classList.add('hidden');
+      shareMenuToggle.setAttribute('aria-expanded', 'false');
     }
   }
 
@@ -6374,6 +6436,74 @@ if (shareModal) {
         label.textContent = t('share.linkCopied');
         if (copyResetTimer) clearTimeout(copyResetTimer);
         copyResetTimer = setTimeout(() => { label.textContent = t('share.copyLink'); }, 1800);
+      }
+    });
+  }
+
+  // ----- Header "Share" split button: the right-hand caret opens a small menu
+  // with "Copy link" and a read-only count of how many users the file is shared
+  // with. Reuses shareUrl()/currentFileId from the share-dialog scope above. -----
+  const writeClipboard = async (text) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    } catch (e) { /* ignore; still show confirmation */ }
+  };
+
+  const shareMenuBtn = document.getElementById('share-menu-btn');
+  const shareMenuEl = document.getElementById('share-menu');
+  const shareMenuCountEl = document.getElementById('share-menu-count');
+  const shareCopyMenuItem = document.getElementById('share-copy-link-menu');
+
+  // Reflect the live sharer count in the menu's read-only line. The /shares
+  // endpoint requires modify permission; viewers (or the legacy default file)
+  // fall back to 0 rather than surfacing an error.
+  const refreshShareMenuCount = async () => {
+    let count = 0;
+    if (currentFileId && currentFileId !== 'default') {
+      try {
+        const res = await fetch(`/api/files/${currentFileId}/shares`);
+        if (res.ok) {
+          const arr = await res.json();
+          if (Array.isArray(arr)) count = arr.length;
+        }
+      } catch (e) { /* leave count at 0 */ }
+    }
+    if (shareMenuCountEl) shareMenuCountEl.textContent = t('share.sharedCount', { count });
+  };
+
+  if (shareMenuBtn && shareMenuEl) {
+    shareMenuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = !shareMenuEl.classList.contains('hidden');
+      if (typeof closeAllMenus === 'function') closeAllMenus();
+      if (wasOpen) {
+        shareMenuBtn.setAttribute('aria-expanded', 'false');
+      } else {
+        shareMenuEl.classList.remove('hidden');
+        shareMenuBtn.setAttribute('aria-expanded', 'true');
+        refreshShareMenuCount();
+      }
+    });
+  }
+
+  if (shareCopyMenuItem) {
+    let menuCopyResetTimer = null;
+    shareCopyMenuItem.addEventListener('click', async () => {
+      await writeClipboard(shareUrl());
+      const label = document.getElementById('share-copy-link-menu-label');
+      if (label) {
+        label.textContent = t('share.linkCopied');
+        if (menuCopyResetTimer) clearTimeout(menuCopyResetTimer);
+        menuCopyResetTimer = setTimeout(() => { label.textContent = t('share.copyLink'); }, 1800);
       }
     });
   }
