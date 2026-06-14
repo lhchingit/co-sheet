@@ -217,6 +217,15 @@ userinfo) for local development and tests.
 
 ## Deployment
 
+### Google Cloud Run (recommended)
+
+A scripted deployment to **Cloud Run + Cloud SQL** is included: `deploy.sh` and
+`cloudbuild.yaml` build the image and deploy it pinned to a single instance. See
+[`DEPLOY.md`](DEPLOY.md) for the full walkthrough (prerequisites, Cloud SQL setup,
+secrets, and OAuth configuration).
+
+### Kubernetes
+
 Kubernetes manifests are provided under `k8s/`:
 
 - `00-namespace.yaml`, `10-secrets.yaml`, `20-postgres.yaml`, `30-app.yaml`, `40-ingress.yaml`
@@ -244,4 +253,9 @@ alternate.
 
 ## License
 
-Not specified.
+Released under the [MIT License](LICENSE) — Copyright (c) 2026 LHCHIN.
+
+You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the software, subject to including the copyright and permission
+notice. The software is provided "as is", without warranty of any kind. See the
+[`LICENSE`](LICENSE) file for the full text.
