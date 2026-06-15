@@ -272,7 +272,12 @@
             flex-direction: column;
             justify-content: flex-end; /* Default vertical alignment: Bottom */
             line-height: normal;
-            padding: 0.2em 0.5em;
+            /* Horizontal padding is a fixed pixel value (not em) so the gap
+               between the text and the cell edge stays constant regardless of
+               font size; an em-based left padding grew with the text and made
+               enlarged content look indented/right-shifted. Vertical padding
+               stays em so larger fonts still get proportional row height. */
+            padding: 0.2em 3px;
             box-sizing: border-box;
             /* Keep content on a single line and overflow horizontally (like
                Google Sheets / Excel) instead of wrapping and growing the row. */
