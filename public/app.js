@@ -3618,11 +3618,6 @@ const showContextMenu = (cellId, x, y) => {
       <span class="${iconCls}">arrow_drop_down_circle</span>
       <span class="flex-grow">${t('ctx.dropdown')}</span>
     </div>
-    <div class="${disabledCls}">
-      <span class="${iconCls}">smart_button</span>
-      <span class="flex-grow">${t('ctx.smartChip')}</span>
-      <span class="${iconCls}">chevron_right</span>
-    </div>
     <div class="${dividerCls}"></div>
     <div class="${disabledCls}">
       <span class="${iconCls}">more_vert</span>
@@ -4976,9 +4971,13 @@ const renderSheetTabs = () => {
       ? 'bg-surface-container-lowest text-primary font-bold px-4 h-full flex items-center text-label-lg font-label-lg group cursor-pointer transition-all relative'
       : 'text-on-surface-variant px-4 h-full flex items-center hover:bg-surface-container-highest text-label-lg font-label-lg group cursor-pointer transition-all relative';
       
-    // Apply custom sheet colors if defined
+    // Apply custom sheet colors if defined. Drawn as an inset box-shadow rather
+    // than a real bottom border so the colored bar takes up no layout space —
+    // with border-box sizing a 3px border would shrink the content box and nudge
+    // the vertically-centered label up, changing the tab's apparent height only
+    // for colored sheets.
     if (sheetColors[sheetName]) {
-      tab.style.borderBottom = `3px solid ${sheetColors[sheetName]}`;
+      tab.style.boxShadow = `inset 0 -3px 0 0 ${sheetColors[sheetName]}`;
     }
     
     if (sheetName === renamingSheet) {

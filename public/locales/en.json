@@ -172,7 +172,6 @@
   "ctx.insertNote": "Insert note",
   "ctx.prebuiltTable": "Pre-built table",
   "ctx.dropdown": "Dropdown",
-  "ctx.smartChip": "Smart chips",
   "ctx.moreActions": "View more cell actions",
   "fn.hint": "Press Tab to accept, ↑↓ to browse suggestions",
   "sheet.delete": "Delete",

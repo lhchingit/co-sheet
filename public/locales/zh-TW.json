@@ -172,7 +172,6 @@
   "ctx.insertNote": "插入備註",
   "ctx.prebuiltTable": "預建表格",
   "ctx.dropdown": "下拉式選單",
-  "ctx.smartChip": "智慧型方塊",
   "ctx.moreActions": "查看更多儲存格動作",
   "fn.hint": "按 Tab 鍵即可接受建議，按 ↑↓ 即可瀏覽建議",
   "sheet.delete": "刪除",
