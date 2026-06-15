@@ -1861,6 +1861,29 @@ const handleCellSelect = (cellId, cellEl) => {
 };
 
 /**
+ * Moves the selection to the next cell directly below the given cell (same
+ * column, next row). Used when committing an inline edit with Enter so focus
+ * advances down the column, mirroring spreadsheet behaviour. No-op if already
+ * on the bottom row.
+ * @param {string} cellId - The cell to move down from.
+ */
+const selectCellBelow = (cellId) => {
+  const coord = parseCellCoord(cellId);
+  if (!coord) return;
+  const nextRow = coord.row + 1;
+  if (nextRow > TOTAL_ROWS) return; // already at the bottom of the grid
+  const nextCellId = `${getColLetter(coord.colIndex)}${nextRow}`;
+  const nextCellEl = document.querySelector(`[data-cell-id="${nextCellId}"]`);
+  if (!nextCellEl) return;
+  // Reset any range/column selection so this becomes a single-cell selection,
+  // matching what a plain click on the cell would do.
+  isColumnSelection = false;
+  selectionStartCellId = nextCellId;
+  selectionEndCellId = nextCellId;
+  handleCellSelect(nextCellId, nextCellEl);
+};
+
+/**
  * Selects an entire column from its header: fills every cell in the column,
  * anchors the active cell at the top row, and highlights the column header in
  * solid blue (see updateRangeSelectionUI for the column-selection styling).
@@ -1917,7 +1940,14 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   cellEl.onkeydown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      // Stop the keydown bubbling to the document-level handler, which would
+      // otherwise re-open editing on the (now committed) cell once blur has
+      // cleared contenteditable.
+      e.stopPropagation();
       cellEl.blur(); // Triggers blur event to save
+      // Advance the selection to the next cell in the same column, matching
+      // spreadsheet behaviour (Enter commits and moves down).
+      selectCellBelow(cellId);
     }
   };
 };
@@ -4885,6 +4915,18 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Backspace' || e.key === 'Delete') {
     e.preventDefault();
     clearCell(activeCellId);
+    return;
+  }
+
+  // Enter begins inline editing of the active cell (showing a text cursor).
+  // While editing, the cell's own keydown handler takes over: pressing Enter
+  // again commits and moves the selection down to the next cell in the column.
+  if (e.key === 'Enter') {
+    const cellEl = document.querySelector(`[data-cell-id="${activeCellId}"]`);
+    if (cellEl) {
+      e.preventDefault();
+      startCellInlineEdit(activeCellId, cellEl);
+    }
     return;
   }
 
