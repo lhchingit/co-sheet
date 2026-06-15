@@ -4018,7 +4018,7 @@ if (toolbarBorderBtn) {
 function closeAllMenus() {
   ['toolbar-align-menu', 'toolbar-valign-menu', 'toolbar-zoom-menu',
    'toolbar-font-menu', 'toolbar-font-size-menu',
-   'menu-edit-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
+   'menu-file-dropdown', 'menu-edit-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
    'lang-switch-menu', 'share-menu'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
@@ -5525,6 +5525,198 @@ window.addEventListener('mouseup', () => {
   isSelecting = false;
 });
 
+// File navigation dropdown. New / Make a copy / Share / Rename / Details are the
+// interactive entries (the remaining items are greyed-out in the markup). Toggling
+// follows the same click-to-open / click-to-close pattern as Edit/Insert/Format.
+const menuFileBtn = document.getElementById('menu-file-btn');
+const menuFileDropdown = document.getElementById('menu-file-dropdown');
+if (menuFileBtn && menuFileDropdown) {
+  const closeFileMenu = () => menuFileDropdown.classList.add('hidden');
+  menuFileBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = menuFileDropdown.classList.contains('hidden');
+    closeAllMenus();
+    if (willOpen) menuFileDropdown.classList.remove('hidden');
+  });
+
+  // The file this editor is bound to ('default' for the legacy workbook).
+  const effectiveFileId = () => currentFileId || 'default';
+  const currentFileNameValue = () => {
+    const el = document.getElementById('file-name');
+    const name = el && el.innerText ? el.innerText.trim() : '';
+    return name || t('drive.untitled');
+  };
+
+  // --- New: create a fresh blank spreadsheet and open it in a new browser tab. ---
+  const fileNewBtn = document.getElementById('file-new');
+  if (fileNewBtn) fileNewBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    closeFileMenu();
+    // Open the tab synchronously (within the click gesture) so popup blockers
+    // don't block it after the async create; navigate it once the id is known.
+    const win = window.open('', '_blank');
+    try {
+      const res = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ name: t('drive.untitled') })
+      });
+      if (res.status === 403) {
+        const d = await res.json().catch(() => ({}));
+        if (win) win.close();
+        alert(d.error === 'file_limit' ? t('drive.fileLimit') : t('drive.noPermission'));
+        return;
+      }
+      if (!res.ok) throw new Error('create failed');
+      const data = await res.json();
+      const url = data.url || `/sheet?file=${data.id}`;
+      if (win) win.location = url; else window.open(url, '_blank');
+    } catch (err) {
+      if (win) win.close();
+      alert(t('drive.loadError'));
+    }
+  });
+
+  // --- Make a copy: open the copy dialog, prefilled with "<name> 的副本". ---
+  const copyModal = document.getElementById('copy-file-modal');
+  const copyNameInput = document.getElementById('copy-file-name');
+  const copyShareChk = document.getElementById('copy-share-collaborators');
+  const copyConfirmBtn = document.getElementById('copy-file-confirm');
+  const copyCancelBtn = document.getElementById('copy-file-cancel');
+  const closeCopyDialog = () => { if (copyModal) copyModal.classList.add('hidden'); };
+  const openCopyDialog = () => {
+    if (!copyModal) return;
+    if (copyNameInput) copyNameInput.value = t('copy.namePattern', { name: currentFileNameValue() });
+    if (copyShareChk) copyShareChk.checked = false;
+    copyModal.classList.remove('hidden');
+    if (copyNameInput) { copyNameInput.focus(); copyNameInput.select(); }
+  };
+  const fileMakeCopyBtn = document.getElementById('file-make-copy');
+  if (fileMakeCopyBtn) fileMakeCopyBtn.addEventListener('click', (e) => {
+    e.stopPropagation(); closeFileMenu(); openCopyDialog();
+  });
+  if (copyCancelBtn) copyCancelBtn.addEventListener('click', closeCopyDialog);
+  if (copyConfirmBtn) copyConfirmBtn.addEventListener('click', async () => {
+    const name = (copyNameInput && copyNameInput.value.trim()) ||
+                 t('copy.namePattern', { name: currentFileNameValue() });
+    const shareCollaborators = !!(copyShareChk && copyShareChk.checked);
+    copyConfirmBtn.disabled = true;
+    // Open the tab synchronously so the post-fetch navigation isn't popup-blocked.
+    const win = window.open('', '_blank');
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(effectiveFileId())}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ name, shareCollaborators })
+      });
+      if (res.status === 403) {
+        const d = await res.json().catch(() => ({}));
+        if (win) win.close();
+        alert(d.error === 'file_limit' ? t('drive.fileLimit') : t('drive.noPermission'));
+        return;
+      }
+      if (!res.ok) throw new Error('copy failed');
+      const data = await res.json();
+      closeCopyDialog();
+      const url = data.url || `/sheet?file=${data.id}`;
+      if (win) win.location = url; else window.open(url, '_blank');
+    } catch (err) {
+      if (win) win.close();
+      alert(t('copy.failed'));
+    } finally {
+      copyConfirmBtn.disabled = false;
+    }
+  });
+  if (copyModal) {
+    let copyPress = null;
+    copyModal.addEventListener('mousedown', (e) => { copyPress = e.target; });
+    copyModal.addEventListener('click', (e) => {
+      if (e.target === copyModal && copyPress === copyModal) closeCopyDialog();
+    });
+  }
+
+  // --- Share: reuse the existing share dialog. ---
+  const fileShareBtn = document.getElementById('file-share');
+  if (fileShareBtn) fileShareBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFileMenu();
+    const sb = document.getElementById('share-btn');
+    if (sb) sb.click();
+  });
+
+  // --- Rename: start inline editing of the file name (gated by edit access). ---
+  const fileRenameBtn = document.getElementById('file-rename');
+  if (fileRenameBtn) fileRenameBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFileMenu();
+    if (!canEditWorkbook) return;
+    const el = document.getElementById('file-name');
+    if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  });
+
+  // --- Details: load and show read-only file metadata. ---
+  const detailsModal = document.getElementById('details-modal');
+  const detailsCloseBtn = document.getElementById('details-close');
+  const fileDetailsBtn = document.getElementById('file-details');
+  // Locale-aware date/time formatting for the timestamps.
+  const fmtDetailDate = (iso, withTime) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    const locale = getLang() === 'zh-TW' ? 'zh-TW' : 'en-US';
+    const opts = withTime
+      ? { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+      : { year: 'numeric', month: 'long', day: 'numeric' };
+    try { return new Intl.DateTimeFormat(locale, opts).format(d); }
+    catch (e) { return d.toLocaleString(); }
+  };
+  const closeDetailsDialog = () => { if (detailsModal) detailsModal.classList.add('hidden'); };
+  const openDetailsDialog = async () => {
+    if (!detailsModal) return;
+    const ownerEl = document.getElementById('details-owner');
+    const modEl = document.getElementById('details-modified');
+    const crEl = document.getElementById('details-created');
+    if (ownerEl) ownerEl.textContent = '…';
+    if (modEl) modEl.textContent = '…';
+    if (crEl) crEl.textContent = '…';
+    detailsModal.classList.remove('hidden');
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(effectiveFileId())}/details`, {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error('details failed');
+      const d = await res.json();
+      if (ownerEl) ownerEl.textContent = d.ownerIsSelf ? t('details.me') : (d.owner || t('drive.sharedSample'));
+      if (modEl) modEl.textContent = fmtDetailDate(d.updatedAt, true);
+      if (crEl) crEl.textContent = fmtDetailDate(d.createdAt, false);
+    } catch (err) {
+      if (ownerEl) ownerEl.textContent = t('details.failed');
+      if (modEl) modEl.textContent = '—';
+      if (crEl) crEl.textContent = '—';
+    }
+  };
+  if (fileDetailsBtn) fileDetailsBtn.addEventListener('click', (e) => {
+    e.stopPropagation(); closeFileMenu(); openDetailsDialog();
+  });
+  if (detailsCloseBtn) detailsCloseBtn.addEventListener('click', closeDetailsDialog);
+  if (detailsModal) {
+    let detPress = null;
+    detailsModal.addEventListener('mousedown', (e) => { detPress = e.target; });
+    detailsModal.addEventListener('click', (e) => {
+      if (e.target === detailsModal && detPress === detailsModal) closeDetailsDialog();
+    });
+  }
+
+  // Escape closes whichever File-menu dialog is open.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (copyModal && !copyModal.classList.contains('hidden')) closeCopyDialog();
+    if (detailsModal && !detailsModal.classList.contains('hidden')) closeDetailsDialog();
+  });
+}
+
 // Edit navigation dropdown button bindings to toggle display
 const menuEditBtn = document.getElementById('menu-edit-btn');
 const menuEditDropdown = document.getElementById('menu-edit-dropdown');
@@ -5764,6 +5956,7 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
     { btn: 'toolbar-font-size-input',isOpen: () => !menuHidden('toolbar-font-size-menu') },
     { btn: 'toolbar-color-text',     isOpen: () => paletteOpen('text') },
     { btn: 'toolbar-color-fill',     isOpen: () => paletteOpen('fill') },
+    { btn: 'menu-file-btn',          isOpen: () => !menuHidden('menu-file-dropdown') },
     { btn: 'menu-edit-btn',          isOpen: () => !menuHidden('menu-edit-dropdown') },
     { btn: 'menu-insert-btn',        isOpen: () => !menuHidden('menu-insert-dropdown') },
     { btn: 'menu-format-btn',        isOpen: () => !menuHidden('menu-format-dropdown') },

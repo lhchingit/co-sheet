@@ -130,3 +130,60 @@ test('Files API - CRUD, unique URL, and per-file workbook isolation', async (t) 
     cleanupStore();
   }
 });
+
+test('Files API - copy duplicates workbook data into an independent file', async (t) => {
+  // --- Arrange ---
+  cleanupStore();
+  const PORT = '31421';
+  const child = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH }
+  });
+  child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
+  await new Promise((r) => setTimeout(r, 1500));
+
+  try {
+    const cookie = await loginAndGetCookie(PORT, 'Copy User');
+
+    // Seed the source (default) workbook with a cell.
+    await makeRequest(`http://localhost:${PORT}/api/cells`, 'POST', {
+      cellId: 'A1', formula: '', value: 'Original', style: {}
+    }, { Cookie: cookie });
+
+    // Invalid file ids are rejected.
+    const badCopy = await makeRequest(`http://localhost:${PORT}/api/files/not-valid/copy`, 'POST', { name: 'X' }, { Cookie: cookie });
+    assert.strictEqual(badCopy.statusCode, 400, 'invalid file id should be rejected');
+
+    // --- Act: copy the default workbook ---
+    const copied = await makeRequest(`http://localhost:${PORT}/api/files/default/copy`, 'POST', { name: 'My Copy' }, { Cookie: cookie });
+    assert.strictEqual(copied.statusCode, 200, 'copy should succeed');
+    const copyId = copied.data.id;
+    assert.match(copyId, /^[a-f0-9]{24}$/, 'copy id should be a 24-char hex token');
+    assert.strictEqual(copied.data.name, 'My Copy');
+    assert.ok(copied.data.url.includes(`/sheet?file=${copyId}`), 'copy should return a shareable URL');
+
+    // --- Assert: the copy carries the source data and is listed ---
+    const copyCells = await makeRequest(`http://localhost:${PORT}/api/cells?file=${copyId}`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(copyCells.data.A1.value, 'Original', 'copied workbook should contain the source cell');
+
+    const listed = await makeRequest(`http://localhost:${PORT}/api/files`, 'GET', null, { Cookie: cookie });
+    assert.ok(listed.data.some((f) => f.id === copyId && f.name === 'My Copy'), 'copy should be listed');
+
+    // --- Isolation: editing the copy must not affect the source ---
+    await makeRequest(`http://localhost:${PORT}/api/cells?file=${copyId}`, 'POST', {
+      cellId: 'A1', formula: '', value: 'Changed', style: {}
+    }, { Cookie: cookie });
+    const sourceCells = await makeRequest(`http://localhost:${PORT}/api/cells`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(sourceCells.data.A1.value, 'Original', 'source workbook must be unchanged by edits to the copy');
+
+    // --- Details endpoint reports metadata for the copy ---
+    const details = await makeRequest(`http://localhost:${PORT}/api/files/${copyId}/details`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(details.statusCode, 200, 'details should be readable');
+    assert.strictEqual(details.data.name, 'My Copy');
+    assert.strictEqual(details.data.ownerIsSelf, true, 'copier should be reported as the owner');
+    assert.ok(details.data.createdAt, 'details should include a created timestamp');
+  } finally {
+    child.kill();
+    await new Promise((r) => setTimeout(r, 400));
+    cleanupStore();
+  }
+});

@@ -1835,6 +1835,151 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
 });
 
 /**
+ * POST /api/files/:id/copy
+ * Duplicates an existing file the caller can view: clones its workbook_state into
+ * a brand-new file owned by the caller and returns a shareable URL.
+ * Body: { name?: string, shareCollaborators?: boolean }.
+ *  - name              defaults to "<source name> 的副本"-style copy name (built client-side).
+ *  - shareCollaborators when true, copies the source file's share grants to the copy.
+ * The per-user file quota applies just like POST /api/files. Protected with
+ * ensureAuthenticated middleware.
+ */
+app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
+  try {
+    const srcId = req.params.id;
+    if (!isValidFileId(srcId)) {
+      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
+    }
+    // The caller must be able to open the source to copy it.
+    if (!(await canViewFile(req.user, srcId))) {
+      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to copy this file' });
+    }
+
+    // Resolve the copy's name (fall back to the source name with a generic suffix).
+    let name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
+    if (!name) {
+      const srcRow = await pool.query('SELECT name FROM files WHERE id = $1', [srcId]);
+      const srcName = (srcRow.rows && srcRow.rows[0] && srcRow.rows[0].name) || 'Untitled spreadsheet';
+      name = `Copy of ${srcName}`;
+    }
+    if (name.length > 120) name = name.slice(0, 120);
+
+    const creator = userIdentity(req.user) || 'anonymous';
+
+    // Enforce the same per-user quota as fresh creation (admins/super admins are
+    // unlimited; a regular user may own at most one file besides 'default').
+    const role = await getUserRole(req.user);
+    if (role !== 'admin' && role !== 'superadmin') {
+      const owned = await pool.query('SELECT id FROM files WHERE created_by = $1', [creator]);
+      const ownedCount = (owned.rows || []).filter(r => r.id !== 'default').length;
+      if (ownedCount >= 1) {
+        return res.status(403).json({
+          error: 'file_limit',
+          message: 'Your account can create only one file. Ask an admin for more.'
+        });
+      }
+    }
+
+    // Snapshot the source workbook (live in-memory state if loaded, else from the
+    // store) and deep-clone only the persisted shape — the non-enumerable `cells`
+    // accessor is intentionally dropped.
+    const src = await getWorkbook(srcId);
+    const clonedState = JSON.parse(JSON.stringify({
+      sheets: src.sheets || { Sheet1: {}, Sheet2: {} },
+      sheetOrder: src.sheetOrder || ['Sheet1', 'Sheet2'],
+      sheetColors: src.sheetColors || {},
+      hiddenSheets: src.hiddenSheets || []
+    }));
+
+    const id = crypto.randomBytes(12).toString('hex');
+    await pool.query(
+      'INSERT INTO workbook_state (state, key) VALUES ($1, $2)',
+      [JSON.stringify(clonedState), id]
+    );
+    await pool.query(
+      'INSERT INTO files (id, name, created_by) VALUES ($1, $2, $3)',
+      [id, name, creator]
+    );
+    // Seed the in-memory cache with a prototype-free copy (guards against prototype
+    // pollution, mirroring loadState) so the copy is live without a round-trip.
+    const cachedSheets = Object.create(null);
+    for (const [sheetName, cellMap] of Object.entries(clonedState.sheets)) {
+      cachedSheets[sheetName] = Object.assign(Object.create(null), cellMap);
+    }
+    workbooks.set(id, setupCellsProxy({
+      sheets: cachedSheets,
+      sheetOrder: clonedState.sheetOrder,
+      sheetColors: Object.assign(Object.create(null), clonedState.sheetColors),
+      hiddenSheets: clonedState.hiddenSheets
+    }));
+
+    // Optionally carry over the source's collaborators (never re-adding the new
+    // owner as a share of their own copy).
+    if (req.body && req.body.shareCollaborators) {
+      try {
+        const shares = await pool.query('SELECT user_id, role FROM file_shares WHERE file_id = $1', [srcId]);
+        for (const s of (shares.rows || [])) {
+          if (s.user_id && s.user_id !== creator) {
+            await pool.query(
+              'INSERT INTO file_shares (file_id, user_id, role) VALUES ($1, $2, $3)',
+              [id, s.user_id, s.role || 'viewer']
+            );
+          }
+        }
+      } catch (e) {
+        // Non-fatal: the copy itself succeeded even if share-copying failed.
+        console.error('Error copying file shares:', e.message);
+      }
+    }
+
+    const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    res.json({ id, name, url: `${baseUrl}/sheet?file=${id}` });
+  } catch (err) {
+    console.error('Error copying file:', err.message);
+    res.status(500).json({ error: 'internal_server_error', message: 'Failed to copy file' });
+  }
+});
+
+/**
+ * GET /api/files/:id/details
+ * Returns metadata for the file-details dialog: name, owner, created and last-modified
+ * timestamps. The caller must be able to view the file. Protected with
+ * ensureAuthenticated middleware.
+ */
+app.get('/api/files/:id/details', ensureAuthenticated, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!isValidFileId(id)) {
+      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
+    }
+    if (!(await canViewFile(req.user, id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view this file' });
+    }
+    const fileRow = await pool.query('SELECT name, created_at, created_by FROM files WHERE id = $1', [id]);
+    const row = fileRow.rows && fileRow.rows[0];
+    if (!row) {
+      return res.status(404).json({ error: 'not_found', message: 'File not found' });
+    }
+    const stateRow = await pool.query('SELECT updated_at FROM workbook_state WHERE key = $1', [id]);
+    const updatedAt = (stateRow.rows && stateRow.rows[0] && stateRow.rows[0].updated_at) || row.created_at || null;
+    const selfId = userIdentity(req.user);
+    const ownerIsSelf = !!(selfId && row.created_by && row.created_by === selfId);
+    const systemOwner = row.created_by === 'system';
+    res.json({
+      id,
+      name: row.name,
+      owner: systemOwner ? null : (row.created_by || null),
+      ownerIsSelf,
+      createdAt: row.created_at || null,
+      updatedAt
+    });
+  } catch (err) {
+    console.error('Error reading file details:', err.message);
+    res.status(500).json({ error: 'internal_server_error', message: 'Failed to read file details' });
+  }
+});
+
+/**
  * PATCH /api/files/:id
  * Renames a file. Body: { name: string }. Protected with ensureAuthenticated middleware.
  */

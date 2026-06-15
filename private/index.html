@@ -498,7 +498,88 @@
 <span id="star-toggle" role="button" tabindex="0" title="Add to Starred" data-i18n-title="tip.star" class="material-symbols-outlined text-outline cursor-pointer select-none hover:text-primary transition-colors">star</span>
 </div>
 <nav class="flex items-center gap-0.5 mt-0.5">
-<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.file">File</button>
+<!-- File menu item with dropdown options. Only the items highlighted in the
+        reference (New, Make a copy, Share, Rename, Details) are interactive;
+        the rest mirror the reference layout but are greyed-out/non-interactive
+        like the unsupported entries in the Format menu. -->
+   <div class="relative inline-block">
+     <button id="menu-file-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.file">File</button>
+     <div id="menu-file-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50 max-h-[80vh] overflow-y-auto">
+       <!-- New: creates a fresh spreadsheet in a new browser tab -->
+       <button id="file-new" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">add_box</span><span data-i18n="file.new">New</span></span>
+       </button>
+       <!-- Open (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">folder_open</span><span data-i18n="file.open">Open</span></span><span class="text-xs">Ctrl+O</span>
+       </div>
+       <!-- Import (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">login</span><span data-i18n="file.import">Import</span></span>
+       </div>
+       <!-- Make a copy: duplicates the current file -->
+       <button id="file-make-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">file_copy</span><span data-i18n="file.makeCopy">Make a copy</span></span>
+       </button>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Share: opens the existing share dialog -->
+       <button id="file-share" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">person_add</span><span data-i18n="file.share">Share</span></span>
+       </button>
+       <!-- Email (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">mail</span><span data-i18n="file.email">Email</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Download (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">download</span><span data-i18n="file.download">Download</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Rename: starts inline editing of the file name -->
+       <button id="file-rename" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">drive_file_rename_outline</span><span data-i18n="file.rename">Rename</span></span>
+       </button>
+       <!-- Move (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">drive_file_move</span><span data-i18n="file.move">Move</span></span>
+       </div>
+       <!-- Add shortcut to Drive (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">add_to_drive</span><span data-i18n="file.addShortcut">Add shortcut to Drive</span></span>
+       </div>
+       <!-- Move to trash (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">delete</span><span data-i18n="file.trash">Move to trash</span></span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Version history (unsupported here – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">history</span><span data-i18n="file.versionHistory">Version history</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Make available offline (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">offline_pin</span><span data-i18n="file.offline">Make available offline</span></span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Details: opens the file-details dialog -->
+       <button id="file-details" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">info</span><span data-i18n="file.details">Details</span></span>
+       </button>
+       <!-- Security limitations (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">verified_user</span><span data-i18n="file.security">Security limitations</span></span>
+       </div>
+       <!-- Settings (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">settings</span><span data-i18n="file.settings">Settings</span></span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Print (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">print</span><span data-i18n="file.print">Print</span></span><span class="text-xs">Ctrl+P</span>
+       </div>
+     </div>
+   </div>
    <!-- Edit menu item with dropdown options -->
    <div class="relative inline-block">
      <!-- Edit button triggering the dropdown -->
@@ -1279,6 +1360,71 @@
       </main>
     </div>
 
+  </div>
+</div>
+
+<!-- Make-a-copy dialog. Mirrors the reference: a name field (pre-filled with the
+     copy name), a (decorative) folder chip, and copy options. Only "Share it with
+     the same people" and "Copy comments" are interactive; resolved comments aren't
+     a supported concept here, so that row stays greyed-out. -->
+<div id="copy-file-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] hidden" data-purpose="modal-overlay">
+  <div class="bg-surface-container-lowest dark:bg-inverse-surface rounded-3xl shadow-xl w-full max-w-[420px] p-6">
+    <h1 class="text-xl text-on-surface mb-5" data-i18n="copy.title">Copy document</h1>
+    <!-- Name field (outlined, floating label) -->
+    <div class="relative border border-primary rounded-md px-3 pt-4 pb-2 mb-5">
+      <label for="copy-file-name" class="absolute -top-2 left-2 px-1 bg-surface-container-lowest dark:bg-inverse-surface text-xs text-primary" data-i18n="copy.nameLabel">Name</label>
+      <input id="copy-file-name" type="text" class="w-full bg-transparent text-on-surface outline-none"/>
+    </div>
+    <!-- Folder (decorative – all files live in one place here) -->
+    <h2 class="text-sm text-on-surface-variant mb-2" data-i18n="copy.folder">Folder</h2>
+    <div class="inline-flex items-center gap-2 px-3 py-1.5 mb-5 rounded-full border border-outline-variant text-sm text-on-surface">
+      <span class="material-symbols-outlined text-[18px]">folder</span>
+      <span data-i18n="copy.myDrive">My Drive</span>
+    </div>
+    <!-- Copy options -->
+    <label class="flex items-center gap-3 mb-6 cursor-pointer">
+      <input id="copy-share-collaborators" type="checkbox" class="cursor-pointer"/>
+      <span class="text-sm text-on-surface" data-i18n="copy.shareCollaborators">Share it with the same people</span>
+    </label>
+    <!-- Actions -->
+    <div class="flex items-center justify-end gap-2">
+      <button id="copy-file-cancel" type="button" class="h-10 px-5 rounded-full text-primary text-sm font-medium hover:bg-surface-container transition-colors" data-i18n="dialog.cancel">Cancel</button>
+      <button id="copy-file-confirm" type="button" class="h-10 px-6 rounded-full bg-secondary-container text-on-secondary text-sm font-medium hover:brightness-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed" data-i18n="copy.makeCopy">Make a copy</button>
+    </div>
+  </div>
+</div>
+
+<!-- File-details dialog. Read-only metadata for the current file (location, owner,
+     last-modified and created timestamps), populated from /api/files/:id/details. -->
+<div id="details-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] hidden" data-purpose="modal-overlay">
+  <div class="bg-surface-container-lowest dark:bg-inverse-surface rounded-3xl shadow-xl w-full max-w-[360px] p-6">
+    <header class="flex items-start justify-between mb-5">
+      <h1 class="text-xl text-on-surface" data-i18n="details.title">Document details</h1>
+      <button id="details-close" type="button" data-i18n-title="find.close" title="Close" class="p-1 -mr-1 -mt-1 rounded-full text-on-surface-variant hover:bg-surface-container transition-colors">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </header>
+    <dl class="text-sm">
+      <div class="flex gap-4 mb-4">
+        <dt class="w-28 shrink-0 text-on-surface-variant" data-i18n="details.location">Location</dt>
+        <dd class="flex items-center gap-2 text-on-surface">
+          <span class="material-symbols-outlined text-[18px]">folder</span>
+          <span data-i18n="copy.myDrive">My Drive</span>
+        </dd>
+      </div>
+      <div class="flex gap-4 mb-4">
+        <dt class="w-28 shrink-0 text-on-surface-variant" data-i18n="details.owner">Owner</dt>
+        <dd id="details-owner" class="text-on-surface"></dd>
+      </div>
+      <div class="flex gap-4 mb-4">
+        <dt class="w-28 shrink-0 text-on-surface-variant" data-i18n="details.modified">Last modified</dt>
+        <dd id="details-modified" class="text-on-surface"></dd>
+      </div>
+      <div class="flex gap-4">
+        <dt class="w-28 shrink-0 text-on-surface-variant" data-i18n="details.created">Created</dt>
+        <dd id="details-created" class="text-on-surface"></dd>
+      </div>
+    </dl>
   </div>
 </div>
 
