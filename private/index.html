@@ -215,6 +215,15 @@
            border is an inset shadow so the cell's own gridline borders survive. */
         .grid-cell-active {
             box-shadow: inset 0 0 0 2px #1a73e8 !important;
+            /* Drop this cell's own gray right/bottom gridlines while it is the
+               anchor. The 2px blue frame is an inset shadow drawn inside the
+               padding box; with border-box sizing the 1px gridlines on the
+               right/bottom would otherwise push the blue inward and sit over
+               its outer edge, making those two sides look thicker than the
+               (borderless) top/left. Zeroing the widths makes the frame
+               symmetric on all four sides. */
+            border-right-width: 0 !important;
+            border-bottom-width: 0 !important;
             z-index: 6;
         }
         /* When the anchor is part of a multi-cell range it carries BOTH the 2px
