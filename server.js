@@ -452,7 +452,7 @@ const registerStrategies = () => {
       userInfoURL: 'https://openidconnect.googleapis.com/v1/userinfo',
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: `${baseUrl}/api/auth/callback/google`,
+      callbackURL: `${baseUrl}/auth/google/callback`,
       scope: 'openid profile email'
     },
     // 9-argument verify signature so passport-openidconnect hands us `uiProfile`,
@@ -879,7 +879,7 @@ app.post('/auth/google/mock-login', (req, res) => {
 });
 
 // Callback receiver for Google OAuth OIDC redirects.
-app.get('/api/auth/callback/google', (req, res, next) => {
+app.get('/auth/google/callback', (req, res, next) => {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.authenticate('google', {
       successRedirect: '/',

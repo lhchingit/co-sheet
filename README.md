@@ -185,7 +185,7 @@ Auth & session:
 |--------------------------------|----------------------------------------------|
 | `GET /login`                   | Sign-in page (unauthenticated).              |
 | `GET /auth/google`             | Start Google OAuth (or mock) sign-in.        |
-| `GET /api/auth/callback/google`| OAuth callback.                              |
+| `GET /auth/google/callback`    | OAuth callback.                              |
 | `GET /logout`                  | End session and clear cookies.               |
 | `GET /api/me`                  | Current user `{username,email,picture,role}`.|
 

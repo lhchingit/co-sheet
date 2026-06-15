@@ -104,7 +104,7 @@ SUPER_ADMIN_EMAILS='you@example.com' \
 
 The script prints the service URL. Then:
 
-1. Add `<URL>/api/auth/callback/google` to the OAuth client's **Authorized redirect URIs**.
+1. Add `<URL>/auth/google/callback` to the OAuth client's **Authorized redirect URIs**.
 2. Re-run with `BASE_URL` set so server-side redirects match:
 
    ```bash

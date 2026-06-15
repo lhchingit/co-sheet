@@ -106,8 +106,8 @@ test('Google Login - redirects to Google OIDC authorization URL if credentials e
     // Check that the redirect location points to Google's OAuth 2.0 authorization endpoint.
     assert.ok(res.headers.location.startsWith('https://accounts.google.com/o/oauth2/v2/auth'), `Expected redirect location to start with Google Auth URL, got "${res.headers.location}"`);
 
-    // Assert that the redirect_uri query parameter uses the new path format /api/auth/callback/google.
-    const expectedRedirectUriParam = encodeURIComponent(`http://localhost:${PORT}/api/auth/callback/google`);
+    // Assert that the redirect_uri query parameter uses the path /auth/google/callback.
+    const expectedRedirectUriParam = encodeURIComponent(`http://localhost:${PORT}/auth/google/callback`);
     assert.ok(res.headers.location.includes(`redirect_uri=${expectedRedirectUriParam}`), `Expected redirect location to include redirect_uri=${expectedRedirectUriParam}, got "${res.headers.location}"`);
   } finally {
     // Clean up the server process after testing.

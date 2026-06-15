@@ -82,7 +82,7 @@ echo
 echo "Deployed: ${URL}"
 if [ -z "${BASE_URL}" ]; then
   echo "Next steps:"
-  echo "  1. Add ${URL}/api/auth/callback/google to the Google OAuth client's"
+  echo "  1. Add ${URL}/auth/google/callback to the Google OAuth client's"
   echo "     'Authorized redirect URIs'."
   echo "  2. Re-run with BASE_URL=${URL} so server-side OAuth redirects match."
 fi
