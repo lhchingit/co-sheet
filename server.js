@@ -372,6 +372,19 @@ passport.deserializeUser((obj, done) => {
 
 
 /**
+ * Returns true when a real, external OIDC provider has been fully configured via
+ * the OIDC_* environment variables. Used both to register the 'oidc-sso' strategy
+ * and to gate its login/callback routes so they fail gracefully when unconfigured.
+ */
+const isExternalOidcConfigured = () => Boolean(
+  process.env.OIDC_ISSUER &&
+  process.env.OIDC_AUTHORIZATION_URL &&
+  process.env.OIDC_TOKEN_URL &&
+  process.env.OIDC_CLIENT_ID &&
+  process.env.OIDC_CLIENT_SECRET
+);
+
+/**
  * Registers the OIDC authentication strategy dynamically.
  * This is done after the server starts listening because the port number
  * can be dynamic, and the strategy relies on the port for issuer and endpoint URLs.
@@ -399,6 +412,36 @@ const registerStrategies = () => {
       provider: 'oidc'
     });
   }));
+
+  // Register an external / self-hosted OIDC provider (e.g. Keycloak, Authentik,
+  // Dex, Zitadel, Okta) when its endpoints and client credentials are configured.
+  // This is independent of the built-in mock 'oidc' strategy above, so a real
+  // local OIDC server and the mock can coexist as separate login options.
+  if (isExternalOidcConfigured()) {
+    passport.use('oidc-sso', new OIDCStrategy({
+      issuer: process.env.OIDC_ISSUER,
+      authorizationURL: process.env.OIDC_AUTHORIZATION_URL,
+      tokenURL: process.env.OIDC_TOKEN_URL,
+      userInfoURL: process.env.OIDC_USERINFO_URL || `${process.env.OIDC_ISSUER.replace(/\/$/, '')}/userinfo`,
+      clientID: process.env.OIDC_CLIENT_ID,
+      clientSecret: process.env.OIDC_CLIENT_SECRET,
+      callbackURL: `${baseUrl}/auth/oidc-sso/callback`,
+      scope: process.env.OIDC_SCOPE || 'openid profile email'
+    },
+    // 9-argument verify signature so passport-openidconnect hands us `uiProfile`,
+    // whose `_json` carries the raw userinfo claims. Different providers expose the
+    // display name as `name` or `preferred_username`, so we fall back across both.
+    (issuer, uiProfile, idProfile, context, idToken, accessToken, refreshToken, params, done) => {
+      const json = (uiProfile && uiProfile._json) || {};
+      const profile = uiProfile || idProfile || {};
+      return done(null, {
+        username: json.name || json.preferred_username || profile.displayName || profile.username || 'OIDC User',
+        email: json.email || (profile.emails && profile.emails[0] ? profile.emails[0].value : null),
+        picture: json.picture || (profile.photos && profile.photos[0] ? profile.photos[0].value : null),
+        provider: 'oidc-sso'
+      });
+    }));
+  }
 
   // Register Google OIDC strategy if credentials are configured in the environment.
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
@@ -678,6 +721,27 @@ app.get('/auth/oidc/callback', passport.authenticate('oidc', {
   successRedirect: '/',
   failureRedirect: '/login'
 }));
+
+// Trigger the external / self-hosted OIDC sign-in flow. When the OIDC_* variables
+// are not configured, the 'oidc-sso' strategy does not exist, so redirect back to
+// the login page with an error flag instead of throwing.
+app.get('/auth/oidc-sso', (req, res, next) => {
+  if (!isExternalOidcConfigured()) {
+    return res.redirect('/login?error=oidc_not_configured');
+  }
+  passport.authenticate('oidc-sso')(req, res, next);
+});
+
+// External OIDC provider callback route after authentication is completed.
+app.get('/auth/oidc-sso/callback', (req, res, next) => {
+  if (!isExternalOidcConfigured()) {
+    return res.redirect('/login');
+  }
+  passport.authenticate('oidc-sso', {
+    successRedirect: '/',
+    failureRedirect: '/login'
+  })(req, res, next);
+});
 
 // Route for Google OAuth redirect setup or mock login fallback.
 app.get('/auth/google', (req, res, next) => {

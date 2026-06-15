@@ -22,8 +22,9 @@ alternate) and styled with a Material Design 3 light theme.
   function catalog.
 - **Drive / file manager** — a `/` landing page listing your workbooks; create, open, rename,
   delete, and copy-link.
-- **Authentication** — Google OIDC sign-in in production, plus a built-in mock OIDC provider
-  and a test-only login for local development and the test suite.
+- **Authentication** — Google OIDC sign-in in production, a configurable external/self-hosted
+  OIDC provider ("Sign in with Local OIDC", e.g. Keycloak/Authentik/Dex), plus a built-in mock
+  OIDC provider and a test-only login for local development and the test suite.
 - **Role-based access control (RBAC)** — three roles: `user`, `admin`, `superadmin`. Super
   admins are bootstrapped from an environment variable; admins manage other users' roles from
   an admin-only permissions page.
@@ -107,6 +108,10 @@ cp .env.example .env
 | `DATABASE_URL`       | PostgreSQL connection URI.                                                   |
 | `GOOGLE_CLIENT_ID`   | Google OAuth 2.0 client ID (OIDC).                                           |
 | `GOOGLE_CLIENT_SECRET`| Google OAuth 2.0 client secret.                                            |
+| `OIDC_ISSUER`        | External OIDC provider issuer URL (enables "Sign in with Local OIDC").       |
+| `OIDC_AUTHORIZATION_URL` / `OIDC_TOKEN_URL` / `OIDC_USERINFO_URL` | External OIDC endpoints (userinfo defaults to `<issuer>/userinfo`). |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | External OIDC client credentials. Redirect URI: `<BASE_URL>/auth/oidc-sso/callback`. |
+| `OIDC_SCOPE`         | Optional OAuth scopes (space-separated); defaults to `openid profile email`. |
 | `SUPER_ADMIN_EMAILS` | Comma-separated emails (or usernames for mock login) always granted `superadmin`. |
 
 > **Note:** The schema is created automatically on startup (`initDatabase`). If Google
