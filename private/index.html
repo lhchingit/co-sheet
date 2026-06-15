@@ -201,11 +201,16 @@
             position: relative; /* Enabled for absolute range positioning */
         }
         /* Style for cells that are part of the currently selected cell range.
-           The light-blue tint is laid down first (last shadow), then the cell's
-           original light-gray right/bottom gridlines are re-drawn on top of it
-           so the borders between selected cells stay visible. */
+           Only the light-blue tint fill is applied. The cell's own 1px gray
+           right/bottom gridlines come from its .grid-cell border, which paints
+           on top of this inset tint, so the gridlines stay visible without
+           re-drawing them. (A previous version re-drew them with an extra
+           `inset -1px -1px 0 0 #dadce0` shadow; because that shadow sits just
+           inside the real border of the same color, it made the right/bottom
+           gridlines render at 2px while top/left stayed 1px — the selected
+           cells looked like they had thicker borders.) */
         .grid-cell-selected {
-            box-shadow: inset -1px -1px 0 0 #dadce0, inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
+            box-shadow: inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
         }
         /* The anchor cell (a single click, or the first cell when dragging out a
            range) keeps a thick 2px border — twice the width of the thinner outer
