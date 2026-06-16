@@ -315,15 +315,35 @@
         /* Value-filter visuals (Data ▸ Create a filter). The filtered column
            header and every row header across the filter range get a light-green
            tint so the filter's scope is obvious, and the first cell of the column
-           hosts the funnel icon. Placed BEFORE the selection-header rules below so
-           an active row/column selection (active-header / header-selected) still
-           wins and repaints blue over the green tint. */
+           hosts the funnel icon. Selecting a filtered header (the column header
+           or any row header in the scope) darkens it to a deeper green rather
+           than the usual selection blue — see the 3-class rule just below. */
         .grid-header.filter-col-header {
             background-color: #e6f4ea;
             color: #188038;
         }
         .grid-header.filter-row-header {
             background-color: #e6f4ea;
+        }
+        /* Green left/right edges on every cell of the filtered column, so the
+           column the filter applies to is easy to pick out. The #grid-root prefix
+           lifts specificity above the gridlines-off rule, so the edges stay
+           visible even with gridlines turned off. */
+        #grid-root .grid-cell.filter-col-cell {
+            border-left: 1px solid #188038;
+            border-right: 1px solid #188038;
+        }
+        /* When a filtered header (the column header itself, or any row header in
+           the scope) is ALSO part of an active selection, it stays green rather
+           than turning blue, but darkens to signal the selection. The 3-class
+           selectors outrank .active-header / .header-selected below. */
+        .grid-header.filter-row-header.active-header,
+        .grid-header.filter-row-header.header-selected,
+        .grid-header.filter-col-header.active-header,
+        .grid-header.filter-col-header.header-selected {
+            background-color: #a8dab5;
+            color: #0b5d2e;
+            font-weight: 700;
         }
         /* Funnel button shown at the right edge of the filtered column's first
            cell. Click opens the filter menu. */
@@ -1313,8 +1333,11 @@
 <!-- Main Content (Formula Bar & Grid) -->
 <main class="flex-grow flex flex-col min-h-0 pb-[40px]">
 <!-- Formula Bar -->
-<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant px-2 shrink-0">
-<div id="name-box" class="w-12 text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
+<!-- pr-2 (not px-2): no left padding, so the name box sits flush at x=0 and its
+     46px width lines its right border up with the grid's row-index gutter below
+     (grid-template-columns: 46px …). -->
+<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant pr-2 shrink-0">
+<div id="name-box" class="w-[46px] text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
 <div class="px-2 text-primary h-full flex items-center">
 <span class="material-symbols-outlined leading-none" style="font-size: 20px;">function</span>
 </div>

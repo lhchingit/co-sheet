@@ -6408,13 +6408,26 @@ function applyFilter() {
   const headerRow = filterHeaderRow();
   const lastRow = filterLastRow();
 
-  // Scope tint: filtered column header + every row header in range.
+  // Scope tint: the filtered column header plus EVERY row header from the filter
+  // header row down. The filter was created from a full-column selection, so it
+  // covers the whole column — tint all rendered row headers (not just the
+  // populated range) so the scope reads as the entire column.
   const colHeader = gridRoot.querySelector(`[data-col-id="${colLetter}"]`);
   if (colHeader) colHeader.classList.add('filter-col-header');
-  for (let r = headerRow; r <= lastRow; r++) {
-    const rh = gridRoot.querySelector(`[data-row-id="${r}"]`);
-    if (rh) rh.classList.add('filter-row-header');
-  }
+  gridRoot.querySelectorAll('[data-row-id]').forEach((rh) => {
+    const r = parseInt(rh.getAttribute('data-row-id'), 10);
+    if (r >= headerRow) rh.classList.add('filter-row-header');
+  });
+
+  // Green left/right edges on every cell of the filtered column (from the header
+  // row down), so the column is easy to identify. Columns are single letters, so
+  // the cell-id prefix matches exactly that column; the coord check is a guard.
+  gridRoot.querySelectorAll(`[data-cell-id^="${colLetter}"]`).forEach((cellEl) => {
+    const coord = parseCellCoord(cellEl.getAttribute('data-cell-id'));
+    if (coord && coord.colIndex === f.colIndex && coord.row >= headerRow) {
+      cellEl.classList.add('filter-col-cell');
+    }
+  });
 
   // Funnel icon on the column's first cell; click opens the filter menu.
   const headerCell = gridRoot.querySelector(`[data-cell-id="${colLetter}${headerRow}"]`);
