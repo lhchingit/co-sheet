@@ -170,8 +170,11 @@
            (right border). JS sets their size from the measured header. They sit
            above the sticky headers (z 41 > 30). */
         .grid-scroll-cap { position: absolute; z-index: 41; background-color: #f8f9fa; box-sizing: border-box; }
-        .grid-scroll-cap-v { top: 0; right: 0; border-bottom: 1px solid #c3c6d6; }
-        .grid-scroll-cap-h { left: 0; bottom: 0; border-right: 1px solid #c3c6d6; }
+        /* The leading border (left for the column cap, top for the row cap) sets
+           it off from the real header it abuts, so the caps read as ordinary
+           header cells rather than a detached block. */
+        .grid-scroll-cap-v { top: 0; right: 0; border-bottom: 1px solid #c3c6d6; border-left: 1px solid #c3c6d6; }
+        .grid-scroll-cap-h { left: 0; bottom: 0; border-right: 1px solid #c3c6d6; border-top: 1px solid #c3c6d6; }
         /* Colored indicator bar under the text/fill color toolbar buttons,
            reflecting the active cell's current color (Google Sheets style). */
         .toolbar-color-swatch {
