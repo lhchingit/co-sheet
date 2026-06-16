@@ -204,6 +204,11 @@ let frozenCols = 0; // Number of left columns frozen via View > Freeze (0 = none
 // This is a local view concern (like gridlines/freeze) and is not broadcast.
 let sheetFilters = Object.create(null); // sheetName -> { colIndex, hidden: Set<string> }
 
+// Set by initGridScrollbars() to its layout() function; called after any change
+// that affects the grid's scrollable extent (render, zoom, freeze) to resync the
+// synthetic scrollbars. Null until the controller initializes.
+let gridScrollbarLayout = null;
+
 // History stacks for local cell edits (snapshot based)
 const undoStack = [];
 const redoStack = [];
@@ -1178,6 +1183,10 @@ const applyGridZoom = (zoomValue) => {
     gridRoot.style.zoom = currentZoom / 100;
   }
 
+  // Zoom changes the scrollable extent and the header size, so resync + reposition
+  // the synthetic scrollbars.
+  if (gridScrollbarLayout) gridScrollbarLayout();
+
   // Update zoom input value text
   const zoomInput = document.getElementById('toolbar-zoom-input');
   if (zoomInput) {
@@ -1742,6 +1751,9 @@ const renderSpreadsheetGrid = () => {
   // Re-apply the active value filter (scope tint, funnel icon, hidden rows) on
   // the freshly built DOM, so it survives re-renders and remote edits.
   applyFilter();
+
+  // The content height/width just changed; resync the synthetic scrollbars.
+  if (gridScrollbarLayout) gridScrollbarLayout();
 };
 
 // Width of the row-index gutter (the first grid column: `46px repeat(26, 100px)`).
@@ -7865,5 +7877,184 @@ if (historyRestoreBtn) {
   historyRestoreBtn.onclick = restoreVersion;
 }
 
+// ---------------------------------------------------------------------------
+// Synthetic grid scrollbars.
+//
+// The grid viewport scrolls, but a native scrollbar spans the viewport's full
+// client box, so its track runs alongside the sticky column header (top) and
+// the sticky row gutter (left). To make each bar begin at the frozen header
+// edge instead, the native bars are hidden (see .grid-scrollbar in index.html)
+// and these two synthetic bars are drawn over the viewport: the vertical bar
+// starts at the column header's bottom, the horizontal bar at the row gutter's
+// right. The header size is measured each full layout so the offsets track the
+// CSS `zoom` applied to #grid-root. The viewport stays natively scrollable
+// (wheel, trackpad, keyboard, scrollIntoView), and those scrolls drive the
+// thumbs via the scroll listener; dragging a thumb drives the viewport.
+// ---------------------------------------------------------------------------
+function initGridScrollbars() {
+  const viewport = document.getElementById('grid-viewport');
+  const vbar = document.getElementById('grid-vscroll');
+  const hbar = document.getElementById('grid-hscroll');
+  if (!viewport || !vbar || !hbar) return;
+  const vthumb = vbar.firstElementChild;
+  const hthumb = hbar.firstElementChild;
+  if (!vthumb || !hthumb) return;
+  const vcap = document.getElementById('grid-vscroll-cap'); // dummy column header
+  const hcap = document.getElementById('grid-hscroll-cap'); // dummy row header
+
+  const BAR = 14;        // bar thickness, px — matches the CSS width/height
+  const MIN_THUMB = 24;  // smallest thumb length, px
+
+  // Cached track/thumb/scrollable metrics from the last full layout(), used by
+  // position() so scrolling doesn't re-measure the header on every event.
+  let vMetrics = null; // { track, thumb, scrollable }
+  let hMetrics = null;
+
+  // The sticky corner (first grid child): its height is the column-header band,
+  // its width the row gutter. Measured live so it follows zoom.
+  function headerSize() {
+    const corner = document.querySelector('#grid-root > .grid-header');
+    if (corner) {
+      const r = corner.getBoundingClientRect();
+      if (r.width && r.height) return { w: r.width, h: r.height };
+    }
+    return { w: GUTTER_WIDTH, h: 21 };
+  }
+
+  // Reposition the thumbs from the viewport's current scroll offset only.
+  function position() {
+    if (vMetrics) {
+      const maxTop = vMetrics.track - vMetrics.thumb;
+      const top = vMetrics.scrollable > 0 ? (viewport.scrollTop / vMetrics.scrollable) * maxTop : 0;
+      vthumb.style.top = `${Math.max(0, Math.min(maxTop, top))}px`;
+    }
+    if (hMetrics) {
+      const maxLeft = hMetrics.track - hMetrics.thumb;
+      const left = hMetrics.scrollable > 0 ? (viewport.scrollLeft / hMetrics.scrollable) * maxLeft : 0;
+      hthumb.style.left = `${Math.max(0, Math.min(maxLeft, left))}px`;
+    }
+  }
+
+  // Full layout: set each bar's start offset to the header edge, recompute thumb
+  // sizes and visibility from the scrollable extent, then reposition.
+  function layout() {
+    const { w: gw, h: hh } = headerSize();
+    vbar.style.top = `${hh}px`;
+    hbar.style.left = `${gw}px`;
+
+    const vScrollable = viewport.scrollHeight - viewport.clientHeight;
+    const hScrollable = viewport.scrollWidth - viewport.clientWidth;
+    const vVisible = vScrollable > 1;
+    const hVisible = hScrollable > 1;
+
+    // Reserve the shared far corner only when the perpendicular bar is present;
+    // otherwise a lone bar runs the full span. (BAR matches the CSS thickness.)
+    const vCorner = hVisible ? BAR : 0;
+    const hCorner = vVisible ? BAR : 0;
+    vbar.style.bottom = `${vCorner}px`;
+    hbar.style.right = `${hCorner}px`;
+
+    // Track length from the viewport span (not the bar's own box, so a hidden
+    // display:none bar still measures correctly when content reappears).
+    const vTrack = viewport.clientHeight - hh - vCorner;
+    const vShown = vVisible && vTrack > MIN_THUMB;
+    if (vShown) {
+      const thumb = Math.max(MIN_THUMB, vTrack * (viewport.clientHeight / viewport.scrollHeight));
+      vMetrics = { track: vTrack, thumb, scrollable: vScrollable };
+      vthumb.style.height = `${thumb}px`;
+      vbar.classList.remove('hidden');
+    } else {
+      vMetrics = null;
+      vbar.classList.add('hidden');
+    }
+
+    const hTrack = viewport.clientWidth - gw - hCorner;
+    const hShown = hVisible && hTrack > MIN_THUMB;
+    if (hShown) {
+      const thumb = Math.max(MIN_THUMB, hTrack * (viewport.clientWidth / viewport.scrollWidth));
+      hMetrics = { track: hTrack, thumb, scrollable: hScrollable };
+      hthumb.style.width = `${thumb}px`;
+      hbar.classList.remove('hidden');
+    } else {
+      hMetrics = null;
+      hbar.classList.add('hidden');
+    }
+
+    // Dummy header caps: a column header (BAR wide × header tall) above the
+    // vertical bar, a row header (gutter wide × BAR tall) left of the horizontal
+    // bar. Shown only alongside their bar.
+    if (vcap) {
+      vcap.style.width = `${BAR}px`;
+      vcap.style.height = `${hh}px`;
+      vcap.classList.toggle('hidden', !vShown);
+    }
+    if (hcap) {
+      hcap.style.width = `${gw}px`;
+      hcap.style.height = `${BAR}px`;
+      hcap.classList.toggle('hidden', !hShown);
+    }
+
+    position();
+  }
+
+  // Drag a thumb: translate pointer travel along the track into a scroll offset.
+  function startDrag(e, isV) {
+    const m = isV ? vMetrics : hMetrics;
+    if (!m || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation(); // don't let the bar's page-scroll handler also fire
+    const startPos = isV ? e.clientY : e.clientX;
+    const startScroll = isV ? viewport.scrollTop : viewport.scrollLeft;
+    const maxTravel = m.track - m.thumb;
+    const onMove = (ev) => {
+      const delta = (isV ? ev.clientY : ev.clientX) - startPos;
+      const ratio = maxTravel > 0 ? delta / maxTravel : 0;
+      const next = startScroll + ratio * m.scrollable;
+      if (isV) viewport.scrollTop = next; else viewport.scrollLeft = next;
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = '';
+    };
+    document.body.style.userSelect = 'none';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  }
+
+  // Click the track (not the thumb): jump one page toward the click.
+  function pageScroll(e, isV) {
+    if ((isV && e.target !== vbar) || (!isV && e.target !== hbar)) return;
+    const m = isV ? vMetrics : hMetrics;
+    if (!m || e.button !== 0) return;
+    const rect = (isV ? vbar : hbar).getBoundingClientRect();
+    const thumbStart = isV ? vthumb.offsetTop : hthumb.offsetLeft;
+    const clickPos = isV ? (e.clientY - rect.top) : (e.clientX - rect.left);
+    const page = isV ? viewport.clientHeight : viewport.clientWidth;
+    if (clickPos < thumbStart) {
+      if (isV) viewport.scrollTop -= page; else viewport.scrollLeft -= page;
+    } else if (clickPos > thumbStart + m.thumb) {
+      if (isV) viewport.scrollTop += page; else viewport.scrollLeft += page;
+    }
+  }
+
+  vthumb.addEventListener('pointerdown', (e) => startDrag(e, true));
+  hthumb.addEventListener('pointerdown', (e) => startDrag(e, false));
+  vbar.addEventListener('pointerdown', (e) => pageScroll(e, true));
+  hbar.addEventListener('pointerdown', (e) => pageScroll(e, false));
+  viewport.addEventListener('scroll', position, { passive: true });
+  window.addEventListener('resize', layout);
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(() => layout());
+    ro.observe(viewport);
+    const gr = document.getElementById('grid-root');
+    if (gr) ro.observe(gr);
+  }
+
+  gridScrollbarLayout = layout;
+  layout();
+}
+
+initGridScrollbars();
 
 
