@@ -3,7 +3,7 @@
 ###############################################################################
 # Stage 1 — install production dependencies in isolation for better caching.
 ###############################################################################
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 
 # Copy only the manifests first so `npm ci` is cached unless they change.
@@ -16,7 +16,7 @@ RUN npm ci --omit=dev
 ###############################################################################
 # Stage 2 — runtime image.
 ###############################################################################
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 
 # Sensible production defaults; override via compose / -e at runtime.

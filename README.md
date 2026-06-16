@@ -88,7 +88,7 @@ co-sheet-1/
 
 ### Prerequisites
 
-- Node.js 18+ (uses the built-in test runner and ES modules)
+- Node.js 22+ (uses the built-in test runner and ES modules; the Docker image runs Node 24)
 - PostgreSQL (for production / non-test runs)
 
 ### Install
