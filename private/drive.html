@@ -113,27 +113,8 @@
                 </button>
             </div>
         </div>
-        <!-- Avatar + menu -->
-        <div class="relative">
-            <button id="avatar-btn" class="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center font-medium overflow-hidden hover:brightness-95 transition-all" title="Account">
-                <span id="avatar-initial">?</span>
-            </button>
-            <div id="avatar-menu" class="hidden absolute right-0 top-full mt-2 w-60 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-2 z-50">
-                <div class="px-4 py-2 border-b border-outline-variant">
-                    <div id="user-name" class="text-sm font-medium text-on-surface truncate">&nbsp;</div>
-                    <div id="user-email" class="text-xs text-on-surface-variant truncate">&nbsp;</div>
-                </div>
-                <!-- Visible only to admins / super admins (toggled in drive.js). -->
-                <button id="perm-menu-item" class="hidden w-full items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
-                    <span class="material-symbols-outlined text-[20px]">admin_panel_settings</span>
-                    <span data-i18n="drive.permissions">Permissions</span>
-                </button>
-                <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors">
-                    <span class="material-symbols-outlined text-[20px]">logout</span>
-                    <span data-i18n="drive.signout">Sign out</span>
-                </a>
-            </div>
-        </div>
+        <!-- Avatar + account menu (shared component, rendered by /user-menu.js) -->
+        <div id="user-menu" class="relative"></div>
     </div>
 </header>
 
@@ -290,6 +271,7 @@
 <div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-3 rounded-lg bg-on-surface text-surface text-sm shadow-lg"></div>
 
 <script src="/i18n.js"></script>
+<script src="/user-menu.js"></script>
 <script src="/drive.js"></script>
 </body>
 </html>

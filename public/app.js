@@ -5726,99 +5726,14 @@ if (hamburgerMenuBtn) {
 }
 
 /**
- * Hook up the user profile avatar dropdown interaction, including:
- * 1. Fetching the active user's session profile details from `/api/me`.
- * 2. Toggling the visibility of the profile dropdown card on avatar click.
- * 3. Dismissing the profile dropdown card when clicking outside of the dropdown/avatar.
+ * Render the shared user-avatar menu: a circular avatar that shows an account
+ * info card on hover and an account dropdown (name + email + Sign out) on click.
+ * The component (public/user-menu.js) fetches /api/me, populates itself, and
+ * redirects to the login page on an unauthenticated (401) response.
  */
-const userAvatar = document.getElementById('user-avatar');
-const profileDropdown = document.getElementById('profile-dropdown');
-
-if (userAvatar && profileDropdown && typeof fetch === 'function') {
-  /**
-   * Fetch the current authenticated user details from the server-side API.
-   * If the user is unauthenticated (401), redirect them to the login page.
-   */
-  fetch('/api/me')
-    .then(res => {
-      if (res.status === 401) {
-        // Session expired or unauthenticated; redirect to login
-        window.location.href = '/login';
-      }
-      return res.json();
-    })
-    .then(data => {
-      const usernameEl = document.getElementById('profile-username');
-      const providerEl = document.getElementById('profile-provider');
-      if (usernameEl) {
-        // Set the username text in the dropdown card header
-        usernameEl.innerText = data.username || 'Loading...';
-      }
-      if (providerEl) {
-        // Format the provider description for readability
-        providerEl.innerText = data.provider === 'google' ? 'Google Account' : 'OIDC Session';
-      }
-
-      // Show the user's real profile picture (e.g. their Google avatar) when available.
-      if (data.picture) {
-        userAvatar.src = data.picture;
-      }
-
-      // Populate the hover tooltip card (Google account info).
-      const tipTitle = document.getElementById('avatar-tooltip-title');
-      const tipName = document.getElementById('avatar-tooltip-name');
-      const tipEmail = document.getElementById('avatar-tooltip-email');
-      if (tipTitle) {
-        tipTitle.innerText = data.provider === 'google'
-          ? t('profile.googleAccount')
-          : t('profile.session');
-      }
-      if (tipName) {
-        tipName.innerText = data.username || '';
-      }
-      if (tipEmail) {
-        tipEmail.innerText = data.email || '';
-        tipEmail.classList.toggle('hidden', !data.email);
-      }
-    })
-    .catch(err => {
-      // Log any errors fetching the user profile to the console
-      console.error('Failed to load user profile info:', err);
-    });
-
-  /**
-   * Event listener to toggle the profile dropdown visibility when the avatar is clicked.
-   * Event propagation is stopped to prevent the document-level click listener from immediately closing it.
-   */
-  userAvatar.addEventListener('click', (e) => {
-    e.stopPropagation();
-    profileDropdown.classList.toggle('hidden');
-  });
-
-  /**
-   * Show/hide the Google-account info tooltip on avatar hover. The tooltip is
-   * suppressed while the click-dropdown is open to avoid overlapping cards.
-   */
-  const avatarTooltip = document.getElementById('avatar-tooltip');
-  if (avatarTooltip) {
-    userAvatar.addEventListener('mouseenter', () => {
-      if (profileDropdown.classList.contains('hidden')) {
-        avatarTooltip.classList.remove('hidden');
-      }
-    });
-    userAvatar.addEventListener('mouseleave', () => {
-      avatarTooltip.classList.add('hidden');
-    });
-  }
-
-  /**
-   * Document-level click listener to close the profile dropdown when clicking anywhere outside of it.
-   */
-  document.addEventListener('click', (e) => {
-    if (!profileDropdown.contains(e.target) && e.target !== userAvatar) {
-      profileDropdown.classList.add('hidden');
-    }
-  });
+const userMenuMount = document.getElementById('user-menu');
+if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
+  window.CoSheet.userMenu.init({ mount: userMenuMount, redirectOnUnauth: true });
 }
 
 // Stop range selection dragging when releasing mouse button anywhere

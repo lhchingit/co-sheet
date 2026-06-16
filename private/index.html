@@ -1132,30 +1132,8 @@
     </div>
   </div>
 </div>
-<div class="relative">
-  <div class="w-10 h-10 rounded-[9999px] overflow-hidden cursor-pointer">
-    <img id="user-avatar" alt="User avatar" class="block w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCjO6N2ChnLqIyhe7lTGphF_tx5ssOMs5930RfacKN2QFsXGZkt3Wloyc92qRtQ4_I4lTrRVtawZKEKRUmCLdkcYLJS6Hc-jaGsDeu7bFF9l32WbYv6HdTx9TU-5xisTBhpOzbFHJWU5-aqbdN0Aj6qkAHoc3sewv-Eo-CuIc9CoqTYdQGawd6CDN5TzxuU6BkOtHmse0YllBHxC8lhdlZUjKBmIPU40UwKYLIVYbnd_dM-Rz0nmoqL6jVK_R1T9iaQppwB0KioEulP"/>
-  </div>
-  <!-- Hover tooltip: Google account info card (shown on avatar hover) -->
-  <div id="avatar-tooltip" class="hidden absolute right-0 mt-2 bg-[#3c4043] rounded-lg p-3 shadow-lg z-50 w-max max-w-xs select-none pointer-events-none">
-    <div class="flex flex-col space-y-0.5">
-      <h2 id="avatar-tooltip-title" class="text-white text-sm font-medium tracking-tight" data-i18n="profile.googleAccount">Google Account</h2>
-      <p id="avatar-tooltip-name" class="text-[#bdc1c6] text-sm font-normal"></p>
-      <p id="avatar-tooltip-email" class="text-[#9aa0a6] text-xs font-normal truncate"></p>
-    </div>
-  </div>
-
-  <!-- Profile Dropdown Menu -->
-  <div id="profile-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white dark:bg-inverse-surface border border-slate-200 dark:border-outline-variant rounded-xl shadow-lg py-2 z-50">
-    <div class="px-4 py-2.5 border-b border-slate-100 dark:border-outline-variant">
-      <p id="profile-username" class="text-slate-800 dark:text-inverse-on-surface font-semibold text-sm truncate">Loading...</p>
-      <p id="profile-provider" class="text-slate-500 dark:text-outline text-xs mt-0.5 capitalize" data-i18n="profile.session">OIDC Session</p>
-    </div>
-    <a href="/logout" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-slate-50 dark:hover:bg-surface-variant transition-colors font-medium no-underline" data-i18n="profile.signout">
-      Sign out
-    </a>
-  </div>
-</div>
+<!-- Avatar + account menu (shared component, rendered by /user-menu.js) -->
+<div id="user-menu" class="relative"></div>
 </div>
 </div>
 <!-- Toolbar Row -->
@@ -1736,6 +1714,7 @@
 <script src="/formula-engine.js" defer></script>
 <script src="/i18n.js" defer></script>
 <script src="/sheet-functions.js" defer></script>
+<script src="/user-menu.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

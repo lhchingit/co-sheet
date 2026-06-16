@@ -638,13 +638,11 @@
       runAction(btn.getAttribute('data-action'), id);
     });
 
-    // Dismiss menus on outside click / Escape.
+    // Dismiss menus on outside click / Escape. (The avatar menu manages its own
+    // outside-click dismissal inside the shared user-menu component.)
     document.addEventListener('click', (e) => {
       const target = /** @type {Element} */ (e.target);
       if (!cardMenu.contains(target) && !target.closest('.card-menu-btn')) closeCardMenu();
-      if (!$('avatar-menu').contains(target) && !target.closest('#avatar-btn')) {
-        $('avatar-menu').classList.add('hidden');
-      }
       if (!$('lang-switch-menu').contains(target) && !target.closest('#lang-switch-btn')) {
         $('lang-switch-menu').classList.add('hidden');
       }
@@ -684,17 +682,8 @@
     $('modal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && modalOnOk) modalOnOk(/** @type {HTMLInputElement} */ ($('modal-input')).value); });
     $('modal-copy').addEventListener('click', () => copyToClipboard(/** @type {HTMLInputElement} */ ($('modal-link')).value));
 
-    // Avatar menu.
-    $('avatar-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      $('avatar-menu').classList.toggle('hidden');
-    });
-
-    // Permissions management (admins / super admins only).
-    $('perm-menu-item').addEventListener('click', () => {
-      $('avatar-menu').classList.add('hidden');
-      showAdminView();
-    });
+    // The avatar menu (including its admin Permissions entry) is rendered by the
+    // shared user-menu component; see loadProfile().
     $('perm-back').addEventListener('click', showFilesView);
     $('perm-tbody').addEventListener('change', (e) => {
       const sel = /** @type {HTMLSelectElement} */ (/** @type {Element} */ (e.target).closest('.role-select'));
@@ -715,7 +704,6 @@
       e.stopPropagation();
       const menu = $('lang-switch-menu');
       const wasOpen = !menu.classList.contains('hidden');
-      $('avatar-menu').classList.add('hidden');
       closeCardMenu();
       menu.classList.toggle('hidden', wasOpen);
     });
@@ -732,29 +720,23 @@
     window.addEventListener('scroll', closeCardMenu, true);
   };
 
-  const loadProfile = async () => {
-    try {
-      const res = await fetch('/api/me');
-      if (!res.ok) return;
-      const me = await res.json();
-      const name = me.username || me.email || 'User';
-      $('user-name').textContent = name;
-      $('user-email').textContent = me.email || '';
-      // Reveal the permissions entry for admins / super admins.
-      currentRole = me.role || 'user';
-      if (isAdmin()) {
-        $('perm-menu-item').classList.remove('hidden');
-        $('perm-menu-item').classList.add('flex');
-      }
-      // Role affects the create quota; refresh the New button now that it's known.
-      updateCreateButton();
-      const initial = (name.trim()[0] || '?').toUpperCase();
-      if (me.picture) {
-        $('avatar-btn').innerHTML = `<img src="${esc(me.picture)}" alt="" class="w-full h-full object-cover"/>`;
-      } else {
-        $('avatar-initial').textContent = initial;
-      }
-    } catch (e) { /* leave default avatar */ }
+  const loadProfile = () => {
+    const userMenu = root.CoSheet && root.CoSheet.userMenu;
+    if (!userMenu || !$('user-menu')) return;
+    userMenu.init({
+      mount: $('user-menu'),
+      // Admins / super admins get a Permissions entry that opens the admin view.
+      items: [{
+        labelKey: 'drive.permissions',
+        onClick: showAdminView,
+        visible: (me) => me.role === 'admin' || me.role === 'superadmin',
+      }],
+      onLoad: (me) => {
+        // Role affects the create quota; refresh the New button now that it's known.
+        currentRole = me.role || 'user';
+        updateCreateButton();
+      },
+    });
   };
 
   // ---------------------------------------------------------------------------
