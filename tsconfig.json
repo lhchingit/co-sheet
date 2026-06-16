@@ -1,0 +1,15 @@
+{
+  // Frontend (browser) config — governs everything under public/.
+  // Provides the DOM libs and NO Node types, so browser code can't accidentally
+  // rely on Node globals (process, Buffer, fs, …). Shares all other options with
+  // tsconfig.base.json. Backend code lives in tsconfig.server.json.
+  //
+  // This is the default project config, so editors pick it up for public/*.js.
+  // Run the full check (this + the server config) with: npm run typecheck
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": ["public/**/*.js"]
+}

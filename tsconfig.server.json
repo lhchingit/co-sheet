@@ -1,0 +1,14 @@
+{
+  // Backend (Node) config — governs server.js and the tests/ suite.
+  // Provides Node types and NO DOM lib, so server code is checked against the
+  // real Node environment. Shares all other options with tsconfig.base.json.
+  // Frontend code lives in tsconfig.json.
+  //
+  // Run as part of: npm run typecheck
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["server.js", "tests/**/*.js"]
+}

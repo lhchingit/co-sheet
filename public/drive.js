@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * @file drive.js
  * @description Client logic for the file-management interface ("drive"). Lists the
@@ -10,7 +11,8 @@
  * move-to-folder, AI) are intentionally omitted rather than faked.
  */
 (function () {
-  const { t, getLang, translatePage, loadLocales } = (window.CoSheet && window.CoSheet.i18n) || {};
+  const root = (typeof window !== 'undefined') ? window : globalThis;
+  const { t, getLang, translatePage, loadLocales } = (root.CoSheet && root.CoSheet.i18n) || {};
 
   // ----- module state -----
   let files = [];        // [{ id, name, created_at, created_by }]
@@ -99,7 +101,7 @@
     if (opts.desc) { descEl.textContent = opts.desc; descEl.classList.remove('hidden'); }
     else { descEl.classList.add('hidden'); }
 
-    const input = $('modal-input');
+    const input = /** @type {HTMLInputElement} */ ($('modal-input'));
     if (opts.inputValue != null) {
       input.value = opts.inputValue;
       input.classList.remove('hidden');
@@ -109,7 +111,7 @@
 
     const linkRow = $('modal-link-row');
     if (opts.linkValue != null) {
-      $('modal-link').value = opts.linkValue;
+      /** @type {HTMLInputElement} */ ($('modal-link')).value = opts.linkValue;
       linkRow.classList.remove('hidden');
       linkRow.classList.add('flex');
     } else {
@@ -541,7 +543,7 @@
     $('lang-switch-label').textContent = LANG_LABELS[lang];
     document.querySelectorAll('#lang-switch-menu .lang-option').forEach((opt) => {
       const check = opt.querySelector('.lang-check');
-      if (check) check.classList.toggle('hidden', opt.dataset.lang !== lang);
+      if (check) check.classList.toggle('hidden', /** @type {HTMLElement} */ (opt).dataset.lang !== lang);
     });
     // Re-apply dynamic (non-data-i18n) strings.
     if (selectedId) $('sel-count').textContent = t('drive.selected', { n: 1 });
@@ -565,8 +567,9 @@
   const wireEvents = () => {
     // Card interactions (event-delegated).
     grid.addEventListener('click', (e) => {
-      const menuBtn = e.target.closest('.card-menu-btn');
-      const card = e.target.closest('.file-card');
+      const target = /** @type {Element} */ (e.target);
+      const menuBtn = target.closest('.card-menu-btn');
+      const card = target.closest('.file-card');
       if (!card) return;
       const id = card.getAttribute('data-id');
       if (menuBtn) {
@@ -578,13 +581,14 @@
       selectFile(id);
     });
     grid.addEventListener('dblclick', (e) => {
-      const card = e.target.closest('.file-card');
-      if (card && !e.target.closest('.card-menu-btn')) openFile(card.getAttribute('data-id'));
+      const target = /** @type {Element} */ (e.target);
+      const card = target.closest('.file-card');
+      if (card && !target.closest('.card-menu-btn')) openFile(card.getAttribute('data-id'));
     });
 
     // Card menu actions.
     cardMenu.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action]');
+      const btn = /** @type {HTMLButtonElement} */ (/** @type {Element} */ (e.target).closest('[data-action]'));
       if (!btn || btn.disabled) return;
       const id = menuTargetId;
       closeCardMenu();
@@ -593,11 +597,12 @@
 
     // Dismiss menus on outside click / Escape.
     document.addEventListener('click', (e) => {
-      if (!cardMenu.contains(e.target) && !e.target.closest('.card-menu-btn')) closeCardMenu();
-      if (!$('avatar-menu').contains(e.target) && !e.target.closest('#avatar-btn')) {
+      const target = /** @type {Element} */ (e.target);
+      if (!cardMenu.contains(target) && !target.closest('.card-menu-btn')) closeCardMenu();
+      if (!$('avatar-menu').contains(target) && !target.closest('#avatar-btn')) {
         $('avatar-menu').classList.add('hidden');
       }
-      if (!$('lang-switch-menu').contains(e.target) && !e.target.closest('#lang-switch-btn')) {
+      if (!$('lang-switch-menu').contains(target) && !target.closest('#lang-switch-btn')) {
         $('lang-switch-menu').classList.add('hidden');
       }
     });
@@ -628,13 +633,13 @@
     // Modal buttons.
     $('modal-ok').addEventListener('click', () => {
       const cb = modalOnOk;
-      const val = $('modal-input').value;
+      const val = /** @type {HTMLInputElement} */ ($('modal-input')).value;
       if (cb) cb(val);
     });
     $('modal-cancel').addEventListener('click', closeModal);
     $('modal-overlay').addEventListener('click', (e) => { if (e.target === $('modal-overlay')) closeModal(); });
-    $('modal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && modalOnOk) modalOnOk($('modal-input').value); });
-    $('modal-copy').addEventListener('click', () => copyToClipboard($('modal-link').value));
+    $('modal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && modalOnOk) modalOnOk(/** @type {HTMLInputElement} */ ($('modal-input')).value); });
+    $('modal-copy').addEventListener('click', () => copyToClipboard(/** @type {HTMLInputElement} */ ($('modal-link')).value));
 
     // Avatar menu.
     $('avatar-btn').addEventListener('click', (e) => {
@@ -649,7 +654,7 @@
     });
     $('perm-back').addEventListener('click', showFilesView);
     $('perm-tbody').addEventListener('change', (e) => {
-      const sel = e.target.closest('.role-select');
+      const sel = /** @type {HTMLSelectElement} */ (/** @type {Element} */ (e.target).closest('.role-select'));
       if (!sel) return;
       const row = sel.closest('tr');
       if (row) patchRole(row.getAttribute('data-id'), sel.value, sel);
@@ -667,7 +672,7 @@
     document.querySelectorAll('#lang-switch-menu .lang-option').forEach((opt) => {
       opt.addEventListener('click', (e) => {
         e.stopPropagation();
-        applyLang(opt.dataset.lang);
+        applyLang(/** @type {HTMLElement} */ (opt).dataset.lang);
         $('lang-switch-menu').classList.add('hidden');
       });
     });

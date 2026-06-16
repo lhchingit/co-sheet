@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * @file formula-engine.js
  * @description Tokenizer + recursive-descent parser + evaluator + function
@@ -14,6 +15,7 @@
 
   // Cell-reference accessor injected by the host (app.js) via setCellResolver().
   // The no-op default keeps the engine callable (refs read blank) before wiring.
+  /** @type {(coord: string, depth?: number) => any} */
   let getCellValue = () => '';
 
 /* =============================================================================
@@ -32,6 +34,7 @@
 
 const FORMULA_ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#ERROR!', '#ERR!'];
 const mkErr = (code) => ({ __error: code });
+/** @param {any} v @returns {v is { __error: any }} */
 const isErr = (v) => !!(v && typeof v === 'object' && v.__error);
 const isRange = (v) => !!(v && typeof v === 'object' && v.__range);
 // Date value: behaves as its numeric serial everywhere (arithmetic, YEAR(),
@@ -227,7 +230,7 @@ const toNum = (v) => {
   if (typeof v === 'boolean') return v ? 1 : 0;
   if (v === '') return 0;
   if (isRange(v)) return toNum(scalarize(v));
-  if (typeof v === 'string') { const t = v.trim(); if (t !== '' && !isNaN(t) && isFinite(t)) return parseFloat(t); return mkErr('#VALUE!'); }
+  if (typeof v === 'string') { const t = v.trim(); if (t !== '' && !isNaN(Number(t)) && isFinite(Number(t))) return parseFloat(t); return mkErr('#VALUE!'); }
   return mkErr('#VALUE!');
 };
 
@@ -238,7 +241,7 @@ const toBool = (v) => {
   if (typeof v === 'number') return v !== 0;
   if (isDate(v)) return v.serial !== 0;
   if (isRange(v)) return toBool(scalarize(v));
-  if (typeof v === 'string') { const u = v.toUpperCase(); if (u === 'TRUE') return true; if (u === 'FALSE') return false; const t = v.trim(); if (t !== '' && !isNaN(t)) return parseFloat(t) !== 0; }
+  if (typeof v === 'string') { const u = v.toUpperCase(); if (u === 'TRUE') return true; if (u === 'FALSE') return false; const t = v.trim(); if (t !== '' && !isNaN(Number(t))) return parseFloat(t) !== 0; }
   return mkErr('#VALUE!');
 };
 
@@ -364,7 +367,7 @@ const collectNumbers = (args, ctx) => {
     if (typeof v === 'number') nums.push(v);
     else if (isDate(v)) nums.push(v.serial);
     else if (typeof v === 'boolean') nums.push(v ? 1 : 0);
-    else if (typeof v === 'string') { const t = v.trim(); if (t !== '' && !isNaN(t) && isFinite(t)) nums.push(parseFloat(t)); }
+    else if (typeof v === 'string') { const t = v.trim(); if (t !== '' && !isNaN(Number(t)) && isFinite(Number(t))) nums.push(parseFloat(t)); }
   }
   return nums;
 };
@@ -377,7 +380,7 @@ const matchCriteria = (value, criterion) => {
   let op = '=';
   const m = crit.match(/^(<=|>=|<>|=|<|>)/);
   if (m) { op = m[1]; crit = crit.slice(m[1].length); }
-  const critNum = (crit.trim() !== '' && !isNaN(crit) && isFinite(crit)) ? parseFloat(crit) : null;
+  const critNum = (crit.trim() !== '' && !isNaN(Number(crit)) && isFinite(Number(crit))) ? parseFloat(crit) : null;
   if (critNum !== null && (op === '<' || op === '>' || op === '<=' || op === '>=' || op === '=' || op === '<>')) {
     const n = toNum(value);
     if (isErr(n)) return op === '<>';
@@ -545,13 +548,13 @@ const FORMULA_FUNCS = {
   SECOND: (a, c) => serialToDate(numAt(a, c, 0)).getUTCSeconds(),
   TIME: (a, c) => (numAt(a, c, 0) * 3600 + numAt(a, c, 1) * 60 + numAt(a, c, 2)) / 86400,
   WEEKDAY: (a, c) => { const d = serialToDate(numAt(a, c, 0)).getUTCDay(); const type = optNumAt(a, c, 1, 1); if (type === 2) return d === 0 ? 7 : d; if (type === 3) return (d + 6) % 7; return d + 1; },
-  WEEKNUM: (a, c) => { const dt = serialToDate(numAt(a, c, 0)); const start = Date.UTC(dt.getUTCFullYear(), 0, 1); const days = Math.floor((dt - start) / 86400000); return Math.floor((days + new Date(start).getUTCDay()) / 7) + 1; },
+  WEEKNUM: (a, c) => { const dt = serialToDate(numAt(a, c, 0)); const start = Date.UTC(dt.getUTCFullYear(), 0, 1); const days = Math.floor((dt.getTime() - start) / 86400000); return Math.floor((days + new Date(start).getUTCDay()) / 7) + 1; },
   DAYS: (a, c) => Math.round(numAt(a, c, 0) - numAt(a, c, 1)),
   DATEVALUE: (a, c) => { const t = Date.parse(strAt(a, c, 0)); return isNaN(t) ? mkErr('#VALUE!') : mkDate(Math.round((t - DATE_EPOCH) / 86400000)); },
   EDATE: (a, c) => { const d = serialToDate(numAt(a, c, 0)); return mkDate(dateToSerial(d.getUTCFullYear(), d.getUTCMonth() + 1 + numAt(a, c, 1), d.getUTCDate())); },
   EOMONTH: (a, c) => { const d = serialToDate(numAt(a, c, 0)); return mkDate(dateToSerial(d.getUTCFullYear(), d.getUTCMonth() + 2 + numAt(a, c, 1), 0)); },
   YEARFRAC: (a, c) => Math.abs(numAt(a, c, 0) - numAt(a, c, 1)) / 365,
-  DATEDIF: (a, c) => { const s = serialToDate(numAt(a, c, 0)), e = serialToDate(numAt(a, c, 1)); const unit = strAt(a, c, 2).toUpperCase(); const days = Math.round((e - s) / 86400000); if (unit === 'D') return days; if (unit === 'M') return (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) - (e.getUTCDate() < s.getUTCDate() ? 1 : 0); if (unit === 'Y') { let y = e.getUTCFullYear() - s.getUTCFullYear(); if (e.getUTCMonth() < s.getUTCMonth() || (e.getUTCMonth() === s.getUTCMonth() && e.getUTCDate() < s.getUTCDate())) y--; return y; } return mkErr('#NUM!'); },
+  DATEDIF: (a, c) => { const s = serialToDate(numAt(a, c, 0)), e = serialToDate(numAt(a, c, 1)); const unit = strAt(a, c, 2).toUpperCase(); const days = Math.round((e.getTime() - s.getTime()) / 86400000); if (unit === 'D') return days; if (unit === 'M') return (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) - (e.getUTCDate() < s.getUTCDate() ? 1 : 0); if (unit === 'Y') { let y = e.getUTCFullYear() - s.getUTCFullYear(); if (e.getUTCMonth() < s.getUTCMonth() || (e.getUTCMonth() === s.getUTCMonth() && e.getUTCDate() < s.getUTCDate())) y--; return y; } return mkErr('#NUM!'); },
   WORKDAY: (a, c) => { let serial = Math.floor(numAt(a, c, 0)); let n = Math.floor(numAt(a, c, 1)); const step = n < 0 ? -1 : 1; n = Math.abs(n); while (n > 0) { serial += step; const dow = serialToDate(serial).getUTCDay(); if (dow !== 0 && dow !== 6) n--; } return mkDate(serial); },
 
   // --- Lookup -------------------------------------------------------------
@@ -627,7 +630,7 @@ const conditionalAggregate = (args, ctx, mode, plural) => {
     if (pairs.every(([, crit], pi) => matchCriteria(flats[pi][i], crit))) hits.push(i);
   }
   if (mode === 'count') return hits.length;
-  const picked = hits.map(i => aggFlat[i]).map(v => (typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' && !isNaN(v) ? parseFloat(v) : null))).filter(v => v !== null);
+  const picked = hits.map(i => aggFlat[i]).map(v => (typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v)) ? parseFloat(v) : null))).filter(v => v !== null);
   if (mode === 'sum') return picked.reduce((s, n) => s + n, 0);
   if (mode === 'avg') return picked.length ? picked.reduce((s, n) => s + n, 0) / picked.length : mkErr('#DIV/0!');
   if (mode === 'max') return picked.length ? Math.max(...picked) : 0;

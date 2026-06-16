@@ -1,0 +1,31 @@
+{
+  // Shared type-checking options for the project. This base is never invoked
+  // directly — it is extended by tsconfig.json (frontend) and
+  // tsconfig.server.json (backend + tests), which add the environment-specific
+  // `lib` / `types`. See those files for the per-environment split.
+  //
+  // Type-checking only: TypeScript NEVER emits here (noEmit). The browser loads
+  // public/*.js directly and the server runs `node server.js`. Checking is
+  // OPT-IN: a file is only checked if it starts with `// @ts-check`, so we can
+  // adopt types one file at a time.
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+
+    // Lenient by design for adopting checks on EXISTING untyped JS.
+    // `noImplicitAny: false` stops TS from demanding an annotation on every
+    // parameter; instead it surfaces real bugs — wrong argument counts,
+    // undefined variables, typos, bad property access. Tighten incrementally
+    // later (e.g. strictNullChecks, then noImplicitAny) once files carry JSDoc.
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "exclude": ["node_modules"]
+}

@@ -1,3 +1,4 @@
+// @ts-check
 import 'dotenv/config';
 import pg from 'pg';
 
@@ -36,6 +37,7 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
 });
 
 // Export the public key in JWK format for the JWKS endpoint
+/** @type {{ kid?: string, alg?: string, use?: string, [k: string]: any }} */
 const jwk = crypto.createPublicKey(publicKey).export({ format: 'jwk' });
 jwk.kid = 'mock-key-id';
 jwk.alg = 'RS256';
@@ -1560,7 +1562,7 @@ const setupCellsProxy = (state) => {
  * Loads the spreadsheet cell state from the store.json file.
  * If the file does not exist, is empty, or is corrupted, it initializes a fresh state object.
  * Uses a prototype-free cells object to avoid prototype pollution.
- * @returns {Object} The spreadsheet state containing a 'cells' object.
+ * @returns {Promise<Object>} The spreadsheet state containing a 'cells' object.
  */
 const loadState = async (key = 'default') => {
   try {
