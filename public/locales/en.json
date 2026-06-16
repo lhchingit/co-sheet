@@ -19,6 +19,8 @@
   "view.group": "Group",
   "view.comments": "Comments",
   "view.hiddenSheets": "Hidden sheets",
+  "view.hiddenSheets.count": "Hidden sheets ({n})",
+  "view.hiddenSheets.unhide": "Show \"{name}\"",
   "view.zoom": "Zoom",
   "view.fullscreen": "Full screen",
   "file.new": "New",

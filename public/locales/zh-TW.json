@@ -19,6 +19,8 @@
   "view.group": "群組",
   "view.comments": "註解",
   "view.hiddenSheets": "隱藏的工作表",
+  "view.hiddenSheets.count": "隱藏的工作表 ({n})",
+  "view.hiddenSheets.unhide": "顯示「{name}」",
   "view.zoom": "縮放",
   "view.fullscreen": "全螢幕",
   "file.new": "新文件",

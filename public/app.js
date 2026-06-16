@@ -4270,6 +4270,8 @@ if (menuViewBtn && menuViewDropdown) {
       applyGridZoom(currentZoom);
       // Refresh Freeze labels/checks from the active cell + current freeze state.
       updateFreezeMenu();
+      // Refresh the Hidden sheets entry (count + flyout list) from current state.
+      updateHiddenSheetsMenu();
     }
   });
 
@@ -4365,6 +4367,51 @@ if (menuViewBtn && menuViewDropdown) {
       menuViewDropdown.classList.add('hidden');
     });
   });
+
+  // Hidden sheets entry: greyed out with no flyout when nothing is hidden. When
+  // the file has hidden worksheets, the label shows a "(X)" count, the chevron
+  // appears, and the right flyout is (re)built with one "Show «name»" row per
+  // hidden sheet. Clicking a row broadcasts unhide-sheet and closes the menu.
+  const hiddenTrigger = document.getElementById('view-hidden-sheets-trigger');
+  const hiddenLabel = document.getElementById('view-hidden-sheets-label');
+  const hiddenChevron = document.getElementById('view-hidden-sheets-chevron');
+  const hiddenFlyout = document.getElementById('view-hidden-sheets-flyout');
+  const updateHiddenSheetsMenu = () => {
+    if (!hiddenTrigger || !hiddenLabel || !hiddenChevron || !hiddenFlyout) return;
+    // Preserve workbook order rather than hide-event order.
+    const hidden = sheetOrder.filter(s => hiddenSheets.includes(s));
+    const count = hidden.length;
+
+    if (count === 0) {
+      hiddenLabel.textContent = t('view.hiddenSheets');
+      hiddenTrigger.className = 'flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none';
+      hiddenChevron.classList.add('invisible');
+      hiddenFlyout.classList.remove('group-hover:block');
+      hiddenFlyout.classList.add('hidden');
+      hiddenFlyout.innerHTML = '';
+      return;
+    }
+
+    hiddenLabel.textContent = t('view.hiddenSheets.count', { n: count });
+    hiddenTrigger.className = 'flex items-center justify-between w-full px-4 py-2 text-label-lg text-on-surface-variant hover:bg-surface-variant cursor-default select-none';
+    hiddenChevron.classList.remove('invisible');
+    hiddenFlyout.classList.add('group-hover:block');
+
+    hiddenFlyout.innerHTML = '';
+    hidden.forEach(sheetName => {
+      const btn = document.createElement('button');
+      btn.className = 'flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant';
+      btn.textContent = t('view.hiddenSheets.unhide', { name: sheetName });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'unhide-sheet', payload: { sheetName } }));
+        }
+        menuViewDropdown.classList.add('hidden');
+      });
+      hiddenFlyout.appendChild(btn);
+    });
+  };
 }
 
 // Toggle the Select Font dropdown menu visibility

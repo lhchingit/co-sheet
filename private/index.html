@@ -687,10 +687,16 @@
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
-       <!-- Hidden sheets (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
-         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility_off</span><span data-i18n="view.hiddenSheets">Hidden sheets</span></span>
-         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       <!-- Hidden sheets submenu (flyout): greyed out when there are none.
+            When the file has hidden worksheets the label gains a "(X)" count and
+            a right flyout lists each one; clicking it unhides that sheet. Both the
+            label and the flyout list are built dynamically when the menu opens. -->
+       <div id="view-hidden-sheets" class="relative group">
+         <div id="view-hidden-sheets-trigger" class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility_off</span><span id="view-hidden-sheets-label">Hidden sheets</span></span>
+           <span id="view-hidden-sheets-chevron" class="material-symbols-outlined text-[18px] invisible">chevron_right</span>
+         </div>
+         <div id="view-hidden-sheets-flyout" class="hidden absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50"></div>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Zoom submenu (flyout) – wired to the existing grid zoom -->
