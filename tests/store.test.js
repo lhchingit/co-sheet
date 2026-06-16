@@ -470,6 +470,17 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
         }
         return { rows: [] };
       }
+    },
+    // loadState now reads through the db/workbook repository rather than calling
+    // pool.query directly, so the sandbox supplies a matching stub.
+    workbookRepo: {
+      async getWorkbookState(key) {
+        if (fs.existsSync(tempStorePath)) {
+          const data = fs.readFileSync(tempStorePath, 'utf8');
+          return JSON.parse(data);
+        }
+        return undefined;
+      }
     }
   };
 
