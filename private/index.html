@@ -315,15 +315,26 @@
         /* Value-filter visuals (Data ▸ Create a filter). The filtered column
            header and every row header across the filter range get a light-green
            tint so the filter's scope is obvious, and the first cell of the column
-           hosts the funnel icon. Placed BEFORE the selection-header rules below so
-           an active row/column selection (active-header / header-selected) still
-           wins and repaints blue over the green tint. */
+           hosts the funnel icon. These single-class tints sit before the
+           selection-header rules below, so selecting the filtered COLUMN still
+           repaints its header blue; row headers in the scope instead darken to a
+           deeper green when selected (the 3-class rule just below). */
         .grid-header.filter-col-header {
             background-color: #e6f4ea;
             color: #188038;
         }
         .grid-header.filter-row-header {
             background-color: #e6f4ea;
+        }
+        /* When a filtered row header is ALSO part of an active selection (e.g. the
+           user selects another column, highlighting every row header), it stays
+           green rather than turning blue, but darkens to signal the selection.
+           The 3-class selector outranks .active-header / .header-selected below. */
+        .grid-header.filter-row-header.active-header,
+        .grid-header.filter-row-header.header-selected {
+            background-color: #a8dab5;
+            color: #0b5d2e;
+            font-weight: 700;
         }
         /* Funnel button shown at the right edge of the filtered column's first
            cell. Click opens the filter menu. */
