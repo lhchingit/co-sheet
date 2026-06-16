@@ -139,17 +139,30 @@
         .font-menu-scrollbar::-webkit-scrollbar-thumb { background-color: #c3c6d6; border-radius: 10px; }
         .font-menu-scrollbar { scrollbar-width: thin; scrollbar-color: #c3c6d6 transparent; }
 
-        /* Visible horizontal & vertical scrollbars for the spreadsheet grid */
-        .grid-scrollbar::-webkit-scrollbar { width: 14px; height: 14px; }
-        .grid-scrollbar::-webkit-scrollbar-track { background: #f1f3f4; }
-        .grid-scrollbar::-webkit-scrollbar-thumb {
+        /* The grid viewport scrolls, but its native scrollbars are hidden: they
+           span the full client box and would overlap the sticky column header /
+           row gutter. Synthetic bars (.grid-custom-scroll) are drawn instead so
+           each can begin at the frozen header edge. */
+        .grid-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+        .grid-scrollbar::-webkit-scrollbar { width: 0; height: 0; }
+
+        /* Synthetic grid scrollbars. JS sets the start offset (top for vertical,
+           left for horizontal) to the measured header size, and the thumb's
+           size/position from the viewport's scroll metrics. The colors match the
+           previous native bars. */
+        .grid-custom-scroll { position: absolute; z-index: 40; background: #f1f3f4; }
+        .grid-custom-scroll-v { top: 0; right: 0; bottom: 14px; width: 14px; }
+        .grid-custom-scroll-h { left: 0; right: 14px; bottom: 0; height: 14px; }
+        .grid-custom-scroll-thumb {
+            position: absolute;
             background-color: #bdc1c6;
             border-radius: 10px;
             border: 3px solid #f1f3f4;
+            box-sizing: border-box;
         }
-        .grid-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #9aa0a6; }
-        .grid-scrollbar::-webkit-scrollbar-corner { background: #f1f3f4; }
-        .grid-scrollbar { scrollbar-color: #bdc1c6 #f1f3f4; }
+        .grid-custom-scroll-thumb:hover { background-color: #9aa0a6; }
+        .grid-custom-scroll-v .grid-custom-scroll-thumb { left: 0; width: 14px; }
+        .grid-custom-scroll-h .grid-custom-scroll-thumb { top: 0; height: 14px; }
         /* Colored indicator bar under the text/fill color toolbar buttons,
            reflecting the active cell's current color (Google Sheets style). */
         .toolbar-color-swatch {
@@ -1351,13 +1364,21 @@
 <div id="formula-resize-handle" class="relative h-1 -mt-px shrink-0 cursor-row-resize group z-20" data-i18n-title="formula.resize" title="拖曳以調整公式列高度">
 <div class="absolute inset-x-0 top-0 h-[3px] bg-transparent group-hover:bg-primary/50 transition-colors"></div>
 </div>
-<!-- Spreadsheet Grid Container -->
-<div class="flex-grow min-h-0 overflow-auto bg-surface-container-low relative grid-scrollbar">
+<!-- Spreadsheet Grid Container. The viewport scrolls; its native scrollbars are
+     hidden and replaced by the synthetic bars below, so each bar can start at
+     the frozen header edge (vertical below the column header, horizontal right
+     of the row gutter) instead of overlapping it. initGridScrollbars() in app.js
+     sizes/positions them. -->
+<div class="flex-grow min-h-0 relative">
+  <div id="grid-viewport" class="absolute inset-0 overflow-auto bg-surface-container-low grid-scrollbar">
     <div class="grid-container w-max" id="grid-root">
       <!-- Top-left corner -->
       <div class="grid-header sticky top-0 left-0 z-30"></div>
     </div>
   </div>
+  <div id="grid-vscroll" class="grid-custom-scroll grid-custom-scroll-v hidden"><div class="grid-custom-scroll-thumb"></div></div>
+  <div id="grid-hscroll" class="grid-custom-scroll grid-custom-scroll-h hidden"><div class="grid-custom-scroll-thumb"></div></div>
+</div>
 </main>
 <!-- BottomNavBar -->
 <!-- Footer content is indented to 46px so the first button's left edge aligns
