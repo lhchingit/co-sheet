@@ -896,7 +896,108 @@
        </div>
      </div>
    </div>
-<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.data">Data</button>
+<!-- Data menu item with dropdown options. Only "Sort sheet" is wired (it sorts
+     every data row by the active cell's column); the rest mirror Google Sheets'
+     Data menu and are greyed-out like the unsupported View/Format entries. -->
+   <div class="relative inline-block">
+     <button id="menu-data-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.data">Data</button>
+     <div id="menu-data-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50">
+       <!-- Analyze data (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">query_stats</span><span data-i18n="data.analyze">Analyze data</span>
+       </div>
+       <!-- Solve optimization problem (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">lightbulb</span><span data-i18n="data.optimize">Solve optimization problem</span></span>
+         <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-700 text-white" data-i18n="data.new">New</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Sort sheet submenu (flyout): the only wired Data entry. The two options
+            are rebuilt from the active cell's column each time the menu opens. -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">sort</span><span data-i18n="data.sortSheet">Sort sheet</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50">
+           <button id="data-sort-az" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">arrow_downward</span><span class="data-sort-label"></span>
+           </button>
+           <button id="data-sort-za" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
+             <span class="material-symbols-outlined text-[18px]">arrow_upward</span><span class="data-sort-label"></span>
+           </button>
+         </div>
+       </div>
+       <!-- Sort range (unsupported – greyed out, flyout) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">sort</span><span data-i18n="data.sortRange">Sort range</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Create a filter (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">filter_alt</span><span data-i18n="data.createFilter">Create a filter</span>
+       </div>
+       <!-- Create group-by view (unsupported – greyed out, flyout) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">pivot_table_chart</span><span data-i18n="data.createGroupView">Create group by view</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Create filter view (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">filter_list</span><span data-i18n="data.createFilterView">Create filter view</span>
+       </div>
+       <!-- Add a slicer (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">tune</span><span data-i18n="data.addSlicer">Add a slicer</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Protect sheets and ranges (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">lock</span><span data-i18n="data.protect">Protect sheets and ranges</span>
+       </div>
+       <!-- Named ranges (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">grid_3x3</span><span data-i18n="data.namedRanges">Named ranges</span>
+       </div>
+       <!-- Named functions (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">functions</span><span data-i18n="data.namedFunctions">Named functions</span>
+       </div>
+       <!-- Randomize range (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">shuffle</span><span data-i18n="data.randomizeRange">Randomize range</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Column stats (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">monitoring</span><span data-i18n="data.columnStats">Column stats</span>
+       </div>
+       <!-- Data validation (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">fact_check</span><span data-i18n="data.dataValidation">Data validation</span>
+       </div>
+       <!-- Data cleanup (unsupported – greyed out, flyout) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">auto_fix_high</span><span data-i18n="data.cleanup">Data cleanup</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Split text to columns (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">splitscreen</span><span data-i18n="data.splitText">Split text to columns</span>
+       </div>
+       <!-- Data extraction (unsupported – greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">output</span><span data-i18n="data.extraction">Data extraction</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Data connectors (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">cable</span><span data-i18n="data.connectors">Data connectors</span></span>
+         <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-700 text-white" data-i18n="data.new">New</span>
+       </div>
+     </div>
+   </div>
 <button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.help">Help</button>
 </nav>
 </div>
