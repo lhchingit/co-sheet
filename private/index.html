@@ -514,76 +514,76 @@
      <button id="menu-file-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.file">File</button>
      <div id="menu-file-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50 max-h-[80vh] overflow-y-auto">
        <!-- New: creates a fresh spreadsheet in a new browser tab -->
-       <button id="file-new" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="file-new" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">add_box</span><span data-i18n="file.new">New</span></span>
        </button>
        <!-- Open (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">folder_open</span><span data-i18n="file.open">Open</span></span><span class="text-xs">Ctrl+O</span>
        </div>
        <!-- Import (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">login</span><span data-i18n="file.import">Import</span></span>
        </div>
        <!-- Make a copy: duplicates the current file -->
-       <button id="file-make-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="file-make-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">file_copy</span><span data-i18n="file.makeCopy">Make a copy</span></span>
        </button>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Share: opens the existing share dialog -->
-       <button id="file-share" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="file-share" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">person_add</span><span data-i18n="file.share">Share</span></span>
        </button>
        <!-- Email (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">mail</span><span data-i18n="file.email">Email</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <!-- Download (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">download</span><span data-i18n="file.download">Download</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Rename: starts inline editing of the file name -->
-       <button id="file-rename" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="file-rename" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">drive_file_rename_outline</span><span data-i18n="file.rename">Rename</span></span>
        </button>
        <!-- Move (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">drive_file_move</span><span data-i18n="file.move">Move</span></span>
        </div>
        <!-- Add shortcut to Drive (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">add_to_drive</span><span data-i18n="file.addShortcut">Add shortcut to Drive</span></span>
        </div>
        <!-- Move to trash (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">delete</span><span data-i18n="file.trash">Move to trash</span></span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Version history (unsupported here – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">history</span><span data-i18n="file.versionHistory">Version history</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <!-- Make available offline (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">offline_pin</span><span data-i18n="file.offline">Make available offline</span></span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Details: opens the file-details dialog -->
-       <button id="file-details" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="file-details" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">info</span><span data-i18n="file.details">Details</span></span>
        </button>
        <!-- Security limitations (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">verified_user</span><span data-i18n="file.security">Security limitations</span></span>
        </div>
        <!-- Settings (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">settings</span><span data-i18n="file.settings">Settings</span></span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Print (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">print</span><span data-i18n="file.print">Print</span></span><span class="text-xs">Ctrl+P</span>
        </div>
      </div>
@@ -595,31 +595,31 @@
      <!-- Dropdown options container (hidden by default) -->
      <div id="menu-edit-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-60 z-50">
        <!-- Redo action button -->
-       <button id="edit-redo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-redo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">redo</span><span data-i18n="edit.redo">Redo</span></span><span class="text-xs text-outline">Ctrl+Y</span>
        </button>
        <!-- Undo action button -->
-       <button id="edit-undo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-undo" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">undo</span><span data-i18n="edit.undo">Undo</span></span><span class="text-xs text-outline">Ctrl+Z</span>
        </button>
        <!-- Divider -->
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Cut action button -->
-       <button id="edit-cut" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-cut" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_cut</span><span data-i18n="edit.cut">Cut-off</span></span><span class="text-xs text-outline">Ctrl+X</span>
        </button>
        <!-- Copy action button -->
-       <button id="edit-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_copy</span><span data-i18n="edit.copy">Copy</span></span><span class="text-xs text-outline">Ctrl+C</span>
        </button>
        <!-- Paste action button -->
-       <button id="edit-paste" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-paste" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">content_paste</span><span data-i18n="edit.paste">Paste</span></span><span class="text-xs text-outline">Ctrl+V</span>
        </button>
        <!-- Divider -->
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Search and Replace option to open modal -->
-       <button id="edit-search-replace" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="edit-search-replace" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">find_replace</span><span data-i18n="edit.searchReplace">Search and replace</span></span><span class="text-xs text-outline">Ctrl+H</span>
        </button>
      </div>
@@ -634,25 +634,25 @@
        <!-- Display submenu (flyout): Formula bar / Gridlines toggles are wired;
             Formulas and Protected ranges are greyed-out (unsupported). -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility</span><span data-i18n="view.display">Display</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
            <!-- Formula bar: toggles the formula bar row; checked by default -->
-           <button id="view-display-formulabar" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="view-display-formulabar" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="view-display-check material-symbols-outlined text-[18px] w-[18px] text-primary">check</span><span data-i18n="view.display.formulaBar">Formula bar</span>
            </button>
            <!-- Gridlines: toggles the light-gray spreadsheet gridlines; checked by default -->
-           <button id="view-display-gridlines" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="view-display-gridlines" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="view-display-check material-symbols-outlined text-[18px] w-[18px] text-primary">check</span><span data-i18n="view.display.gridlines">Gridlines</span>
            </button>
            <!-- Formulas (unsupported – greyed out) -->
-           <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+           <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
              <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px] w-[18px]"></span><span data-i18n="view.display.formulas">Formulas</span></span><span class="text-xs">Ctrl+`</span>
            </div>
            <!-- Protected ranges (unsupported – greyed out) -->
-           <div class="flex items-center gap-3 w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+           <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
              <span class="material-symbols-outlined text-[18px] w-[18px]"></span><span data-i18n="view.display.protectedRanges">Protected ranges</span>
            </div>
          </div>
@@ -660,57 +660,57 @@
        <!-- Freeze submenu (flyout): pin the first N rows / columns. The "up to"
             entry is built dynamically from the active cell each time it opens. -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">grid_on</span><span data-i18n="view.freeze">Freeze</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
-           <button id="view-freeze-row-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-row-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-row-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-row-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="row" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="row" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="row" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="row"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
            <div class="border-t border-outline-variant my-1"></div>
-           <button id="view-freeze-col-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-col-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-col-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
-           <button id="view-freeze-col-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="col" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="col" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="col" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-axis="col"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
          </div>
        </div>
        <!-- Group (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">grid_view</span><span data-i18n="view.group">Group</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <!-- Comments (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">view_agenda</span><span data-i18n="view.comments">Comments</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Hidden sheets (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility_off</span><span data-i18n="view.hiddenSheets">Hidden sheets</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Zoom submenu (flyout) – wired to the existing grid zoom -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">zoom_in</span><span data-i18n="view.zoom">Zoom</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-40 z-50">
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="50"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>50%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="75"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>75%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="90"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>90%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="100"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>100%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="125"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>125%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="150"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>150%</span></button>
-           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="200"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>200%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="50"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>50%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="75"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>75%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="90"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>90%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="100"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>100%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="125"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>125%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="150"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>150%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant" data-zoom="200"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>200%</span></button>
          </div>
        </div>
        <!-- Full screen: toggles the browser Fullscreen API -->
-       <button id="view-fullscreen" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+       <button id="view-fullscreen" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">fullscreen</span><span data-i18n="view.fullscreen">Full screen</span></span>
        </button>
      </div>
@@ -721,45 +721,45 @@
      <div id="menu-insert-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
        <!-- Cells submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">select_all</span><span data-i18n="ins.cell">Cells</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50">
-           <button id="ins-cell-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-cell-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">arrow_forward</span><span data-i18n="ins.cellRight">Insert cells and shift right</span>
            </button>
-           <button id="ins-cell-down" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-cell-down" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">arrow_downward</span><span data-i18n="ins.cellDown">Insert cells and shift down</span>
            </button>
          </div>
        </div>
        <!-- Rows submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">table_rows</span><span data-i18n="ins.row">Rows</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
-           <button id="ins-row-above" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-row-above" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">add_row_above</span><span id="ins-row-above-label"></span>
            </button>
-           <button id="ins-row-below" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-row-below" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">add_row_below</span><span id="ins-row-below-label"></span>
            </button>
          </div>
        </div>
        <!-- Columns submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">view_column</span><span data-i18n="ins.col">Columns</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
-           <button id="ins-col-left" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-col-left" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">add_column_left</span><span id="ins-col-left-label"></span>
            </button>
-           <button id="ins-col-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <button id="ins-col-right" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
              <span class="material-symbols-outlined text-[18px]">add_column_right</span><span id="ins-col-right-label"></span>
            </button>
          </div>
@@ -771,120 +771,120 @@
      <button id="menu-format-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.format">Format</button>
      <div id="menu-format-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
        <!-- Theme (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">palette</span><span data-i18n="fmt.theme">Theme</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Number submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">123</span><span data-i18n="fmt.number">Number</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50 max-h-[80vh] overflow-y-auto">
-           <button id="fmt-num-auto" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.auto">Automatic</span></button>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.plainText">Plain text</span></div>
+           <button id="fmt-num-auto" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.auto">Automatic</span></button>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.plainText">Plain text</span></div>
            <div class="border-t border-outline-variant my-1"></div>
-           <button id="fmt-num-number" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.number">Number</span><span class="text-xs text-outline" data-fmt-eg="number"></span></button>
-           <button id="fmt-num-percent" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.percent">Percent</span><span class="text-xs text-outline" data-fmt-eg="percent"></span></button>
-           <button id="fmt-num-scientific" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.scientific">Scientific</span><span class="text-xs text-outline" data-fmt-eg="scientific"></span></button>
+           <button id="fmt-num-number" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.number">Number</span><span class="text-xs text-outline" data-fmt-eg="number"></span></button>
+           <button id="fmt-num-percent" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.percent">Percent</span><span class="text-xs text-outline" data-fmt-eg="percent"></span></button>
+           <button id="fmt-num-scientific" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.scientific">Scientific</span><span class="text-xs text-outline" data-fmt-eg="scientific"></span></button>
            <div class="border-t border-outline-variant my-1"></div>
-           <button id="fmt-num-accounting" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.accounting">Accounting</span><span class="text-xs text-outline" data-fmt-eg="accounting"></span></button>
-           <button id="fmt-num-financial" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.financial">Financial</span><span class="text-xs text-outline" data-fmt-eg="financial"></span></button>
-           <button id="fmt-num-currency" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.currency">Currency</span><span class="text-xs text-outline" data-fmt-eg="currency"></span></button>
-           <button id="fmt-num-currency-rounded" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span data-i18n="fmt.num.currencyRounded">Currency (rounded)</span><span class="text-xs text-outline" data-fmt-eg="currencyRounded"></span></button>
+           <button id="fmt-num-accounting" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.accounting">Accounting</span><span class="text-xs text-outline" data-fmt-eg="accounting"></span></button>
+           <button id="fmt-num-financial" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.financial">Financial</span><span class="text-xs text-outline" data-fmt-eg="financial"></span></button>
+           <button id="fmt-num-currency" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.currency">Currency</span><span class="text-xs text-outline" data-fmt-eg="currency"></span></button>
+           <button id="fmt-num-currency-rounded" class="flex items-center justify-between w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span data-i18n="fmt.num.currencyRounded">Currency (rounded)</span><span class="text-xs text-outline" data-fmt-eg="currencyRounded"></span></button>
            <div class="border-t border-outline-variant my-1"></div>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.date">Date</span></div>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.time">Time</span></div>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.datetime">Date time</span></div>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.duration">Duration</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.date">Date</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.time">Time</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.datetime">Date time</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.duration">Duration</span></div>
            <div class="border-t border-outline-variant my-1"></div>
-           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-md text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.customNumber">Custom number format</span></div>
+           <div class="flex items-center justify-between w-full px-4 py-1.5 text-label-lg text-outline opacity-50 cursor-default select-none"><span data-i18n="fmt.num.customNumber">Custom number format</span></div>
          </div>
        </div>
        <!-- Text submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_bold</span><span data-i18n="fmt.text">Text</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
-           <button id="fmt-text-bold" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_bold</span><span data-i18n="fmt.text.bold">Bold</span></span><span class="text-xs text-outline">Ctrl+B</span></button>
-           <button id="fmt-text-italic" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_italic</span><span data-i18n="fmt.text.italic">Italic</span></span><span class="text-xs text-outline">Ctrl+I</span></button>
-           <button id="fmt-text-underline" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_underlined</span><span data-i18n="fmt.text.underline">Underline</span></span><span class="text-xs text-outline">Ctrl+U</span></button>
-           <button id="fmt-text-strike" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_strikethrough</span><span data-i18n="fmt.text.strike">Strikethrough</span></span><span class="text-xs text-outline">Alt+Shift+5</span></button>
+           <button id="fmt-text-bold" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_bold</span><span data-i18n="fmt.text.bold">Bold</span></span><span class="text-xs text-outline">Ctrl+B</span></button>
+           <button id="fmt-text-italic" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_italic</span><span data-i18n="fmt.text.italic">Italic</span></span><span class="text-xs text-outline">Ctrl+I</span></button>
+           <button id="fmt-text-underline" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_underlined</span><span data-i18n="fmt.text.underline">Underline</span></span><span class="text-xs text-outline">Ctrl+U</span></button>
+           <button id="fmt-text-strike" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_strikethrough</span><span data-i18n="fmt.text.strike">Strikethrough</span></span><span class="text-xs text-outline">Alt+Shift+5</span></button>
          </div>
        </div>
        <!-- Alignment submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_left</span><span data-i18n="fmt.align">Alignment</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
-           <button id="fmt-align-left" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_left</span><span data-i18n="fmt.align.left">Left</span></span><span class="text-xs text-outline">Ctrl+Shift+L</span></button>
-           <button id="fmt-align-center" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_center</span><span data-i18n="fmt.align.center">Center</span></span><span class="text-xs text-outline">Ctrl+Shift+C</span></button>
-           <button id="fmt-align-right" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_right</span><span data-i18n="fmt.align.right">Right</span></span><span class="text-xs text-outline">Ctrl+Shift+R</span></button>
+           <button id="fmt-align-left" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_left</span><span data-i18n="fmt.align.left">Left</span></span><span class="text-xs text-outline">Ctrl+Shift+L</span></button>
+           <button id="fmt-align-center" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_center</span><span data-i18n="fmt.align.center">Center</span></span><span class="text-xs text-outline">Ctrl+Shift+C</span></button>
+           <button id="fmt-align-right" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_align_right</span><span data-i18n="fmt.align.right">Right</span></span><span class="text-xs text-outline">Ctrl+Shift+R</span></button>
            <div class="border-t border-outline-variant my-1"></div>
-           <button id="fmt-valign-top" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_top</span><span data-i18n="fmt.align.top">Top</span></button>
-           <button id="fmt-valign-middle" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_center</span><span data-i18n="fmt.align.middle">Middle</span></button>
-           <button id="fmt-valign-bottom" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_bottom</span><span data-i18n="fmt.align.bottom">Bottom</span></button>
+           <button id="fmt-valign-top" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_top</span><span data-i18n="fmt.align.top">Top</span></button>
+           <button id="fmt-valign-middle" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_center</span><span data-i18n="fmt.align.middle">Middle</span></button>
+           <button id="fmt-valign-bottom" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_align_bottom</span><span data-i18n="fmt.align.bottom">Bottom</span></button>
          </div>
        </div>
        <!-- Wrapping submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">wrap_text</span><span data-i18n="fmt.wrap">Wrapping</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
-           <button id="fmt-wrap-overflow" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">format_align_justify</span><span data-i18n="fmt.wrap.overflow">Overflow</span></button>
-           <button id="fmt-wrap-wrap" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">wrap_text</span><span data-i18n="fmt.wrap.wrap">Wrap</span></button>
-           <button id="fmt-wrap-clip" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">content_cut</span><span data-i18n="fmt.wrap.clip">Clip</span></button>
+           <button id="fmt-wrap-overflow" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">format_align_justify</span><span data-i18n="fmt.wrap.overflow">Overflow</span></button>
+           <button id="fmt-wrap-wrap" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">wrap_text</span><span data-i18n="fmt.wrap.wrap">Wrap</span></button>
+           <button id="fmt-wrap-clip" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">content_cut</span><span data-i18n="fmt.wrap.clip">Clip</span></button>
          </div>
        </div>
        <!-- Rotation (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">rotate_left</span><span data-i18n="fmt.rotation">Rotation</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <!-- Smart chips (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">smart_button</span><span data-i18n="fmt.smartChip">Smart chips</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Font size submenu (flyout) -->
        <div class="relative group">
-         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
            <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_size</span><span data-i18n="fmt.fontSize">Font size</span></span>
            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
          </button>
          <div id="fmt-fontsize-list" class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-32 z-50 max-h-[80vh] overflow-y-auto"></div>
        </div>
        <!-- Merge cells (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge">Merge cells</span></span>
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Convert to table (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">table</span><span data-i18n="fmt.convertTable">Convert to table</span></span>
          <span class="text-xs">Ctrl+Alt+T</span>
        </div>
        <!-- Conditional formatting (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">rule</span><span data-i18n="fmt.conditional">Conditional formatting</span></span>
        </div>
        <!-- Alternating colors (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_color_fill</span><span data-i18n="fmt.altColors">Alternating colors</span></span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Clear formatting (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_clear</span><span data-i18n="fmt.clear">Clear formatting</span></span>
          <span class="text-xs">Ctrl+\</span>
        </div>
