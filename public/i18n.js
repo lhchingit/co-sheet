@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * @file i18n.js
  * @description Locale loading + translation runtime. Fetches /locales/*.json,

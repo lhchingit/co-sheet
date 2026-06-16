@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * @file sheet-utils.js
  * @description Shared, dependency-free cell/coordinate helpers and HTML escaping.

@@ -1,3 +1,4 @@
+// @ts-check
 /*
  * sheet-functions.js
  * -----------------------------------------------------------------------------
@@ -216,5 +217,6 @@
   // Expose globally for app.js. Pre-sort by name so the dropdown order is
   // stable and alphabetical within each prefix match.
   FN.sort((a, b) => a.n.localeCompare(b.n));
-  window.SHEET_FUNCTIONS = FN;
+  const root = (typeof window !== 'undefined') ? window : globalThis;
+  root.SHEET_FUNCTIONS = FN;
 })();
