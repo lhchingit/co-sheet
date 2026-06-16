@@ -194,6 +194,8 @@ let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
 let socket = null; // WebSocket connection
 let clipboardData = null; // Stores copied cell data offset details
+let frozenRows = 0; // Number of top rows frozen via View > Freeze (0 = none)
+let frozenCols = 0; // Number of left columns frozen via View > Freeze (0 = none)
 
 // History stacks for local cell edits (snapshot based)
 const undoStack = [];
@@ -1181,6 +1183,13 @@ const applyGridZoom = (zoomValue) => {
       btn.classList.remove('bg-surface-variant');
     }
   });
+
+  // Mirror the active level as a check mark in the View > Zoom flyout.
+  document.querySelectorAll('.view-zoom-option').forEach(btn => {
+    const optionVal = parseInt(btn.getAttribute('data-zoom'), 10);
+    const check = btn.querySelector('.view-zoom-check');
+    if (check) check.textContent = optionVal === currentZoom ? 'check' : '';
+  });
 };
 
 /**
@@ -1716,6 +1725,93 @@ const renderSpreadsheetGrid = () => {
       updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
     });
   }
+
+  // Re-apply frozen rows/columns (if any) on the freshly built DOM.
+  applyFreeze();
+};
+
+// Width of the row-index gutter (the first grid column: `46px repeat(26, 100px)`).
+const GUTTER_WIDTH = 46;
+// Darker line drawn along the freeze boundary, matching Google Sheets.
+const FREEZE_BORDER = '2px solid #919191';
+
+/**
+ * Pins the first `frozenRows` rows and/or `frozenCols` columns in place using
+ * CSS sticky positioning, and draws a thicker boundary line at the freeze edge.
+ * Called at the end of every grid render so the freeze survives re-renders.
+ * Re-rendering with both counts at 0 simply rebuilds a normal grid.
+ */
+function applyFreeze() {
+  if (!frozenRows && !frozenCols) return;
+  const gridRoot = document.getElementById('grid-root');
+  if (!gridRoot) return;
+
+  const corner = gridRoot.firstElementChild;
+  const headerH = corner ? corner.offsetHeight : 21;
+
+  // Cumulative sticky `top` for each frozen row (rows can have variable height).
+  const rowTop = {};
+  if (frozenRows > 0) {
+    let off = headerH;
+    for (let r = 1; r <= frozenRows; r++) {
+      rowTop[r] = off;
+      const rh = gridRoot.querySelector(`[data-row-id="${r}"]`);
+      off += rh ? rh.offsetHeight : 21;
+    }
+  }
+  // Sticky `left` for a frozen column index (columns are a fixed 100px wide).
+  const colLeft = (colIndex) => GUTTER_WIDTH + colIndex * COLUMN_WIDTH;
+
+  // Frozen column headers: stick to the left as well as the top, and draw the
+  // boundary line on the last frozen column.
+  for (let c = 0; c < frozenCols; c++) {
+    const colHeader = gridRoot.querySelector(`[data-col-id="${getColLetter(c)}"]`);
+    if (!colHeader) continue;
+    colHeader.style.left = `${colLeft(c)}px`;
+    colHeader.style.zIndex = '25';
+    if (c === frozenCols - 1) colHeader.style.borderRight = FREEZE_BORDER;
+  }
+  // Frozen row headers: stick to the top as well as the left.
+  for (let r = 1; r <= frozenRows; r++) {
+    const rh = gridRoot.querySelector(`[data-row-id="${r}"]`);
+    if (!rh) continue;
+    rh.style.top = `${rowTop[r]}px`;
+    rh.style.zIndex = '25';
+    if (r === frozenRows) rh.style.borderBottom = FREEZE_BORDER;
+  }
+
+  // Data cells in the frozen band(s).
+  gridRoot.querySelectorAll('[data-cell-id]').forEach(el => {
+    const coord = parseCellCoord(el.getAttribute('data-cell-id'));
+    if (!coord) return;
+    const inFrozenRow = coord.row <= frozenRows;       // row is 1-based
+    const inFrozenCol = coord.colIndex < frozenCols;   // colIndex is 0-based
+    if (!inFrozenRow && !inFrozenCol) return;
+    el.style.position = 'sticky';
+    if (inFrozenRow) {
+      el.style.top = `${rowTop[coord.row]}px`;
+      if (coord.row === frozenRows) el.style.borderBottom = FREEZE_BORDER;
+    }
+    if (inFrozenCol) {
+      el.style.left = `${colLeft(coord.colIndex)}px`;
+      if (coord.colIndex === frozenCols - 1) el.style.borderRight = FREEZE_BORDER;
+    }
+    // Intersection cells sit above single-axis frozen cells; both sit above the
+    // scrolling body but below the sticky headers (z-20+).
+    el.style.zIndex = (inFrozenRow && inFrozenCol) ? '6' : '5';
+  });
+}
+
+/**
+ * Sets the freeze counts and rebuilds the grid so the change takes effect
+ * (a full rebuild clears any stale inline freeze styles from prior states).
+ * @param {number|null} rows - New frozen-row count, or null to leave unchanged.
+ * @param {number|null} cols - New frozen-column count, or null to leave unchanged.
+ */
+const setFreeze = (rows, cols) => {
+  if (rows != null) frozenRows = Math.max(0, rows);
+  if (cols != null) frozenCols = Math.max(0, cols);
+  renderSpreadsheetGrid();
 };
 
 /**
@@ -4018,7 +4114,7 @@ if (toolbarBorderBtn) {
 function closeAllMenus() {
   ['toolbar-align-menu', 'toolbar-valign-menu', 'toolbar-zoom-menu',
    'toolbar-font-menu', 'toolbar-font-size-menu',
-   'menu-file-dropdown', 'menu-edit-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
+   'menu-file-dropdown', 'menu-edit-dropdown', 'menu-view-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
    'lang-switch-menu', 'share-menu'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
@@ -4156,6 +4252,120 @@ document.querySelectorAll('.toolbar-zoom-option').forEach(btn => {
     }
   });
 });
+
+// View navigation dropdown. Zoom (wired to applyGridZoom) and Full screen are the
+// interactive entries; the remaining flyouts are greyed-out in the markup because
+// their underlying features aren't supported here. Toggling follows the same
+// click-to-open / click-to-close pattern as File/Edit/Insert/Format.
+const menuViewBtn = document.getElementById('menu-view-btn');
+const menuViewDropdown = document.getElementById('menu-view-dropdown');
+if (menuViewBtn && menuViewDropdown) {
+  menuViewBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = menuViewDropdown.classList.contains('hidden');
+    closeAllMenus();
+    if (willOpen) {
+      menuViewDropdown.classList.remove('hidden');
+      // Refresh the check mark so it reflects the current zoom each time it opens.
+      applyGridZoom(currentZoom);
+      // Refresh Freeze labels/checks from the active cell + current freeze state.
+      updateFreezeMenu();
+    }
+  });
+
+  // Zoom flyout options reuse the existing grid zoom logic.
+  menuViewDropdown.querySelectorAll('.view-zoom-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const value = parseInt(btn.getAttribute('data-zoom'), 10);
+      if (!isNaN(value)) applyGridZoom(value);
+      menuViewDropdown.classList.add('hidden');
+    });
+  });
+
+  // Full screen: toggle the browser Fullscreen API on the whole document.
+  const viewFullscreenBtn = document.getElementById('view-fullscreen');
+  if (viewFullscreenBtn) viewFullscreenBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menuViewDropdown.classList.add('hidden');
+    if (!document.fullscreenElement) {
+      const root = document.documentElement;
+      if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
+    } else if (document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  // Display ▸ Formula bar: show/hide the formula bar row (checked by default).
+  // The menu stays open so the check-mark change is visible immediately.
+  const viewFormulaBarBtn = document.getElementById('view-display-formulabar');
+  if (viewFormulaBarBtn) viewFormulaBarBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const formulaBar = document.getElementById('formula-bar');
+    const check = viewFormulaBarBtn.querySelector('.view-display-check');
+    if (!formulaBar) return;
+    const willHide = formulaBar.style.display !== 'none';
+    formulaBar.style.display = willHide ? 'none' : '';
+    if (check) check.textContent = willHide ? '' : 'check';
+  });
+
+  // Display ▸ Gridlines: toggle the light-gray spreadsheet gridlines (checked by
+  // default) via the .gridlines-off class on the grid container.
+  const viewGridlinesBtn = document.getElementById('view-display-gridlines');
+  if (viewGridlinesBtn) viewGridlinesBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const gridRoot = document.getElementById('grid-root');
+    const check = viewGridlinesBtn.querySelector('.view-display-check');
+    if (!gridRoot) return;
+    const nowOff = gridRoot.classList.toggle('gridlines-off');
+    if (check) check.textContent = nowOff ? '' : 'check';
+  });
+
+  // Freeze flyout: the 0/1/2 entries freeze a fixed count; the "up to" entry
+  // freezes through the active cell's row/column. Labels and check marks are
+  // refreshed from the active cell each time the View menu opens.
+  const freezeOpts = menuViewDropdown.querySelectorAll('.view-freeze-opt');
+  const updateFreezeMenu = () => {
+    const coord = parseCellCoord(activeCellId || selectionStartCellId || 'A1') || parseCellCoord('A1');
+    const activeRow = coord.row;                 // 1-based row of the active cell
+    const activeColLetter = coord.colLetter;     // e.g. "C"
+    const activeColCount = coord.colIndex + 1;   // columns up to & including it
+    const rowUpto = document.getElementById('view-freeze-row-upto');
+    const colUpto = document.getElementById('view-freeze-col-upto');
+    if (rowUpto) rowUpto.setAttribute('data-n', String(activeRow));
+    if (colUpto) colUpto.setAttribute('data-n', String(activeColCount));
+
+    freezeOpts.forEach(btn => {
+      const axis = btn.getAttribute('data-axis');
+      const n = parseInt(btn.getAttribute('data-n'), 10);
+      const labelEl = btn.querySelector('.view-freeze-label');
+      const checkEl = btn.querySelector('.view-freeze-check');
+      const isUpto = btn.id.endsWith('-upto');
+      if (axis === 'row') {
+        if (isUpto) labelEl.innerHTML = t('view.freeze.upToRow', { n: `<strong>${activeRow}</strong>` });
+        else labelEl.textContent = t('view.freeze.rowCount', { n });
+        const checked = isUpto ? (frozenRows > 2 && frozenRows === activeRow) : (frozenRows === n);
+        checkEl.textContent = checked ? 'check' : '';
+      } else {
+        if (isUpto) labelEl.innerHTML = t('view.freeze.upToCol', { col: `<strong>${activeColLetter}</strong>` });
+        else labelEl.textContent = t('view.freeze.colCount', { n });
+        const checked = isUpto ? (frozenCols > 2 && frozenCols === activeColCount) : (frozenCols === n);
+        checkEl.textContent = checked ? 'check' : '';
+      }
+    });
+  };
+
+  freezeOpts.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const axis = btn.getAttribute('data-axis');
+      const n = parseInt(btn.getAttribute('data-n'), 10);
+      if (isNaN(n)) return;
+      if (axis === 'row') setFreeze(n, null); else setFreeze(null, n);
+      menuViewDropdown.classList.add('hidden');
+    });
+  });
+}
 
 // Toggle the Select Font dropdown menu visibility
 const toolbarFontBtn = document.getElementById('toolbar-font-btn');
@@ -4321,6 +4531,15 @@ window.addEventListener('click', (e) => {
   if (menuEditDropdown && !menuEditDropdown.classList.contains('hidden')) {
     if (menuEditBtn && !menuEditBtn.contains(e.target) && !menuEditDropdown.contains(e.target)) {
       menuEditDropdown.classList.add('hidden');
+    }
+  }
+
+  // Dismiss View menu dropdown if clicking outside
+  const menuViewDropdownEl = document.getElementById('menu-view-dropdown');
+  const menuViewBtnEl = document.getElementById('menu-view-btn');
+  if (menuViewDropdownEl && !menuViewDropdownEl.classList.contains('hidden')) {
+    if (menuViewBtnEl && !menuViewBtnEl.contains(e.target) && !menuViewDropdownEl.contains(e.target)) {
+      menuViewDropdownEl.classList.add('hidden');
     }
   }
 
