@@ -315,10 +315,9 @@
         /* Value-filter visuals (Data ▸ Create a filter). The filtered column
            header and every row header across the filter range get a light-green
            tint so the filter's scope is obvious, and the first cell of the column
-           hosts the funnel icon. These single-class tints sit before the
-           selection-header rules below, so selecting the filtered COLUMN still
-           repaints its header blue; row headers in the scope instead darken to a
-           deeper green when selected (the 3-class rule just below). */
+           hosts the funnel icon. Selecting a filtered header (the column header
+           or any row header in the scope) darkens it to a deeper green rather
+           than the usual selection blue — see the 3-class rule just below. */
         .grid-header.filter-col-header {
             background-color: #e6f4ea;
             color: #188038;
@@ -326,12 +325,14 @@
         .grid-header.filter-row-header {
             background-color: #e6f4ea;
         }
-        /* When a filtered row header is ALSO part of an active selection (e.g. the
-           user selects another column, highlighting every row header), it stays
-           green rather than turning blue, but darkens to signal the selection.
-           The 3-class selector outranks .active-header / .header-selected below. */
+        /* When a filtered header (the column header itself, or any row header in
+           the scope) is ALSO part of an active selection, it stays green rather
+           than turning blue, but darkens to signal the selection. The 3-class
+           selectors outrank .active-header / .header-selected below. */
         .grid-header.filter-row-header.active-header,
-        .grid-header.filter-row-header.header-selected {
+        .grid-header.filter-row-header.header-selected,
+        .grid-header.filter-col-header.active-header,
+        .grid-header.filter-col-header.header-selected {
             background-color: #a8dab5;
             color: #0b5d2e;
             font-weight: 700;
