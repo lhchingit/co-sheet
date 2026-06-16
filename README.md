@@ -60,7 +60,20 @@ type-check the existing JavaScript (`npm run typecheck`); the code is not compil
 
 ```
 co-sheet-1/
-├── server.js              # Express app, OIDC, REST API, WebSocket server, DB layer
+├── server.js              # App composition: Express wiring, OIDC, route handlers, WebSocket server
+├── db/                    # Data-access layer — all SQL lives here, behind per-table repositories
+│   ├── pool.js            # Connection pool (real pg) / file-backed test mock; STORE_PATH
+│   ├── schema.js          # initDatabase: table DDL + default-workbook seed
+│   ├── users.js           # users (permissions directory)
+│   ├── files.js           # files registry (drive)
+│   ├── shares.js          # file_shares (view/edit grants)
+│   ├── stars.js           # file_stars (per-user favourites)
+│   ├── versions.js        # workbook_versions (autosave/restore snapshots)
+│   └── workbook.js        # workbook_state (persisted cell/sheet state)
+├── services/              # Business logic shared by the REST routes and the WebSocket handler
+│   ├── cellService.js     # Cell payload validation + the canonical cell write
+│   ├── sheetService.js    # Sheet operations (add/delete/copy/rename/color/hide/unhide/reorder)
+│   └── validators.js      # Shared pure validators (sheet name, hex color)
 ├── package.json
 ├── tsconfig*.json         # Opt-in TypeScript type-checking config (no emit, no build)
 ├── .env.example           # Environment template (copy to .env)
@@ -81,6 +94,32 @@ co-sheet-1/
 ├── k8s/                   # Kubernetes manifests (namespace, secrets, postgres, app, ingress)
 └── docs/                  # Design specs and implementation plans
 ```
+
+### Architecture
+
+The server is organized in layers, so request handlers stay thin and the same
+business logic backs both transports:
+
+```
+HTTP routes  ─┐
+              ├─►  services/  ─►  db/  ─►  PostgreSQL (or the test mock)
+WebSocket    ─┘   (logic)        (SQL)
+```
+
+- **Transport (`server.js`)** — Express route handlers and the WebSocket message
+  handler. These parse input, then delegate; they hold no SQL.
+- **Services (`services/`)** — transport-agnostic business logic (validation +
+  in-memory state mutation). A cell edit or a sheet operation runs the *same*
+  service code whether it arrives over REST or the WebSocket, so the two paths
+  cannot drift. Persistence, broadcasting, and access control are orchestrated by
+  the caller, which differs by transport.
+- **Data access (`db/`)** — one repository module per table; all SQL is confined
+  here. The connection layer swaps in a file-backed mock under `NODE_ENV=test`, so
+  the suite runs without PostgreSQL.
+- **Middleware** — authentication (`ensureAuthenticated` / `ensureAdmin`) and
+  per-file authorization (`requireFileAccess`, which delegates to `canViewFile` /
+  `canModifyFile`) gate routes before the handler runs. WebSocket connections
+  compute an equivalent `canEdit` flag once at connect time.
 
 ---
 
