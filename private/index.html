@@ -284,6 +284,14 @@
             white-space: nowrap;
             overflow: visible;
         }
+        /* Gridlines toggle (View ▸ Display ▸ Gridlines). When #grid-root carries
+           .gridlines-off, the per-cell light-gray right/bottom gridlines become
+           transparent. Selection visuals are unaffected because they paint with
+           inset box-shadows, not the cell border color. */
+        #grid-root.gridlines-off .grid-cell {
+            border-right-color: transparent;
+            border-bottom-color: transparent;
+        }
         .presence-tag {
             position: absolute;
             top: -16px;
@@ -616,7 +624,97 @@
        </button>
      </div>
    </div>
-<button class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.view">View</button>
+<!-- View menu item with dropdown options. Zoom (wired to the existing grid zoom)
+        and Full screen are interactive; the flyout entries whose underlying feature
+        is not supported here (Display, Freeze, Group, Comments, Hidden sheets) are
+        greyed-out like the unsupported entries in the File/Format menus. -->
+   <div class="relative inline-block">
+     <button id="menu-view-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.view">View</button>
+     <div id="menu-view-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
+       <!-- Display submenu (flyout): Formula bar / Gridlines toggles are wired;
+            Formulas and Protected ranges are greyed-out (unsupported). -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility</span><span data-i18n="view.display">Display</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <!-- Formula bar: toggles the formula bar row; checked by default -->
+           <button id="view-display-formulabar" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="view-display-check material-symbols-outlined text-[18px] w-[18px] text-primary">check</span><span data-i18n="view.display.formulaBar">Formula bar</span>
+           </button>
+           <!-- Gridlines: toggles the light-gray spreadsheet gridlines; checked by default -->
+           <button id="view-display-gridlines" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+             <span class="view-display-check material-symbols-outlined text-[18px] w-[18px] text-primary">check</span><span data-i18n="view.display.gridlines">Gridlines</span>
+           </button>
+           <!-- Formulas (unsupported – greyed out) -->
+           <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+             <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px] w-[18px]"></span><span data-i18n="view.display.formulas">Formulas</span></span><span class="text-xs">Ctrl+`</span>
+           </div>
+           <!-- Protected ranges (unsupported – greyed out) -->
+           <div class="flex items-center gap-3 w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+             <span class="material-symbols-outlined text-[18px] w-[18px]"></span><span data-i18n="view.display.protectedRanges">Protected ranges</span>
+           </div>
+         </div>
+       </div>
+       <!-- Freeze submenu (flyout): pin the first N rows / columns. The "up to"
+            entry is built dynamically from the active cell each time it opens. -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">grid_on</span><span data-i18n="view.freeze">Freeze</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <button id="view-freeze-row-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-row-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="row"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <div class="border-t border-outline-variant my-1"></div>
+           <button id="view-freeze-col-0" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="0"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-1" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="1"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-2" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col" data-n="2"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+           <button id="view-freeze-col-upto" class="view-freeze-opt flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-axis="col"><span class="view-freeze-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span class="view-freeze-label"></span></button>
+         </div>
+       </div>
+       <!-- Group (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">grid_view</span><span data-i18n="view.group">Group</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Comments (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">view_agenda</span><span data-i18n="view.comments">Comments</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Hidden sheets (unsupported – greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-md text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">visibility_off</span><span data-i18n="view.hiddenSheets">Hidden sheets</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Zoom submenu (flyout) – wired to the existing grid zoom -->
+       <div class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">zoom_in</span><span data-i18n="view.zoom">Zoom</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-40 z-50">
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="50"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>50%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="75"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>75%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="90"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>90%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="100"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>100%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="125"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>125%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="150"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>150%</span></button>
+           <button class="view-zoom-option flex items-center gap-3 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant" data-zoom="200"><span class="view-zoom-check material-symbols-outlined text-[18px] w-[18px] text-primary"></span><span>200%</span></button>
+         </div>
+       </div>
+       <!-- Full screen: toggles the browser Fullscreen API -->
+       <button id="view-fullscreen" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">fullscreen</span><span data-i18n="view.fullscreen">Full screen</span></span>
+       </button>
+     </div>
+   </div>
 <!-- Insert menu item with dropdown options -->
    <div class="relative inline-block">
      <button id="menu-insert-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.insert">Insert</button>
