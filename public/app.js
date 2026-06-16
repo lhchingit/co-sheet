@@ -4342,12 +4342,12 @@ if (menuViewBtn && menuViewDropdown) {
       const checkEl = btn.querySelector('.view-freeze-check');
       const isUpto = btn.id.endsWith('-upto');
       if (axis === 'row') {
-        if (isUpto) labelEl.innerHTML = t('view.freeze.upToRow', { n: `<strong>${activeRow}</strong>` });
+        if (isUpto) labelEl.innerHTML = t('view.freeze.upToRow', { n: activeRow });
         else labelEl.textContent = t('view.freeze.rowCount', { n });
         const checked = isUpto ? (frozenRows > 2 && frozenRows === activeRow) : (frozenRows === n);
         checkEl.textContent = checked ? 'check' : '';
       } else {
-        if (isUpto) labelEl.innerHTML = t('view.freeze.upToCol', { col: `<strong>${activeColLetter}</strong>` });
+        if (isUpto) labelEl.innerHTML = t('view.freeze.upToCol', { col: activeColLetter });
         else labelEl.textContent = t('view.freeze.colCount', { n });
         const checked = isUpto ? (frozenCols > 2 && frozenCols === activeColCount) : (frozenCols === n);
         checkEl.textContent = checked ? 'check' : '';
