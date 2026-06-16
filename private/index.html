@@ -312,6 +312,38 @@
             pointer-events: none;
             z-index: 5;
         }
+        /* Value-filter visuals (Data ▸ Create a filter). The filtered column
+           header and every row header across the filter range get a light-green
+           tint so the filter's scope is obvious, and the first cell of the column
+           hosts the funnel icon. Placed BEFORE the selection-header rules below so
+           an active row/column selection (active-header / header-selected) still
+           wins and repaints blue over the green tint. */
+        .grid-header.filter-col-header {
+            background-color: #e6f4ea;
+            color: #188038;
+        }
+        .grid-header.filter-row-header {
+            background-color: #e6f4ea;
+        }
+        /* Funnel button shown at the right edge of the filtered column's first
+           cell. Click opens the filter menu. */
+        .filter-icon {
+            position: absolute;
+            right: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            line-height: 1;
+            color: #188038;
+            cursor: pointer;
+            background-color: #e6f4ea;
+            border-radius: 3px;
+            padding: 1px;
+            z-index: 3;
+        }
+        .filter-icon:hover {
+            background-color: #cbe8d3;
+        }
         /* Active row and column header highlight styles */
         .grid-header.active-header {
             background-color: #e8f0fe;
@@ -934,10 +966,12 @@
          <span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
-       <!-- Create a filter (unsupported – greyed out) -->
-       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
-         <span class="material-symbols-outlined text-[18px]">filter_alt</span><span data-i18n="data.createFilter">Create a filter</span>
-       </div>
+       <!-- Create / remove filter (wired): toggles a single-column value filter
+            on the active cell's column. Label flips to "Remove filter" while one
+            is active (updated in app.js when the menu opens). -->
+       <button id="data-create-filter" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
+         <span class="material-symbols-outlined text-[18px]">filter_alt</span><span id="data-create-filter-label" data-i18n="data.createFilter">Create a filter</span>
+       </button>
        <!-- Create group-by view (unsupported – greyed out, flyout) -->
        <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">pivot_table_chart</span><span data-i18n="data.createGroupView">Create group by view</span></span>
