@@ -4114,7 +4114,7 @@ if (toolbarBorderBtn) {
 function closeAllMenus() {
   ['toolbar-align-menu', 'toolbar-valign-menu', 'toolbar-zoom-menu',
    'toolbar-font-menu', 'toolbar-font-size-menu',
-   'menu-file-dropdown', 'menu-edit-dropdown', 'menu-view-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown',
+   'menu-file-dropdown', 'menu-edit-dropdown', 'menu-view-dropdown', 'menu-insert-dropdown', 'menu-format-dropdown', 'menu-data-dropdown',
    'lang-switch-menu', 'share-menu'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
@@ -4605,6 +4605,15 @@ window.addEventListener('click', (e) => {
   if (menuFormatDropdown && !menuFormatDropdown.classList.contains('hidden')) {
     if (menuFormatBtn && !menuFormatBtn.contains(e.target) && !menuFormatDropdown.contains(e.target)) {
       menuFormatDropdown.classList.add('hidden');
+    }
+  }
+
+  // Dismiss Data menu dropdown if clicking outside
+  const menuDataDropdown = document.getElementById('menu-data-dropdown');
+  const menuDataBtn = document.getElementById('menu-data-btn');
+  if (menuDataDropdown && !menuDataDropdown.classList.contains('hidden')) {
+    if (menuDataBtn && !menuDataBtn.contains(e.target) && !menuDataDropdown.contains(e.target)) {
+      menuDataDropdown.classList.add('hidden');
     }
   }
 
@@ -6149,6 +6158,143 @@ if (menuFormatBtn && menuFormatDropdown) {
   wireFmt('fmt-wrap-clip',     () => act((id) => setCellTextWrap(id, 'clip')));
 }
 
+// Data menu: only "Sort sheet" is wired. Its flyout offers ascending/descending
+// sorts keyed on the column of the active cell; the two labels (and the bolded
+// column letter) are rebuilt from that column each time the menu opens. The
+// remaining entries are greyed-out placeholders in the markup with no handlers.
+const menuDataBtn = document.getElementById('menu-data-btn');
+const menuDataDropdown = document.getElementById('menu-data-dropdown');
+if (menuDataBtn && menuDataDropdown) {
+  // The column the sort keys on: the active cell's column (selection start as a
+  // fallback), defaulting to A so the labels always read sensibly.
+  const sortColIndex = () => {
+    const coord = parseCellCoord(activeCellId || selectionStartCellId || 'A1');
+    return coord ? coord.colIndex : 0;
+  };
+
+  // Refresh the two flyout labels (e.g. "Sort sheet by column F (A → Z)") with
+  // the active column's letter in bold. Set as HTML so the <strong> renders.
+  const updateDataSortMenu = () => {
+    const colLetter = getColLetter(sortColIndex());
+    const azBtn = document.getElementById('data-sort-az');
+    const zaBtn = document.getElementById('data-sort-za');
+    const azLabel = azBtn && azBtn.querySelector('.data-sort-label');
+    const zaLabel = zaBtn && zaBtn.querySelector('.data-sort-label');
+    if (azLabel) azLabel.innerHTML = t('data.sortSheet.az', { col: colLetter });
+    if (zaLabel) zaLabel.innerHTML = t('data.sortSheet.za', { col: colLetter });
+  };
+
+  // Compare two sort keys: numeric when both parse as numbers, otherwise a
+  // locale-aware string compare. Blanks always sink to the bottom regardless of
+  // direction (matching spreadsheet "Sort sheet" behaviour).
+  const compareSortKeys = (a, b, ascending) => {
+    const aEmpty = a === '' || a == null;
+    const bEmpty = b === '' || b == null;
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    const aStr = String(a), bStr = String(b);
+    const aNum = Number(aStr), bNum = Number(bStr);
+    let cmp;
+    if (aStr.trim() !== '' && bStr.trim() !== '' && !isNaN(aNum) && !isNaN(bNum)) {
+      cmp = aNum - bNum;
+    } else {
+      cmp = aStr.localeCompare(bStr);
+    }
+    return ascending ? cmp : -cmp;
+  };
+
+  // Reorder every non-frozen data row by the chosen column, packing the sorted
+  // rows contiguously below any frozen header rows (blank rows fall to the
+  // bottom). Whole rows move together; cell contents/styles are carried as-is.
+  const performSheetSort = (colIndex, ascending) => {
+    if (!canEditWorkbook || isHistoryMode) return;
+    const startRow = (frozenRows || 0) + 1;
+
+    // Group the populated cells of each sortable row, keyed by row number.
+    const rowMap = new Map(); // row -> { [colLetter]: cellCopy }
+    Object.keys(localCells).forEach((id) => {
+      const coord = parseCellCoord(id);
+      if (!coord || coord.row < startRow) return;
+      const cell = localCells[id];
+      const blank = !cell || (!cell.formula && (cell.value === '' || cell.value == null) &&
+        (!cell.style || Object.keys(cell.style).length === 0));
+      if (blank) return;
+      if (!rowMap.has(coord.row)) rowMap.set(coord.row, {});
+      rowMap.get(coord.row)[coord.colLetter] = JSON.parse(JSON.stringify(cell));
+    });
+    if (rowMap.size === 0) { menuDataDropdown.classList.add('hidden'); return; }
+
+    // Sort the rows by the active column's evaluated value.
+    const sortColLetter = getColLetter(colIndex);
+    const rows = [...rowMap.entries()].map(([row, cells]) => ({
+      cells,
+      key: getCellValue(`${sortColLetter}${row}`)
+    }));
+    rows.sort((a, b) => compareSortKeys(a.key, b.key, ascending));
+
+    // Lay the sorted rows out contiguously starting at the first non-frozen row.
+    const newState = {};
+    rows.forEach((r, i) => {
+      const targetRow = startRow + i;
+      Object.keys(r.cells).forEach((colLetter) => {
+        newState[`${colLetter}${targetRow}`] = r.cells[colLetter];
+      });
+    });
+
+    // Diff against the current state (same apply/broadcast/undo path as the
+    // Insert menu), so collaborators and the undo stack stay in sync.
+    const EMPTY = { formula: '', value: '', style: {} };
+    const oldIds = Object.keys(localCells).filter((id) => {
+      const coord = parseCellCoord(id);
+      return coord && coord.row >= startRow;
+    });
+    const before = {};
+    oldIds.forEach((id) => { before[id] = JSON.parse(JSON.stringify(localCells[id])); });
+    const affected = new Set([...oldIds, ...Object.keys(newState)]);
+    const changes = [];
+    affected.forEach((id) => {
+      const beforeCell = before[id] || { formula: '', value: '', style: {} };
+      const afterCell = newState[id] || EMPTY;
+      if (JSON.stringify(beforeCell) === JSON.stringify(afterCell)) return;
+      localCells[id] = JSON.parse(JSON.stringify(afterCell));
+      changes.push({ cellId: id, before: beforeCell, after: JSON.parse(JSON.stringify(afterCell)) });
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: 'cell-edit',
+          payload: { cellId: id, formula: afterCell.formula || '', value: afterCell.value || '', style: afterCell.style || {} }
+        }));
+      }
+    });
+
+    if (changes.length) recordHistoryAction({ type: 'multi', changes });
+    recalculateSheet();
+    renderSpreadsheetGrid();
+
+    const fb = document.getElementById('formula-bar-input');
+    if (fb && activeCellId) {
+      const cell = localCells[activeCellId];
+      fb.value = cell ? (cell.formula || cell.value || '') : '';
+    }
+    menuDataDropdown.classList.add('hidden');
+  };
+
+  menuDataBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = menuDataDropdown.classList.contains('hidden');
+    closeAllMenus();
+    if (willOpen) {
+      menuDataDropdown.classList.remove('hidden');
+      updateDataSortMenu();
+    }
+  });
+
+  const azBtn = document.getElementById('data-sort-az');
+  const zaBtn = document.getElementById('data-sort-za');
+  if (azBtn) azBtn.addEventListener('click', (e) => { e.stopPropagation(); performSheetSort(sortColIndex(), true); });
+  if (zaBtn) zaBtn.addEventListener('click', (e) => { e.stopPropagation(); performSheetSort(sortColIndex(), false); });
+}
+
 // Language switcher: toggle menu, apply selection, persist choice (Chinese default)
 const langSwitchBtn = document.getElementById('lang-switch-btn');
 const langSwitchMenu = document.getElementById('lang-switch-menu');
@@ -6224,8 +6370,10 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
     { btn: 'toolbar-color-fill',     isOpen: () => paletteOpen('fill') },
     { btn: 'menu-file-btn',          isOpen: () => !menuHidden('menu-file-dropdown') },
     { btn: 'menu-edit-btn',          isOpen: () => !menuHidden('menu-edit-dropdown') },
+    { btn: 'menu-view-btn',          isOpen: () => !menuHidden('menu-view-dropdown') },
     { btn: 'menu-insert-btn',        isOpen: () => !menuHidden('menu-insert-dropdown') },
     { btn: 'menu-format-btn',        isOpen: () => !menuHidden('menu-format-dropdown') },
+    { btn: 'menu-data-btn',          isOpen: () => !menuHidden('menu-data-dropdown') },
     { btn: 'lang-switch-btn',        isOpen: () => !menuHidden('lang-switch-menu') },
   ];
   const anyOpen = () => openers.some((o) => o.isOpen());
