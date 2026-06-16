@@ -6224,6 +6224,7 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
     { btn: 'toolbar-color-fill',     isOpen: () => paletteOpen('fill') },
     { btn: 'menu-file-btn',          isOpen: () => !menuHidden('menu-file-dropdown') },
     { btn: 'menu-edit-btn',          isOpen: () => !menuHidden('menu-edit-dropdown') },
+    { btn: 'menu-view-btn',          isOpen: () => !menuHidden('menu-view-dropdown') },
     { btn: 'menu-insert-btn',        isOpen: () => !menuHidden('menu-insert-dropdown') },
     { btn: 'menu-format-btn',        isOpen: () => !menuHidden('menu-format-dropdown') },
     { btn: 'lang-switch-btn',        isOpen: () => !menuHidden('lang-switch-menu') },
