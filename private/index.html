@@ -1333,8 +1333,11 @@
 <!-- Main Content (Formula Bar & Grid) -->
 <main class="flex-grow flex flex-col min-h-0 pb-[40px]">
 <!-- Formula Bar -->
-<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant px-2 shrink-0">
-<div id="name-box" class="w-12 text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
+<!-- pr-2 (not px-2): no left padding, so the name box sits flush at x=0 and its
+     46px width lines its right border up with the grid's row-index gutter below
+     (grid-template-columns: 46px …). -->
+<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant pr-2 shrink-0">
+<div id="name-box" class="w-[46px] text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
 <div class="px-2 text-primary h-full flex items-center">
 <span class="material-symbols-outlined leading-none" style="font-size: 20px;">function</span>
 </div>
