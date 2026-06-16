@@ -6419,6 +6419,16 @@ function applyFilter() {
     if (r >= headerRow) rh.classList.add('filter-row-header');
   });
 
+  // Green left/right edges on every cell of the filtered column (from the header
+  // row down), so the column is easy to identify. Columns are single letters, so
+  // the cell-id prefix matches exactly that column; the coord check is a guard.
+  gridRoot.querySelectorAll(`[data-cell-id^="${colLetter}"]`).forEach((cellEl) => {
+    const coord = parseCellCoord(cellEl.getAttribute('data-cell-id'));
+    if (coord && coord.colIndex === f.colIndex && coord.row >= headerRow) {
+      cellEl.classList.add('filter-col-cell');
+    }
+  });
+
   // Funnel icon on the column's first cell; click opens the filter menu.
   const headerCell = gridRoot.querySelector(`[data-cell-id="${colLetter}${headerRow}"]`);
   if (headerCell) {

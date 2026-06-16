@@ -325,6 +325,14 @@
         .grid-header.filter-row-header {
             background-color: #e6f4ea;
         }
+        /* Green left/right edges on every cell of the filtered column, so the
+           column the filter applies to is easy to pick out. The #grid-root prefix
+           lifts specificity above the gridlines-off rule, so the edges stay
+           visible even with gridlines turned off. */
+        #grid-root .grid-cell.filter-col-cell {
+            border-left: 1px solid #188038;
+            border-right: 1px solid #188038;
+        }
         /* When a filtered header (the column header itself, or any row header in
            the scope) is ALSO part of an active selection, it stays green rather
            than turning blue, but darkens to signal the selection. The 3-class
