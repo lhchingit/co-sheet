@@ -1154,6 +1154,37 @@ const getDefaultState = () => sheetState;
 const isValidFileId = (id) => id === 'default' || /^[a-f0-9]{24}$/.test(id);
 
 /**
+ * Express middleware factory that gates a `/api/files/:id/...` route on file
+ * access. It validates the `:id` (optionally rejecting the shared 'default'
+ * workbook) and then delegates to the same authorization helpers used elsewhere —
+ * canViewFile for 'view' level, canModifyFile for 'edit'. On success the validated
+ * id is stashed on `req.fileId`. This centralizes the id-validation + access check
+ * that each file route previously repeated inline.
+ *
+ * @param {{ level: 'view'|'edit', param?: string, allowDefault?: boolean, forbiddenMessage: string }} opts
+ * @returns {import('express').RequestHandler}
+ */
+const requireFileAccess = ({ level, param = 'id', allowDefault = true, forbiddenMessage }) => async (req, res, next) => {
+  const fileId = req.params[param];
+  if (!isValidFileId(fileId) || (!allowDefault && fileId === 'default')) {
+    return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
+  }
+  try {
+    const allowed = level === 'edit'
+      ? await canModifyFile(req.user, fileId)
+      : await canViewFile(req.user, fileId);
+    if (!allowed) {
+      return res.status(403).json({ error: 'forbidden', message: forbiddenMessage });
+    }
+  } catch (err) {
+    console.error('Error checking file access:', err.message);
+    return res.status(500).json({ error: 'internal_server_error', message: 'Failed to check file access' });
+  }
+  req.fileId = fileId;
+  next();
+};
+
+/**
  * Resolve the live workbook state object for a given file id, lazily loading and
  * caching non-default workbooks. Returns `sheetState` for the default workbook so
  * callers always observe the latest global state (e.g. after a version restore).
@@ -1314,17 +1345,11 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
  * The per-user file quota applies just like POST /api/files. Protected with
  * ensureAuthenticated middleware.
  */
-app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
+app.post('/api/files/:id/copy', ensureAuthenticated,
+  requireFileAccess({ level: 'view', forbiddenMessage: 'You do not have permission to copy this file' }),
+  async (req, res) => {
   try {
     const srcId = req.params.id;
-    if (!isValidFileId(srcId)) {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    // The caller must be able to open the source to copy it.
-    if (!(await canViewFile(req.user, srcId))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to copy this file' });
-    }
-
     // Resolve the copy's name (fall back to the source name with a generic suffix).
     let name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
     if (!name) {
@@ -1406,15 +1431,11 @@ app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
  * timestamps. The caller must be able to view the file. Protected with
  * ensureAuthenticated middleware.
  */
-app.get('/api/files/:id/details', ensureAuthenticated, async (req, res) => {
+app.get('/api/files/:id/details', ensureAuthenticated,
+  requireFileAccess({ level: 'view', forbiddenMessage: 'You do not have permission to view this file' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id)) {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canViewFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view this file' });
-    }
     const row = await filesRepo.getFileRow(id);
     if (!row) {
       return res.status(404).json({ error: 'not_found', message: 'File not found' });
@@ -1441,15 +1462,11 @@ app.get('/api/files/:id/details', ensureAuthenticated, async (req, res) => {
  * PATCH /api/files/:id
  * Renames a file. Body: { name: string }. Protected with ensureAuthenticated middleware.
  */
-app.patch('/api/files/:id', ensureAuthenticated, async (req, res) => {
+app.patch('/api/files/:id', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', forbiddenMessage: 'You do not have permission to modify this file' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id)) {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to modify this file' });
-    }
     const name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
     if (!name || name.length > 120) {
       return res.status(400).json({ error: 'bad_request', message: 'name must be 1-120 characters' });
@@ -1470,15 +1487,11 @@ app.patch('/api/files/:id', ensureAuthenticated, async (req, res) => {
  * Deletes a file and its workbook data. The legacy 'default' file cannot be deleted.
  * Protected with ensureAuthenticated middleware.
  */
-app.delete('/api/files/:id', ensureAuthenticated, async (req, res) => {
+app.delete('/api/files/:id', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', forbiddenMessage: 'You do not have permission to delete this file' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id)) {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to delete this file' });
-    }
     await filesRepo.deleteFile(id);
     await workbookRepo.deleteWorkbookState(id);
     await sharesRepo.deleteSharesByFile(id);
@@ -1531,15 +1544,11 @@ app.get('/api/users/search', ensureAuthenticated, async (req, res) => {
  * GET /api/files/:id/shares
  * Lists the users a file is shared with. Requires modify permission on the file.
  */
-app.get('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
+app.get('/api/files/:id/shares', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', allowDefault: false, forbiddenMessage: 'You do not have permission to view shares' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id) || id === 'default') {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view shares' });
-    }
     const shareRows = await sharesRepo.listSharesByFile(id);
     let users = [];
     if (shareRows.length) {
@@ -1562,15 +1571,11 @@ app.get('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
  * Shares a file with one or more existing users (view access). Requires modify
  * permission on the file. Unknown ids and the owner/sharer are skipped.
  */
-app.post('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
+app.post('/api/files/:id/shares', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', allowDefault: false, forbiddenMessage: 'You do not have permission to share this file' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id) || id === 'default') {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to share this file' });
-    }
     const userIds = (req.body && Array.isArray(req.body.userIds)) ? req.body.userIds : [];
     const cleaned = userIds.map((u) => String(u || '').trim().toLowerCase()).filter(Boolean);
     if (cleaned.length === 0) {
@@ -1600,15 +1605,11 @@ app.post('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
  * Changes an existing collaborator's role. 'owner' grants co-ownership (a file may
  * have multiple owners). Requires modify permission on the file.
  */
-app.patch('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res) => {
+app.patch('/api/files/:id/shares/:userId', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', allowDefault: false, forbiddenMessage: 'You do not have permission to change shares' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id) || id === 'default') {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to change shares' });
-    }
     const role = ['owner', 'editor', 'viewer'].includes(req.body && req.body.role) ? req.body.role : null;
     if (!role) {
       return res.status(400).json({ error: 'bad_request', message: "role must be 'owner', 'editor', or 'viewer'" });
@@ -1629,15 +1630,11 @@ app.patch('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res)
  * DELETE /api/files/:id/shares/:userId
  * Revokes a collaborator's access. Requires modify permission on the file.
  */
-app.delete('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res) => {
+app.delete('/api/files/:id/shares/:userId', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', allowDefault: false, forbiddenMessage: 'You do not have permission to change shares' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id) || id === 'default') {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to change shares' });
-    }
     const userId = String(req.params.userId || '').trim().toLowerCase();
     await sharesRepo.deleteShare(id, userId);
     res.json({ success: true });
@@ -1653,15 +1650,11 @@ app.delete('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res
  * with the link open it view-only; 'restricted' limits it to owner(s)/admins/shared
  * users. Requires modify permission on the file.
  */
-app.patch('/api/files/:id/access', ensureAuthenticated, async (req, res) => {
+app.patch('/api/files/:id/access', ensureAuthenticated,
+  requireFileAccess({ level: 'edit', allowDefault: false, forbiddenMessage: 'You do not have permission to change access' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id) || id === 'default') {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canModifyFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to change access' });
-    }
     const linkAccess = ['restricted', 'anyone'].includes(req.body && req.body.linkAccess) ? req.body.linkAccess : null;
     if (!linkAccess) {
       return res.status(400).json({ error: 'bad_request', message: "linkAccess must be 'restricted' or 'anyone'" });
@@ -1680,15 +1673,11 @@ app.patch('/api/files/:id/access', ensureAuthenticated, async (req, res) => {
  * personal, per-user favourite, so it only requires view access to the file (any
  * file the user can open, including the shared 'default' workbook).
  */
-app.put('/api/files/:id/star', ensureAuthenticated, async (req, res) => {
+app.put('/api/files/:id/star', ensureAuthenticated,
+  requireFileAccess({ level: 'view', forbiddenMessage: 'You do not have access to this file' }),
+  async (req, res) => {
   try {
     const id = req.params.id;
-    if (!isValidFileId(id)) {
-      return res.status(400).json({ error: 'bad_request', message: 'Invalid file id' });
-    }
-    if (!(await canViewFile(req.user, id))) {
-      return res.status(403).json({ error: 'forbidden', message: 'You do not have access to this file' });
-    }
     const userId = userIdentity(req.user);
     if (!userId) {
       return res.status(403).json({ error: 'forbidden', message: 'No user identity' });
