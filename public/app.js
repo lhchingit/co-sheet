@@ -197,6 +197,37 @@ let clipboardData = null; // Stores copied cell data offset details
 let frozenRows = 0; // Number of top rows frozen via View > Freeze (0 = none)
 let frozenCols = 0; // Number of left columns frozen via View > Freeze (0 = none)
 
+// Per-sheet column widths / row heights (px), keyed by sheet name then column
+// letter / row number. Populated from the server `init` payload and kept in sync
+// via `resize-update` broadcasts; an absent entry falls back to the defaults below.
+let colWidths = Object.create(null); // { [sheetName]: { [colLetter]: px } }
+let rowHeights = Object.create(null); // { [sheetName]: { [rowNumber]: px } }
+
+// Default track sizes — must match the base grid-template-columns / row min-height
+// in private/index.html (46px gutter + 100px columns, 21px rows).
+const DEFAULT_COL_WIDTH = 100;
+const DEFAULT_ROW_HEIGHT = 21;
+// Smallest size a column/row may be dragged to (mirrors dimensionService.MIN_SIZE).
+const MIN_DIMENSION = 20;
+
+/** Resolved width (px) of a column letter on the active sheet. */
+const getColWidth = (colLetter, sheetName = activeSheetName) => {
+  const m = colWidths[sheetName];
+  const w = m && m[colLetter];
+  return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
+};
+/** Resolved height (px) of a row number on the active sheet. */
+const getRowHeight = (row, sheetName = activeSheetName) => {
+  const m = rowHeights[sheetName];
+  const h = m && m[row];
+  return (typeof h === 'number' && isFinite(h)) ? h : DEFAULT_ROW_HEIGHT;
+};
+/** Whether the active sheet has any custom (non-default) row heights. */
+const sheetHasCustomRowHeights = (sheetName = activeSheetName) => {
+  const m = rowHeights[sheetName];
+  return !!(m && Object.keys(m).length);
+};
+
 // Per-sheet value filter (Data ▸ Create a filter). Keyed by sheet name; an entry
 // means a filter is active on that sheet's column. `hidden` holds the set of
 // value keys (the literal string '__BLANK__' for empty cells) that are currently
@@ -245,7 +276,7 @@ let canEditWorkbook = true;
 // a read-only client can't push changes even if a UI affordance slips through.
 const WB_STATE_CHANGING_TYPES = [
   'cell-edit', 'add-sheet', 'delete-sheet', 'copy-sheet', 'rename-sheet',
-  'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets'
+  'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets', 'resize'
 ];
 
 // Wrap socket.send to automatically inject sheetName in outgoing events. Applied
@@ -260,7 +291,7 @@ function applySendWrapper(sock) {
       if (!canEditWorkbook && msg && WB_STATE_CHANGING_TYPES.includes(msg.type)) {
         return;
       }
-      if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move') && msg.payload) {
+      if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move' || msg.type === 'resize') && msg.payload) {
         msg.payload.sheetName = activeSheetName;
       }
       return originalSend.call(this, JSON.stringify(msg));
@@ -329,6 +360,8 @@ function handleSocketMessage(event) {
       if (payload.sheetOrder) sheetOrder = payload.sheetOrder;
       if (payload.sheetColors) sheetColors = payload.sheetColors;
       if (payload.hiddenSheets) hiddenSheets = payload.hiddenSheets;
+      colWidths = (payload.colWidths && typeof payload.colWidths === 'object') ? payload.colWidths : Object.create(null);
+      rowHeights = (payload.rowHeights && typeof payload.rowHeights === 'object') ? payload.rowHeights : Object.create(null);
 
       if (payload.sheets && Object.keys(payload.sheets).length > 0) {
         Object.assign(localSheets, payload.sheets);
@@ -510,6 +543,18 @@ function handleSocketMessage(event) {
       const { sheetOrder: newOrder } = payload;
       sheetOrder = newOrder;
       renderSheetTabs();
+    }
+
+    // Handle a column-width / row-height change from any peer (or our own echo).
+    if (type === 'resize-update') {
+      const { dimension, sheetName, col, row, size } = payload;
+      const sheet = sheetName || 'Sheet1';
+      const map = dimension === 'col' ? colWidths : rowHeights;
+      if (!map[sheet]) map[sheet] = Object.create(null);
+      const key = dimension === 'col' ? col : row;
+      if (key != null) map[sheet][key] = size;
+      // Re-render only when the change lands on the sheet currently in view.
+      if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
 
     // User leaving connection event
@@ -1579,6 +1624,21 @@ const renderSpreadsheetGrid = () => {
     });
     colHeader.appendChild(menuBtn);
 
+    // Drag handle on the column's right boundary. Hovering it shows a col-resize
+    // cursor; dragging resizes the whole column (see startDimensionResize).
+    if (!isHistoryMode) {
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'col-resize-handle';
+      resizeHandle.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || !canEditWorkbook) return;
+        // Swallow the event so the header's column-select mousedown doesn't fire.
+        e.preventDefault();
+        e.stopPropagation();
+        startDimensionResize('col', colLetter, colHeader, e.clientX);
+      });
+      colHeader.appendChild(resizeHandle);
+    }
+
     gridRoot.appendChild(colHeader);
   }
 
@@ -1627,6 +1687,21 @@ const renderSpreadsheetGrid = () => {
     rowHeader.innerText = r;
     // Store row identifier for selection highlighting
     rowHeader.setAttribute('data-row-id', r);
+
+    // Drag handle on the row's bottom boundary (mirrors the column handle).
+    if (!isHistoryMode) {
+      const rowNum = r;
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'row-resize-handle';
+      resizeHandle.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || !canEditWorkbook) return;
+        e.preventDefault();
+        e.stopPropagation();
+        startDimensionResize('row', rowNum, rowHeader, e.clientY);
+      });
+      rowHeader.appendChild(resizeHandle);
+    }
+
     gridRoot.appendChild(rowHeader);
 
     // Cells A-Z for row
@@ -1730,6 +1805,9 @@ const renderSpreadsheetGrid = () => {
     }
   }
 
+  // Apply per-sheet column widths / row heights to the freshly built grid.
+  applyGridTemplate(gridRoot);
+
   // Re-apply the selection highlight (cell fill, overlay and header styling)
   // after the grid is rebuilt, so it survives re-renders — including a
   // full-column selection.
@@ -1762,6 +1840,117 @@ const GUTTER_WIDTH = 46;
 const FREEZE_BORDER = '2px solid #919191';
 
 /**
+ * Apply the active sheet's column widths (and any custom row heights) to the grid
+ * by writing explicit CSS grid templates. Columns are always written from the
+ * per-sheet widths (defaulting to 100px); row heights are only written when the
+ * sheet has custom heights — otherwise the base `grid-auto-rows: minmax(21px,auto)`
+ * rule is kept so rows still auto-grow with tall content. Skipped in history mode,
+ * where collapsed "unedited" bars break the 1-row-per-grid-track mapping.
+ * @param {HTMLElement} gridRoot
+ */
+function applyGridTemplate(gridRoot) {
+  if (isHistoryMode) {
+    gridRoot.style.gridTemplateColumns = '';
+    gridRoot.style.gridTemplateRows = '';
+    return;
+  }
+  // Columns: gutter + each column's resolved width.
+  const cols = [`${GUTTER_WIDTH}px`];
+  for (let c = 0; c < 26; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
+  gridRoot.style.gridTemplateColumns = cols.join(' ');
+
+  // Rows: only override when custom heights exist (keeps the common case on the
+  // cheap auto-rows path). The header band is the first track.
+  if (sheetHasCustomRowHeights()) {
+    const rows = ['minmax(21px, auto)'];
+    for (let r = 1; r <= TOTAL_ROWS; r++) {
+      const m = rowHeights[activeSheetName];
+      const h = m && m[r];
+      rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : 'minmax(21px, auto)');
+    }
+    gridRoot.style.gridTemplateRows = rows.join(' ');
+  } else {
+    gridRoot.style.gridTemplateRows = '';
+  }
+}
+
+// Active drag-resize state ({ dimension, key, headerEl, start, startSize, guide,
+// onMove, onUp }) or null when no resize is in progress.
+let dimensionResize = null;
+
+/**
+ * Begin a column-width / row-height drag from a header boundary handle. Shows a
+ * blue guide line that tracks the cursor; on release the new size is applied
+ * locally and broadcast (resize). Google-Sheets-style: the grid itself only
+ * reflows on commit, not during the drag.
+ * @param {'col'|'row'} dimension
+ * @param {string|number} key - column letter or row number being resized.
+ * @param {HTMLElement} headerEl - the header element for that column/row.
+ * @param {number} clientStart - clientX (col) or clientY (row) at mousedown.
+ */
+function startDimensionResize(dimension, key, headerEl, clientStart) {
+  const gridRoot = document.getElementById('grid-root');
+  if (!gridRoot || dimensionResize) return;
+
+  const isCol = dimension === 'col';
+  const startSize = isCol ? headerEl.offsetWidth : headerEl.offsetHeight;
+  // Offset of the boundary (right/bottom edge of the header) within #grid-root.
+  const boundaryStart = isCol
+    ? headerEl.offsetLeft + headerEl.offsetWidth
+    : headerEl.offsetTop + headerEl.offsetHeight;
+
+  // The guide line spans the full grid extent along the cross axis.
+  const guide = document.createElement('div');
+  guide.className = `grid-resize-guide ${isCol ? 'vertical' : 'horizontal'}`;
+  if (isCol) {
+    guide.style.left = `${boundaryStart}px`;
+    guide.style.top = '0';
+    guide.style.height = `${gridRoot.scrollHeight}px`;
+  } else {
+    guide.style.top = `${boundaryStart}px`;
+    guide.style.left = '0';
+    guide.style.width = `${gridRoot.scrollWidth}px`;
+  }
+  gridRoot.appendChild(guide);
+
+  document.body.classList.add(isCol ? 'col-resizing' : 'row-resizing');
+
+  let newSize = startSize;
+  const onMove = (e) => {
+    const delta = (isCol ? e.clientX : e.clientY) - clientStart;
+    newSize = Math.max(MIN_DIMENSION, Math.round(startSize + delta));
+    const pos = boundaryStart + (newSize - startSize);
+    if (isCol) guide.style.left = `${pos}px`;
+    else guide.style.top = `${pos}px`;
+  };
+
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('col-resizing', 'row-resizing');
+    if (guide.parentNode) guide.parentNode.removeChild(guide);
+    dimensionResize = null;
+
+    if (newSize !== startSize) {
+      // Apply locally for instant feedback, then broadcast for persistence + peers.
+      const map = isCol ? colWidths : rowHeights;
+      if (!map[activeSheetName]) map[activeSheetName] = Object.create(null);
+      map[activeSheetName][key] = newSize;
+      renderSpreadsheetGrid();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const payload = { dimension, size: newSize };
+        if (isCol) payload.col = key; else payload.row = key;
+        socket.send(JSON.stringify({ type: 'resize', payload }));
+      }
+    }
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  dimensionResize = { dimension, key };
+}
+
+/**
  * Pins the first `frozenRows` rows and/or `frozenCols` columns in place using
  * CSS sticky positioning, and draws a thicker boundary line at the freeze edge.
  * Called at the end of every grid render so the freeze survives re-renders.
@@ -1785,8 +1974,13 @@ function applyFreeze() {
       off += rh ? rh.offsetHeight : 21;
     }
   }
-  // Sticky `left` for a frozen column index (columns are a fixed 100px wide).
-  const colLeft = (colIndex) => GUTTER_WIDTH + colIndex * COLUMN_WIDTH;
+  // Sticky `left` for a frozen column index, summing the (possibly resized)
+  // widths of all columns before it (after the row-index gutter).
+  const colLeft = (colIndex) => {
+    let x = GUTTER_WIDTH;
+    for (let c = 0; c < colIndex; c++) x += getColWidth(getColLetter(c));
+    return x;
+  };
 
   // Frozen column headers: stick to the left as well as the top, and draw the
   // boundary line on the last frozen column.
