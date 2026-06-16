@@ -344,6 +344,9 @@ function handleSocketMessage(event) {
         localSheets[activeSheetName] = Object.create(null);
       }
 
+      // Restore any persisted value filters so they paint on the first render.
+      loadSheetFilters();
+
       renderSheetTabs();
       renderSpreadsheetGrid();
 
@@ -6370,11 +6373,48 @@ function updateDataFilterLabel() {
   label.textContent = t(active ? 'data.removeFilter' : 'data.createFilter');
 }
 
+// Filters are local view state (never broadcast), so they survive reloads via
+// localStorage rather than the workbook. Key by file id so each spreadsheet
+// keeps its own filters; the hidden Set is stored as an array (Sets don't
+// survive JSON).
+const FILTERS_STORAGE_KEY = `co-sheet-filters:${currentFileId || 'default'}`;
+
+function saveSheetFilters() {
+  try {
+    const out = Object.create(null);
+    for (const name of Object.keys(sheetFilters)) {
+      const f = sheetFilters[name];
+      out[name] = { colIndex: f.colIndex, hidden: Array.from(f.hidden) };
+    }
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(out));
+  } catch (err) {}
+}
+
+// Restore persisted filters into sheetFilters. Called once on init before the
+// first render so applyFilter() can paint them.
+function loadSheetFilters() {
+  try {
+    const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    sheetFilters = Object.create(null);
+    for (const name of Object.keys(parsed)) {
+      const f = parsed[name];
+      if (!f || typeof f.colIndex !== 'number') continue;
+      sheetFilters[name] = {
+        colIndex: f.colIndex,
+        hidden: new Set(Array.isArray(f.hidden) ? f.hidden : [])
+      };
+    }
+  } catch (err) {}
+}
+
 // Create a value filter on the given column (all values initially shown), then
 // re-render so the funnel/scope tint appear.
 function createSheetFilter(colIndex) {
   if (isHistoryMode) return;
   sheetFilters[activeSheetName] = { colIndex, hidden: new Set() };
+  saveSheetFilters();
   closeFilterMenu();
   renderSpreadsheetGrid();
 }
@@ -6382,6 +6422,7 @@ function createSheetFilter(colIndex) {
 // Remove the active sheet's filter and re-render (rows reappear, tint/funnel go).
 function removeSheetFilter() {
   delete sheetFilters[activeSheetName];
+  saveSheetFilters();
   closeFilterMenu();
   renderSpreadsheetGrid();
 }
@@ -6638,6 +6679,7 @@ function showFilterMenu(colIndex, anchorEl) {
       const hidden = new Set();
       checkboxes().forEach((cb) => { if (!cb.checked) hidden.add(cb.getAttribute('data-key')); });
       f.hidden = hidden;
+      saveSheetFilters();
       closeFilterMenu();
       renderSpreadsheetGrid();
     }
