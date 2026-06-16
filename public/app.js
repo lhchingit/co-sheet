@@ -7899,6 +7899,8 @@ function initGridScrollbars() {
   const vthumb = vbar.firstElementChild;
   const hthumb = hbar.firstElementChild;
   if (!vthumb || !hthumb) return;
+  const vcap = document.getElementById('grid-vscroll-cap'); // dummy column header
+  const hcap = document.getElementById('grid-hscroll-cap'); // dummy row header
 
   const BAR = 14;        // bar thickness, px — matches the CSS width/height
   const MIN_THUMB = 24;  // smallest thumb length, px
@@ -7955,7 +7957,8 @@ function initGridScrollbars() {
     // Track length from the viewport span (not the bar's own box, so a hidden
     // display:none bar still measures correctly when content reappears).
     const vTrack = viewport.clientHeight - hh - vCorner;
-    if (vVisible && vTrack > MIN_THUMB) {
+    const vShown = vVisible && vTrack > MIN_THUMB;
+    if (vShown) {
       const thumb = Math.max(MIN_THUMB, vTrack * (viewport.clientHeight / viewport.scrollHeight));
       vMetrics = { track: vTrack, thumb, scrollable: vScrollable };
       vthumb.style.height = `${thumb}px`;
@@ -7966,7 +7969,8 @@ function initGridScrollbars() {
     }
 
     const hTrack = viewport.clientWidth - gw - hCorner;
-    if (hVisible && hTrack > MIN_THUMB) {
+    const hShown = hVisible && hTrack > MIN_THUMB;
+    if (hShown) {
       const thumb = Math.max(MIN_THUMB, hTrack * (viewport.clientWidth / viewport.scrollWidth));
       hMetrics = { track: hTrack, thumb, scrollable: hScrollable };
       hthumb.style.width = `${thumb}px`;
@@ -7974,6 +7978,20 @@ function initGridScrollbars() {
     } else {
       hMetrics = null;
       hbar.classList.add('hidden');
+    }
+
+    // Dummy header caps: a column header (BAR wide × header tall) above the
+    // vertical bar, a row header (gutter wide × BAR tall) left of the horizontal
+    // bar. Shown only alongside their bar.
+    if (vcap) {
+      vcap.style.width = `${BAR}px`;
+      vcap.style.height = `${hh}px`;
+      vcap.classList.toggle('hidden', !vShown);
+    }
+    if (hcap) {
+      hcap.style.width = `${gw}px`;
+      hcap.style.height = `${BAR}px`;
+      hcap.classList.toggle('hidden', !hShown);
     }
 
     position();

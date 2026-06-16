@@ -163,6 +163,15 @@
         .grid-custom-scroll-thumb:hover { background-color: #9aa0a6; }
         .grid-custom-scroll-v .grid-custom-scroll-thumb { left: 0; width: 14px; }
         .grid-custom-scroll-h .grid-custom-scroll-thumb { top: 0; height: 14px; }
+
+        /* Dummy header caps closing the ends of the scrollbar lanes, styled like
+           .grid-header. The vertical bar's cap continues the column-header band
+           (bottom border); the horizontal bar's cap continues the row gutter
+           (right border). JS sets their size from the measured header. They sit
+           above the sticky headers (z 41 > 30). */
+        .grid-scroll-cap { position: absolute; z-index: 41; background-color: #f8f9fa; box-sizing: border-box; }
+        .grid-scroll-cap-v { top: 0; right: 0; border-bottom: 1px solid #c3c6d6; }
+        .grid-scroll-cap-h { left: 0; bottom: 0; border-right: 1px solid #c3c6d6; }
         /* Colored indicator bar under the text/fill color toolbar buttons,
            reflecting the active cell's current color (Google Sheets style). */
         .toolbar-color-swatch {
@@ -1378,6 +1387,11 @@
   </div>
   <div id="grid-vscroll" class="grid-custom-scroll grid-custom-scroll-v hidden"><div class="grid-custom-scroll-thumb"></div></div>
   <div id="grid-hscroll" class="grid-custom-scroll grid-custom-scroll-h hidden"><div class="grid-custom-scroll-thumb"></div></div>
+  <!-- Header-styled caps that close off the scrollbar lanes: a dummy column
+       header above the vertical bar, a dummy row header left of the horizontal
+       bar. Sized/positioned by initGridScrollbars(). -->
+  <div id="grid-vscroll-cap" class="grid-scroll-cap grid-scroll-cap-v hidden"></div>
+  <div id="grid-hscroll-cap" class="grid-scroll-cap grid-scroll-cap-h hidden"></div>
 </div>
 </main>
 <!-- BottomNavBar -->
