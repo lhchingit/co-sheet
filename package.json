@@ -4,6 +4,9 @@
   "description": "Real-time collaborative spreadsheet",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/**/*.test.js",
