@@ -129,6 +129,7 @@ if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test
           email: (params && params[2]) || null,
           role: (params && params[3]) || 'user',
           provider: (params && params[4]) || null,
+          picture: (params && params[5]) || null,
           created_at: now,
           last_login: now
         };
@@ -143,15 +144,16 @@ if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test
         if (row) { row.role = params[0]; writeUsers(list); }
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
       }
-      // Login touch update: UPDATE users SET username,email,provider,role,last_login WHERE id = $5
+      // Login touch update: UPDATE users SET username,email,provider,role,picture,last_login WHERE id = $6
       if (/UPDATE\s+["']?users["']?\s+SET/i.test(sql)) {
         const list = readUsers();
-        const row = list.find((u) => u.id === (params && params[4]));
+        const row = list.find((u) => u.id === (params && params[5]));
         if (row) {
           row.username = params[0];
           row.email = params[1];
           row.provider = params[2];
           row.role = params[3];
+          row.picture = params[4];
           row.last_login = new Date().toISOString();
           writeUsers(list);
         }

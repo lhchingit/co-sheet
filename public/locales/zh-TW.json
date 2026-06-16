@@ -315,6 +315,8 @@
   "perm.role": "角色",
   "perm.you": "你",
   "perm.empty": "目前還沒有使用者登入。",
+  "perm.noMatches": "沒有符合搜尋的使用者。",
+  "perm.searchPlaceholder": "依名稱或電子郵件搜尋",
   "perm.loadError": "無法載入使用者，請再試一次。",
   "perm.updated": "角色已更新",
   "perm.updateError": "無法更新角色，請再試一次。",

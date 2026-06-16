@@ -20,6 +20,7 @@
   let menuTargetId = null; // file id the overflow menu currently acts on
   let currentRole = 'user'; // the signed-in user's role ('user'|'admin'|'superadmin')
   let adminUsers = [];   // cached user list for the permissions view (re-rendered on lang change)
+  let userFilter = '';   // current permissions-table search term (lowercased)
   let canCreateFile = true; // whether the user may create another file (quota / role)
   let currentView = 'home'; // left-rail filter: 'home' (files I own) | 'shared' (shared with me) | 'starred' (files I starred)
 
@@ -419,6 +420,10 @@
     $('files-view').classList.add('hidden');
     $('admin-view').classList.remove('hidden');
     clearSelection();
+    // Reset the search each time the view is opened.
+    userFilter = '';
+    const search = /** @type {HTMLInputElement} */ ($('perm-search'));
+    if (search) search.value = '';
     loadUsers();
   };
 
@@ -430,11 +435,18 @@
   // Localized label for a role value.
   const roleLabel = (role) => t(`role.${role}`);
 
-  // Best-effort, locale-aware timestamp; falls back to the raw value.
+  // Best-effort timestamp formatted in the browser's local time zone; falls back
+  // to the raw value. A time-zone-naive string (e.g. "2026-06-16 10:00:00" from a
+  // Postgres TIMESTAMP column) is treated as UTC so it converts correctly to the
+  // viewer's zone; toLocaleString then renders in that local zone.
   const formatTime = (ts) => {
     if (!ts) return '';
     try {
-      const d = new Date(ts);
+      let s = ts;
+      if (typeof s === 'string' && !/(z|[+-]\d{2}:?\d{2})$/i.test(s.trim())) {
+        s = s.trim().replace(' ', 'T') + 'Z';
+      }
+      const d = new Date(s);
       if (isNaN(d.getTime())) return String(ts);
       return d.toLocaleString(getLang && getLang() === 'en' ? 'en-US' : 'zh-TW');
     } catch (e) { return String(ts); }
@@ -450,13 +462,27 @@
 
     if (!adminUsers.length) {
       wrap.classList.add('hidden');
+      empty.querySelector('p').textContent = t('perm.empty');
+      empty.classList.remove('hidden');
+      return;
+    }
+
+    // Apply the search term against username, email, and id.
+    const term = userFilter;
+    const rows = term
+      ? adminUsers.filter((u) => `${u.username || ''} ${u.email || ''} ${u.id || ''}`.toLowerCase().includes(term))
+      : adminUsers;
+
+    if (!rows.length) {
+      wrap.classList.add('hidden');
+      empty.querySelector('p').textContent = t('perm.noMatches');
       empty.classList.remove('hidden');
       return;
     }
     empty.classList.add('hidden');
     wrap.classList.remove('hidden');
 
-    adminUsers.forEach((u) => {
+    rows.forEach((u) => {
       const tr = document.createElement('tr');
       tr.className = 'border-b border-outline-variant last:border-0';
       tr.setAttribute('data-id', u.id);
@@ -471,17 +497,34 @@
         const youSuffix = u.self ? ` <span class="text-on-surface-variant">(${esc(t('perm.you'))})</span>` : '';
         roleCell = `<span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${badge}">${esc(roleLabel(u.role))}</span>${youSuffix}`;
       } else {
+        // Hide the chevron for the plain "General User" role (requirement: the
+        // dropdown caret is obscured when the current value is "user").
+        const caretClass = u.role === 'user' ? ' no-caret' : '';
         roleCell = `
-          <select class="role-select h-9 px-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary">
+          <select class="role-select${caretClass} h-9 px-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary">
             <option value="user"${u.role === 'user' ? ' selected' : ''}>${esc(t('role.user'))}</option>
             <option value="admin"${u.role === 'admin' ? ' selected' : ''}>${esc(t('role.admin'))}</option>
           </select>`;
       }
 
+      // Avatar: the colored initial always renders underneath; when the user has a
+      // provider picture (e.g. Google), it overlays the initial. If the image fails
+      // to load it hides itself, revealing the initial — no fragile inline escaping.
+      const img = u.picture
+        ? `<img src="${esc(u.picture)}" alt="" referrerpolicy="no-referrer"
+              class="absolute inset-0 w-full h-full rounded-full object-cover"
+              onerror="this.style.display='none'"/>`
+        : '';
+      const avatar = `
+        <span class="relative inline-flex w-8 h-8 shrink-0">
+          <span class="absolute inset-0 rounded-full bg-primary text-on-primary flex items-center justify-center text-xs font-medium">${esc(initial)}</span>
+          ${img}
+        </span>`;
+
       tr.innerHTML = `
         <td class="px-4 py-3">
           <div class="flex items-center gap-3">
-            <span class="w-8 h-8 shrink-0 rounded-full bg-primary text-on-primary flex items-center justify-center text-xs font-medium">${esc(initial)}</span>
+            ${avatar}
             <div class="min-w-0">
               <div class="font-medium text-on-surface truncate">${esc(name)}</div>
               <div class="text-xs text-on-surface-variant truncate">${esc(u.email || '')}</div>
@@ -656,8 +699,15 @@
     $('perm-tbody').addEventListener('change', (e) => {
       const sel = /** @type {HTMLSelectElement} */ (/** @type {Element} */ (e.target).closest('.role-select'));
       if (!sel) return;
+      // Keep the chevron hidden while the value is the plain "User" role.
+      sel.classList.toggle('no-caret', sel.value === 'user');
       const row = sel.closest('tr');
       if (row) patchRole(row.getAttribute('data-id'), sel.value, sel);
+    });
+    // Live search over the permissions table (name / email / id).
+    $('perm-search').addEventListener('input', (e) => {
+      userFilter = String(/** @type {HTMLInputElement} */ (e.target).value || '').trim().toLowerCase();
+      renderUsers();
     });
 
     // Language switch (dropdown).

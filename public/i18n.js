@@ -72,6 +72,10 @@ const translatePage = (lang) => {
     const entry = I18N[el.getAttribute('data-i18n-aria')];
     if (entry && entry[lang] != null) el.setAttribute('aria-label', entry[lang]);
   });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    const entry = I18N[el.getAttribute('data-i18n-placeholder')];
+    if (entry && entry[lang] != null) el.setAttribute('placeholder', entry[lang]);
+  });
   if (document.documentElement && typeof document.documentElement.setAttribute === 'function') {
     document.documentElement.setAttribute('lang', lang === 'en' ? 'en' : 'zh-Hant');
   }
