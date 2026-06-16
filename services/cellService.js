@@ -1,4 +1,5 @@
 // @ts-check
+import { isValidSheetName } from './validators.js';
 
 /**
  * @file services/cellService.js
@@ -8,17 +9,6 @@
  * Persistence, broadcasting, and access control are orchestrated by the callers,
  * which differ by transport.
  */
-
-// A sheet name is 2–30 letters/digits/spaces (Unicode-aware). Mirrors the validation
-// applied to cursor-move and the other sheet operations in the WebSocket handler.
-const SHEET_NAME_REGEX = /^[\p{L}\p{N} ]{2,30}$/u;
-
-/**
- * Whether a sheet name is structurally valid.
- * @param {*} name
- * @returns {boolean}
- */
-export const isValidSheetName = (name) => typeof name === 'string' && SHEET_NAME_REGEX.test(name);
 
 /**
  * Validate a cell edit payload: verifies types, formats, string lengths, and style

@@ -32,6 +32,7 @@ import * as workbookRepo from './db/workbook.js';
 // Service layer: transport-agnostic business logic shared by the REST routes and
 // the WebSocket handler.
 import * as cellService from './services/cellService.js';
+import * as sheetService from './services/sheetService.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -2247,93 +2248,54 @@ wss.on('connection', async (ws, req) => {
 
       // Handle sheet creation event.
       if (type === 'add-sheet') {
-        const { sheetName } = payload;
-        
-        // Validate sheetName is a string, and is alphanumeric (2 to 30 characters).
-        if (typeof sheetName === 'string' && /^[\p{L}\p{N} ]{2,30}$/u.test(sheetName)) {
-          if (!sheetState.sheets[sheetName]) {
-            // Initialize sheetState.sheets[sheetName] to a prototype-free object to prevent prototype pollution.
-            sheetState.sheets[sheetName] = Object.create(null);
-            
-            // Update sheet order list
-            if (!sheetState.sheetOrder.includes(sheetName)) {
-              sheetState.sheetOrder.push(sheetName);
-            }
-            
-            // Save updated state asynchronously and atomically to file store.
-            saveState();
-            
-            // Broadcast add-sheet event containing the new sheetName and sheetOrder to all clients.
-            broadcastToAll({
-              type: 'add-sheet',
-              payload: { sheetName, sheetOrder: sheetState.sheetOrder }
-            });
-          }
+        const result = sheetService.addSheet(sheetState, payload);
+        if (result.ok) {
+          // Save updated state asynchronously and atomically to file store.
+          saveState();
+
+          // Broadcast add-sheet event containing the new sheetName and sheetOrder to all clients.
+          broadcastToAll({
+            type: 'add-sheet',
+            payload: { sheetName: result.sheetName, sheetOrder: result.sheetOrder }
+          });
         }
       }
 
       // Handle sheet deletion event.
       if (type === 'delete-sheet') {
-        const { sheetName } = payload;
-        
-        // Validate sheet exists and we keep at least one visible sheet.
-        if (sheetState.sheets[sheetName] && sheetState.sheetOrder.length > 1) {
-          // Remove the sheet from memory and state lists
-          delete sheetState.sheets[sheetName];
-          sheetState.sheetOrder = sheetState.sheetOrder.filter(s => s !== sheetName);
-          if (sheetState.sheetColors[sheetName]) {
-            delete sheetState.sheetColors[sheetName];
-          }
-          sheetState.hiddenSheets = sheetState.hiddenSheets.filter(s => s !== sheetName);
-          
+        const result = sheetService.deleteSheet(sheetState, payload);
+        if (result.ok) {
           // Save updated state asynchronously and atomically to file store.
           saveState();
-          
-          // Switch users on deleted sheet to another visible sheet
+
+          // Switch users on the deleted sheet to another visible sheet (presence).
           for (const [id, info] of activeUsers) {
-            if (info.activeSheet === sheetName) {
+            if (info.activeSheet === result.sheetName) {
               const nextSheet = sheetState.sheetOrder.find(s => !sheetState.hiddenSheets.includes(s)) || 'Sheet1';
               info.activeSheet = nextSheet;
               info.activeCell = null;
             }
           }
-          
+
           // Broadcast the sheet deletion event to all clients.
-          broadcastToAll({ type: 'delete-sheet', payload: { sheetName } });
+          broadcastToAll({ type: 'delete-sheet', payload: { sheetName: result.sheetName } });
         }
       }
 
       // Handle sheet copy event.
       if (type === 'copy-sheet') {
-        const { sheetName } = payload;
-        
-        // Check if the source sheet exists.
-        if (sheetState.sheets[sheetName]) {
-          // Generate a unique copy name (e.g. "Sheet1 (Copy)" or "Sheet1 (Copy) 2")
-          let copyName = `${sheetName} (Copy)`;
-          let suffix = 2;
-          while (sheetState.sheets[copyName]) {
-            copyName = `${sheetName} (Copy) ${suffix}`;
-            suffix++;
-          }
-          
-          // Clone cells map securely
-          sheetState.sheets[copyName] = JSON.parse(JSON.stringify(sheetState.sheets[sheetName]));
-          
-          // Insert the copied sheet directly after the parent in the order list.
-          const originalIndex = sheetState.sheetOrder.indexOf(sheetName);
-          sheetState.sheetOrder.splice(originalIndex + 1, 0, copyName);
-          
+        const result = sheetService.copySheet(sheetState, payload);
+        if (result.ok) {
           // Save updated state asynchronously and atomically to file store.
           saveState();
-          
+
           // Broadcast add-sheet event with new sheetName, sheetOrder, and cloned cells to all clients.
           broadcastToAll({
             type: 'add-sheet',
-            payload: { 
-              sheetName: copyName, 
-              sheetOrder: sheetState.sheetOrder,
-              cells: sheetState.sheets[copyName]
+            payload: {
+              sheetName: result.sheetName,
+              sheetOrder: result.sheetOrder,
+              cells: result.cells
             }
           });
         }
@@ -2341,119 +2303,77 @@ wss.on('connection', async (ws, req) => {
 
       // Handle sheet rename event.
       if (type === 'rename-sheet') {
-        const { oldName, newName } = payload;
-        
-        // Validate oldName exists, newName is alphanumeric (2 to 30 characters), and newName is not already used.
-        if (sheetState.sheets[oldName] && typeof newName === 'string' && /^[\p{L}\p{N} ]{2,30}$/u.test(newName) && !sheetState.sheets[newName]) {
-          // Rename the sheet entry key
-          sheetState.sheets[newName] = sheetState.sheets[oldName];
-          delete sheetState.sheets[oldName];
-          
-          // Update order and hidden list mapping
-          sheetState.sheetOrder = sheetState.sheetOrder.map(s => s === oldName ? newName : s);
-          if (sheetState.sheetColors[oldName]) {
-            sheetState.sheetColors[newName] = sheetState.sheetColors[oldName];
-            delete sheetState.sheetColors[oldName];
-          }
-          sheetState.hiddenSheets = sheetState.hiddenSheets.map(s => s === oldName ? newName : s);
-          
+        const result = sheetService.renameSheet(sheetState, payload);
+        if (result.ok) {
           // Save updated state asynchronously and atomically to file store.
           saveState();
-          
-          // Update active users
+
+          // Update active users on the renamed sheet (presence).
           for (const [id, info] of activeUsers) {
-            if (info.activeSheet === oldName) {
-              info.activeSheet = newName;
+            if (info.activeSheet === result.oldName) {
+              info.activeSheet = result.newName;
             }
           }
-          
+
           // Broadcast rename-sheet event to all clients.
-          broadcastToAll({ type: 'rename-sheet', payload: { oldName, newName } });
+          broadcastToAll({ type: 'rename-sheet', payload: { oldName: result.oldName, newName: result.newName } });
         }
       }
 
       // Handle sheet tab color event.
       if (type === 'color-sheet') {
-        const { sheetName, color } = payload;
-        
-        // Verify sheet exists
-        if (sheetState.sheets[sheetName]) {
-          // Validate color is either null (reset) or a valid hex color format.
-          if (color === null || (typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color))) {
-            if (color === null) {
-              delete sheetState.sheetColors[sheetName];
-            } else {
-              sheetState.sheetColors[sheetName] = color;
-            }
-            
-            // Save updated state asynchronously and atomically to file store.
-            saveState();
-            
-            // Broadcast color-sheet event to all clients.
-            broadcastToAll({ type: 'color-sheet', payload: { sheetName, color } });
-          }
+        const result = sheetService.colorSheet(sheetState, payload);
+        if (result.ok) {
+          // Save updated state asynchronously and atomically to file store.
+          saveState();
+
+          // Broadcast color-sheet event to all clients.
+          broadcastToAll({ type: 'color-sheet', payload: { sheetName: result.sheetName, color: result.color } });
         }
       }
 
       // Handle sheet hide event.
       if (type === 'hide-sheet') {
-        const { sheetName } = payload;
-        
-        // Ensure sheet exists and is not already hidden
-        if (sheetState.sheets[sheetName] && !sheetState.hiddenSheets.includes(sheetName)) {
-          const visibleCount = sheetState.sheetOrder.filter(s => !sheetState.hiddenSheets.includes(s)).length;
-          // Ensure we don't hide the last visible sheet
-          if (visibleCount > 1) {
-            sheetState.hiddenSheets.push(sheetName);
-            
-            // Save updated state asynchronously and atomically to file store.
-            saveState();
-            
-            // Move active users on hidden sheet to another visible sheet
-            for (const [id, info] of activeUsers) {
-              if (info.activeSheet === sheetName) {
-                const nextSheet = sheetState.sheetOrder.find(s => !sheetState.hiddenSheets.includes(s)) || 'Sheet1';
-                info.activeSheet = nextSheet;
-                info.activeCell = null;
-              }
+        const result = sheetService.hideSheet(sheetState, payload);
+        if (result.ok) {
+          // Save updated state asynchronously and atomically to file store.
+          saveState();
+
+          // Move active users on the hidden sheet to another visible sheet (presence).
+          for (const [id, info] of activeUsers) {
+            if (info.activeSheet === result.sheetName) {
+              const nextSheet = sheetState.sheetOrder.find(s => !sheetState.hiddenSheets.includes(s)) || 'Sheet1';
+              info.activeSheet = nextSheet;
+              info.activeCell = null;
             }
-            
-            // Broadcast hide-sheet event to all clients.
-            broadcastToAll({ type: 'hide-sheet', payload: { sheetName } });
           }
+
+          // Broadcast hide-sheet event to all clients.
+          broadcastToAll({ type: 'hide-sheet', payload: { sheetName: result.sheetName } });
         }
       }
 
       // Handle sheet unhide event.
       if (type === 'unhide-sheet') {
-        const { sheetName } = payload;
-        
-        // Verify sheet is currently hidden
-        if (sheetState.hiddenSheets.includes(sheetName)) {
-          sheetState.hiddenSheets = sheetState.hiddenSheets.filter(s => s !== sheetName);
-          
+        const result = sheetService.unhideSheet(sheetState, payload);
+        if (result.ok) {
           // Save updated state asynchronously and atomically to file store.
           saveState();
-          
+
           // Broadcast unhide-sheet event to all clients.
-          broadcastToAll({ type: 'unhide-sheet', payload: { sheetName } });
+          broadcastToAll({ type: 'unhide-sheet', payload: { sheetName: result.sheetName } });
         }
       }
 
       // Handle sheet reordering event.
       if (type === 'reorder-sheets') {
-        const { sheetOrder } = payload;
-        
-        // Validate new sheet order structure and containing elements
-        if (Array.isArray(sheetOrder) && sheetOrder.length === sheetState.sheetOrder.length &&
-            sheetOrder.every(s => sheetState.sheetOrder.includes(s))) {
-          sheetState.sheetOrder = sheetOrder;
-          
+        const result = sheetService.reorderSheets(sheetState, payload);
+        if (result.ok) {
           // Save updated state asynchronously and atomically to file store.
           saveState();
-          
+
           // Broadcast reorder-sheets event with the new order list to all clients.
-          broadcastToAll({ type: 'reorder-sheets', payload: { sheetOrder } });
+          broadcastToAll({ type: 'reorder-sheets', payload: { sheetOrder: result.sheetOrder } });
         }
       }
     } catch (e) {
