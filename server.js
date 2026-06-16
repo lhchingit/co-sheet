@@ -33,6 +33,7 @@ import * as workbookRepo from './db/workbook.js';
 // the WebSocket handler.
 import * as cellService from './services/cellService.js';
 import * as sheetService from './services/sheetService.js';
+import * as dimensionService from './services/dimensionService.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -1086,8 +1087,12 @@ const loadState = async (key = 'default') => {
       
       const sheetColors = (parsed && parsed.sheetColors && typeof parsed.sheetColors === 'object') ? parsed.sheetColors : Object.create(null);
       const hiddenSheets = (parsed && Array.isArray(parsed.hiddenSheets)) ? parsed.hiddenSheets : [];
-      
-      const state = { sheets, sheetOrder, sheetColors, hiddenSheets };
+
+      // Per-sheet column widths / row heights (added later; absent on legacy docs).
+      const colWidths = sanitizeDimensionMap(parsed && parsed.colWidths);
+      const rowHeights = sanitizeDimensionMap(parsed && parsed.rowHeights);
+
+      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights };
       // Define a getter/setter proxy for legacy 'cells' compatibility pointing to the first visible sheet
       return setupCellsProxy(state);
     }
@@ -1103,10 +1108,34 @@ const loadState = async (key = 'default') => {
     sheets: freshSheets,
     sheetOrder: ['Sheet1', 'Sheet2'],
     sheetColors: Object.create(null),
-    hiddenSheets: []
+    hiddenSheets: [],
+    colWidths: Object.create(null),
+    rowHeights: Object.create(null)
   };
   // Define getter/setter proxy on the fresh state object pointing to first visible sheet (Sheet1).
   return setupCellsProxy(freshState);
+};
+
+/**
+ * Deep-sanitize a persisted per-sheet dimension map ({ [sheet]: { [key]: px } }).
+ * Returns a prototype-free copy keeping only finite-number sizes, dropping any
+ * `__proto__`/inherited keys so a tampered document can't pollute prototypes.
+ * @param {*} raw
+ * @returns {Object}
+ */
+const sanitizeDimensionMap = (raw) => {
+  const out = Object.create(null);
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [sheetName, sizes] of Object.entries(raw)) {
+    if (sheetName === '__proto__' || !sizes || typeof sizes !== 'object') continue;
+    const bucket = Object.create(null);
+    for (const [key, val] of Object.entries(sizes)) {
+      if (key === '__proto__') continue;
+      if (typeof val === 'number' && Number.isFinite(val)) bucket[key] = val;
+    }
+    out[sheetName] = bucket;
+  }
+  return out;
 };
 
 // Initialize the in-memory sheetState to null, to be populated on boot.
@@ -1322,7 +1351,9 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
       sheets: freshSheets,
       sheetOrder: ['Sheet1', 'Sheet2'],
       sheetColors: Object.create(null),
-      hiddenSheets: []
+      hiddenSheets: [],
+      colWidths: Object.create(null),
+      rowHeights: Object.create(null)
     };
 
     await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
@@ -1384,7 +1415,9 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       sheets: src.sheets || { Sheet1: {}, Sheet2: {} },
       sheetOrder: src.sheetOrder || ['Sheet1', 'Sheet2'],
       sheetColors: src.sheetColors || {},
-      hiddenSheets: src.hiddenSheets || []
+      hiddenSheets: src.hiddenSheets || [],
+      colWidths: src.colWidths || {},
+      rowHeights: src.rowHeights || {}
     }));
 
     const id = crypto.randomBytes(12).toString('hex');
@@ -1400,7 +1433,9 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       sheets: cachedSheets,
       sheetOrder: clonedState.sheetOrder,
       sheetColors: Object.assign(Object.create(null), clonedState.sheetColors),
-      hiddenSheets: clonedState.hiddenSheets
+      hiddenSheets: clonedState.hiddenSheets,
+      colWidths: sanitizeDimensionMap(clonedState.colWidths),
+      rowHeights: sanitizeDimensionMap(clonedState.rowHeights)
     }));
 
     // Optionally carry over the source's collaborators (never re-adding the new
@@ -1833,7 +1868,9 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       sheets,
       sheetOrder: Array.isArray(targetState.sheetOrder) ? targetState.sheetOrder : Object.keys(sheets),
       sheetColors: (targetState.sheetColors && typeof targetState.sheetColors === 'object') ? targetState.sheetColors : Object.create(null),
-      hiddenSheets: Array.isArray(targetState.hiddenSheets) ? targetState.hiddenSheets : []
+      hiddenSheets: Array.isArray(targetState.hiddenSheets) ? targetState.hiddenSheets : [],
+      colWidths: sanitizeDimensionMap(targetState.colWidths),
+      rowHeights: sanitizeDimensionMap(targetState.rowHeights)
     });
 
     // Save the updated state to the active workbook_state database
@@ -1851,6 +1888,8 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
         sheetOrder: sheetState.sheetOrder,
         sheetColors: sheetState.sheetColors,
         hiddenSheets: sheetState.hiddenSheets,
+        colWidths: sheetState.colWidths,
+        rowHeights: sheetState.rowHeights,
         cells: sheetState.cells,
         users: Array.from(activeUsers.entries()).map(([uid, info]) => ({
           userId: uid,
@@ -2095,6 +2134,8 @@ wss.on('connection', async (ws, req) => {
       sheetOrder: connWorkbook.sheetOrder,
       sheetColors: connWorkbook.sheetColors,
       hiddenSheets: connWorkbook.hiddenSheets,
+      colWidths: connWorkbook.colWidths,
+      rowHeights: connWorkbook.rowHeights,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
       users: Array.from(activeUsers.entries())
@@ -2163,7 +2204,8 @@ wss.on('connection', async (ws, req) => {
         'color-sheet',
         'hide-sheet',
         'unhide-sheet',
-        'reorder-sheets'
+        'reorder-sheets',
+        'resize'
       ];
       // Enforce file-level write access: clients without edit permission on this
       // file may still move their cursor (presence) but cannot change state.
@@ -2365,6 +2407,31 @@ wss.on('connection', async (ws, req) => {
 
           // Broadcast reorder-sheets event with the new order list to all clients.
           broadcastToAll({ type: 'reorder-sheets', payload: { sheetOrder: result.sheetOrder } });
+        }
+      }
+
+      // Handle column-width / row-height resize event.
+      if (type === 'resize') {
+        const dimension = payload && payload.dimension;
+        const result = dimension === 'col'
+          ? dimensionService.resizeColumn(sheetState, payload)
+          : dimension === 'row'
+            ? dimensionService.resizeRow(sheetState, payload)
+            : { ok: false };
+        if (result.ok) {
+          // Persist and broadcast the new size to all clients (including sender, so
+          // every peer applies the server-clamped value).
+          saveState();
+          broadcastToAll({
+            type: 'resize-update',
+            payload: {
+              dimension,
+              sheetName: result.sheetName,
+              col: result.col,
+              row: result.row,
+              size: result.size
+            }
+          });
         }
       }
     } catch (e) {

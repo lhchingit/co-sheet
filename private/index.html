@@ -434,6 +434,44 @@
         .grid-header.header-selected .col-header-menu:hover {
             background-color: rgba(255, 255, 255, 0.4);
         }
+        /* Invisible drag zones straddling each header's boundary. Hovering one
+           shows a resize cursor; dragging it resizes the whole column/row. They
+           sit above the header content (z 22) but the column-dropdown button
+           (centered, ~right:10px) stays clickable in the gap they don't cover. */
+        .col-resize-handle {
+            position: absolute;
+            top: 0;
+            right: -3px;
+            width: 6px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 22;
+        }
+        .row-resize-handle {
+            position: absolute;
+            left: 0;
+            bottom: -3px;
+            width: 100%;
+            height: 6px;
+            cursor: row-resize;
+            z-index: 22;
+        }
+        /* Guide line shown while dragging a boundary; it tracks the cursor and the
+           grid only reflows on release. It keeps the gridlines' light-gray color
+           (#dadce0) and is simply drawn thicker than the 1px cell gridlines. */
+        .grid-resize-guide {
+            position: absolute;
+            background-color: #dadce0;
+            z-index: 40;
+            pointer-events: none;
+        }
+        .grid-resize-guide.vertical { width: 4px; top: 0; }
+        .grid-resize-guide.horizontal { height: 4px; left: 0; }
+        /* Force the resize cursor across the whole page during a drag so it doesn't
+           flicker when the pointer leaves the thin handle. */
+        body.col-resizing, body.col-resizing * { cursor: col-resize !important; }
+        body.row-resizing, body.row-resizing * { cursor: row-resize !important; }
+        body.col-resizing, body.row-resizing { user-select: none; }
         /* Solid round "fill handle" dot at the bottom-right corner of a
            selection (single or multi-cell), matching Google Sheets. It is
            nudged inward so the circle overlaps the corner of the selection
