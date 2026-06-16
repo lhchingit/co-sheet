@@ -1,6 +1,5 @@
 // @ts-check
 import 'dotenv/config';
-import pg from 'pg';
 
 /**
  * @file server.js
@@ -18,6 +17,17 @@ import passport from 'passport';
 import { Strategy as OIDCStrategy } from 'passport-openidconnect';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
+
+// Database layer: the connection pool (real pg or test mock) and per-table
+// repository modules. All SQL lives behind these modules; server.js composes them.
+import { pool } from './db/pool.js';
+import { initDatabase } from './db/schema.js';
+import * as usersRepo from './db/users.js';
+import * as filesRepo from './db/files.js';
+import * as sharesRepo from './db/shares.js';
+import * as starsRepo from './db/stars.js';
+import * as versionsRepo from './db/versions.js';
+import * as workbookRepo from './db/workbook.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -138,23 +148,16 @@ async function upsertUser(user) {
   const email = user.email || null;
   const provider = user.provider || null;
 
-  const existingRes = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
-  const existing = existingRes.rows && existingRes.rows[0];
+  const existing = await usersRepo.findUserById(id);
 
   let role;
   if (existing) {
     if (envSuper) role = 'superadmin';
     else role = (existing.role === 'superadmin') ? 'admin' : (existing.role || 'user');
-    await pool.query(
-      'UPDATE users SET username = $1, email = $2, provider = $3, role = $4, last_login = CURRENT_TIMESTAMP WHERE id = $5',
-      [username, email, provider, role, id]
-    );
+    await usersRepo.updateUserProfile({ id, username, email, provider, role });
   } else {
     role = envSuper ? 'superadmin' : 'user';
-    await pool.query(
-      'INSERT INTO users (id, username, email, role, provider, last_login) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)',
-      [id, username, email, role, provider]
-    );
+    await usersRepo.insertUser({ id, username, email, role, provider });
   }
   return role;
 }
@@ -170,8 +173,7 @@ async function getUserRole(user) {
   if (!id) return 'user';
   if (isSuperAdminIdentity(user)) return 'superadmin';
   try {
-    const res = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
-    const row = res.rows && res.rows[0];
+    const row = await usersRepo.findUserById(id);
     if (!row) return 'user';
     return (row.role === 'superadmin') ? 'admin' : (row.role || 'user');
   } catch (e) {
@@ -186,9 +188,7 @@ async function getUserRole(user) {
  */
 async function getFileOwner(fileId) {
   try {
-    const r = await pool.query('SELECT created_by FROM files WHERE id = $1', [fileId]);
-    const row = r.rows && r.rows[0];
-    return row ? (row.created_by || null) : null;
+    return await filesRepo.getFileOwner(fileId);
   } catch (e) {
     return null;
   }
@@ -222,9 +222,7 @@ async function canModifyFile(user, fileId) {
 async function getShareRole(fileId, userId) {
   if (!userId) return null;
   try {
-    const r = await pool.query('SELECT role FROM file_shares WHERE file_id = $1 AND user_id = $2', [fileId, userId]);
-    const row = r.rows && r.rows[0];
-    return row ? (row.role || 'viewer') : null;
+    return await sharesRepo.getShareRole(fileId, userId);
   } catch (e) {
     return null;
   }
@@ -237,9 +235,8 @@ async function getShareRole(fileId, userId) {
  */
 async function getFileAccess(fileId) {
   try {
-    const r = await pool.query('SELECT link_access FROM files WHERE id = $1', [fileId]);
-    const row = r.rows && r.rows[0];
-    return row && row.link_access === 'anyone' ? 'anyone' : 'restricted';
+    const linkAccess = await filesRepo.getFileLinkAccess(fileId);
+    return linkAccess === 'anyone' ? 'anyone' : 'restricted';
   } catch (e) {
     return 'restricted';
   }
@@ -272,8 +269,8 @@ async function canViewFile(user, fileId) {
  */
 async function getSharedUserIds(fileId) {
   try {
-    const r = await pool.query('SELECT user_id FROM file_shares WHERE file_id = $1', [fileId]);
-    return (r.rows || []).map((x) => x.user_id);
+    const rows = await sharesRepo.listShareUserIds(fileId);
+    return rows.map((x) => x.user_id);
   } catch (e) {
     return [];
   }
@@ -287,8 +284,8 @@ async function getSharedUserIds(fileId) {
 async function getSharedFileIds(userId) {
   if (!userId) return new Set();
   try {
-    const r = await pool.query('SELECT file_id FROM file_shares WHERE user_id = $1', [userId]);
-    return new Set((r.rows || []).map((x) => x.file_id));
+    const rows = await sharesRepo.listSharedFileIds(userId);
+    return new Set(rows.map((x) => x.file_id));
   } catch (e) {
     return new Set();
   }
@@ -303,8 +300,8 @@ async function getSharedFileIds(userId) {
 async function getSharedRoleMap(userId) {
   if (!userId) return new Map();
   try {
-    const r = await pool.query('SELECT file_id, role FROM file_shares WHERE user_id = $1', [userId]);
-    return new Map((r.rows || []).map((x) => [x.file_id, x.role || 'viewer']));
+    const rows = await sharesRepo.listSharesByUser(userId);
+    return new Map(rows.map((x) => [x.file_id, x.role || 'viewer']));
   } catch (e) {
     return new Map();
   }
@@ -319,8 +316,8 @@ async function getSharedRoleMap(userId) {
 async function getStarredFileIds(userId) {
   if (!userId) return new Set();
   try {
-    const r = await pool.query('SELECT file_id FROM file_stars WHERE user_id = $1', [userId]);
-    return new Set((r.rows || []).map((x) => x.file_id));
+    const rows = await starsRepo.listStarredFileIds(userId);
+    return new Set(rows.map((x) => x.file_id));
   } catch (e) {
     return new Set();
   }
@@ -700,8 +697,8 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
 
     let name = 'Untitled spreadsheet';
     try {
-      const result = await pool.query('SELECT name FROM files WHERE id = $1', [fileId]);
-      if (result.rows && result.rows[0] && result.rows[0].name) name = result.rows[0].name;
+      const lookedUpName = await filesRepo.getFileName(fileId);
+      if (lookedUpName) name = lookedUpName;
     } catch (e) {
       // Fall back to the default name if the lookup fails.
     }
@@ -956,11 +953,9 @@ app.get('/api/me', ensureAuthenticated, async (req, res) => {
  */
 app.get('/api/users', ensureAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, username, email, role, provider, last_login FROM users ORDER BY last_login DESC'
-    );
+    const rows = await usersRepo.listUsers();
     const selfId = userIdentity(req.user);
-    const users = result.rows.map((r) => {
+    const users = rows.map((r) => {
       const superAdmin = SUPER_ADMIN_IDS.has(String(r.id).toLowerCase());
       // Env super admins always display as such; a stale stored 'superadmin' that
       // is no longer in the env is shown as 'admin' (mirrors getUserRole).
@@ -1000,535 +995,20 @@ app.patch('/api/users/:id', ensureAdmin, async (req, res) => {
     if (id === userIdentity(req.user)) {
       return res.status(400).json({ error: 'bad_request', message: 'You cannot change your own role' });
     }
-    const found = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
-    const target = found.rows && found.rows[0];
+    const target = await usersRepo.findUserById(id);
     if (!target) {
       return res.status(404).json({ error: 'not_found', message: 'User not found' });
     }
     if (SUPER_ADMIN_IDS.has(id) || target.role === 'superadmin') {
       return res.status(403).json({ error: 'forbidden', message: 'Super admins cannot be modified' });
     }
-    await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
+    await usersRepo.updateUserRole(id, role);
     res.json({ success: true, id, role });
   } catch (err) {
     console.error('Error updating user role:', err.message);
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to update role' });
   }
 });
-
-// Define the path to the store.json file where spreadsheet cell state is persisted.
-const STORE_PATH = process.env.STORE_PATH || path.join(__dirname, 'store.json');
-
-// Initialize database connection pool. If running in 'test' mode, mock it to use STORE_PATH.
-let pool;
-if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test') {
-  // Ensure NODE_ENV is set to 'test' so other modules/tests know we are in test mode.
-  process.env.NODE_ENV = 'test';
-  pool = {
-    // Intercept query calls to read/write from/to the local file specified by STORE_PATH,
-    // so that integration tests can run without a real PostgreSQL server.
-    async query(text, params) {
-      const sql = text.trim();
-
-      // Map a workbook key to its backing file. The legacy 'default' workbook lives
-      // at STORE_PATH (preserving existing test expectations); every other file id
-      // gets an isolated sidecar so per-file workbooks do not collide in test mode.
-      const pathForKey = (key) => {
-        if (!key || key === 'default') return STORE_PATH;
-        const safe = String(key).replace(/[^a-zA-Z0-9_-]/g, '_');
-        return `${STORE_PATH}.wb.${safe}.json`;
-      };
-      // Sidecar JSON file holding the file-manager registry (list of files).
-      const filesRegistryPath = `${STORE_PATH}.files.json`;
-      const readFilesRegistry = () => {
-        if (fs.existsSync(filesRegistryPath)) {
-          try { return JSON.parse(fs.readFileSync(filesRegistryPath, 'utf8')); } catch (e) { return []; }
-        }
-        return [];
-      };
-      const writeFilesRegistry = (list) => {
-        fs.writeFileSync(filesRegistryPath, JSON.stringify(list, null, 2), 'utf8');
-      };
-
-      // ----- files registry table mocks -----
-      if (/INSERT\s+INTO\s+["']?files["']?/i.test(sql)) {
-        const list = readFilesRegistry();
-        const row = {
-          id: params && params[0],
-          name: (params && params[1]) || 'Untitled spreadsheet',
-          created_at: new Date().toISOString(),
-          created_by: (params && params[2]) || 'anonymous',
-          link_access: 'restricted'
-        };
-        list.push(row);
-        writeFilesRegistry(list);
-        return { rows: [row] };
-      }
-      if (/UPDATE\s+["']?files["']?\s+SET\s+name/i.test(sql)) {
-        const list = readFilesRegistry();
-        const target = params && params[1];
-        const row = list.find(f => f.id === target);
-        if (row) { row.name = params[0]; writeFilesRegistry(list); }
-        return { rows: row ? [row] : [] };
-      }
-      if (/UPDATE\s+["']?files["']?\s+SET\s+link_access/i.test(sql)) {
-        const list = readFilesRegistry();
-        const target = params && params[1];
-        const row = list.find(f => f.id === target);
-        if (row) { row.link_access = params[0]; writeFilesRegistry(list); }
-        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
-      }
-      if (/DELETE\s+FROM\s+["']?files["']?/i.test(sql)) {
-        let list = readFilesRegistry();
-        const target = params && params[0];
-        const before = list.length;
-        list = list.filter(f => f.id !== target);
-        writeFilesRegistry(list);
-        // Also drop the workbook sidecar for that file.
-        const wbPath = pathForKey(target);
-        if (wbPath !== STORE_PATH && fs.existsSync(wbPath)) fs.unlinkSync(wbPath);
-        return { rows: [], rowCount: before - list.length };
-      }
-      if (/SELECT\s+.*\s+FROM\s+["']?files["']?/i.test(sql)) {
-        let list = readFilesRegistry();
-        if (/WHERE\s+id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter(f => f.id === params[0]);
-        } else if (/WHERE\s+created_by\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter(f => f.created_by === params[0]);
-        } else if (/ORDER\s+BY\s+created_at\s+DESC/i.test(sql)) {
-          list = [...list].reverse();
-        }
-        // Default link_access for rows persisted before the column existed.
-        return { rows: list.map((f) => ({ link_access: 'restricted', ...f })) };
-      }
-
-      // ----- users table mocks (permissions page) -----
-      const usersRegistryPath = `${STORE_PATH}.users.json`;
-      const readUsers = () => {
-        if (fs.existsSync(usersRegistryPath)) {
-          try { return JSON.parse(fs.readFileSync(usersRegistryPath, 'utf8')); } catch (e) { return []; }
-        }
-        return [];
-      };
-      const writeUsers = (list) => {
-        fs.writeFileSync(usersRegistryPath, JSON.stringify(list, null, 2), 'utf8');
-      };
-
-      if (/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?["']?users["']?/i.test(sql)) {
-        return { rows: [] };
-      }
-      if (/INSERT\s+INTO\s+["']?users["']?/i.test(sql)) {
-        const list = readUsers();
-        const now = new Date().toISOString();
-        const row = {
-          id: params && params[0],
-          username: (params && params[1]) || null,
-          email: (params && params[2]) || null,
-          role: (params && params[3]) || 'user',
-          provider: (params && params[4]) || null,
-          created_at: now,
-          last_login: now
-        };
-        if (!list.find((u) => u.id === row.id)) list.push(row);
-        writeUsers(list);
-        return { rows: [row] };
-      }
-      // Role-only update (PATCH /api/users/:id): UPDATE users SET role = $1 WHERE id = $2
-      if (/UPDATE\s+["']?users["']?\s+SET\s+role\s*=\s*\$1/i.test(sql)) {
-        const list = readUsers();
-        const row = list.find((u) => u.id === (params && params[1]));
-        if (row) { row.role = params[0]; writeUsers(list); }
-        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
-      }
-      // Login touch update: UPDATE users SET username,email,provider,role,last_login WHERE id = $5
-      if (/UPDATE\s+["']?users["']?\s+SET/i.test(sql)) {
-        const list = readUsers();
-        const row = list.find((u) => u.id === (params && params[4]));
-        if (row) {
-          row.username = params[0];
-          row.email = params[1];
-          row.provider = params[2];
-          row.role = params[3];
-          row.last_login = new Date().toISOString();
-          writeUsers(list);
-        }
-        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
-      }
-      if (/SELECT\s+.*\s+FROM\s+["']?users["']?/i.test(sql)) {
-        let list = readUsers();
-        if (/WHERE\s+id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((u) => u.id === params[0]);
-        } else if (/ORDER\s+BY\s+last_login\s+DESC/i.test(sql)) {
-          list = [...list].sort((a, b) => String(b.last_login).localeCompare(String(a.last_login)));
-        }
-        return { rows: list };
-      }
-
-      // ----- file_shares table mocks (file sharing) -----
-      const sharesRegistryPath = `${STORE_PATH}.shares.json`;
-      const readShares = () => {
-        if (fs.existsSync(sharesRegistryPath)) {
-          try { return JSON.parse(fs.readFileSync(sharesRegistryPath, 'utf8')); } catch (e) { return []; }
-        }
-        return [];
-      };
-      const writeShares = (list) => {
-        fs.writeFileSync(sharesRegistryPath, JSON.stringify(list, null, 2), 'utf8');
-      };
-
-      if (/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?["']?file_shares["']?/i.test(sql)) {
-        return { rows: [] };
-      }
-      if (/INSERT\s+INTO\s+["']?file_shares["']?/i.test(sql)) {
-        const list = readShares();
-        const role = (params && params[2]) || 'viewer';
-        const existing = list.find((s) => s.file_id === (params && params[0]) && s.user_id === (params && params[1]));
-        let row;
-        if (existing) {
-          // Mirror ON CONFLICT (file_id, user_id) DO UPDATE SET role = EXCLUDED.role.
-          existing.role = role;
-          row = existing;
-        } else {
-          row = { file_id: params && params[0], user_id: params && params[1], role, created_at: new Date().toISOString() };
-          list.push(row);
-        }
-        writeShares(list);
-        return { rows: [row] };
-      }
-      if (/UPDATE\s+["']?file_shares["']?\s+SET\s+role/i.test(sql)) {
-        const list = readShares();
-        const row = list.find((s) => s.file_id === (params && params[0]) && s.user_id === (params && params[1]));
-        if (row) { row.role = params[2]; writeShares(list); }
-        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
-      }
-      if (/DELETE\s+FROM\s+["']?file_shares["']?/i.test(sql)) {
-        let list = readShares();
-        const before = list.length;
-        if (/user_id\s*=\s*\$2/i.test(sql) && params && params.length > 1) {
-          list = list.filter((s) => !(s.file_id === params[0] && s.user_id === params[1]));
-        } else if (params && params.length > 0) {
-          list = list.filter((s) => s.file_id !== params[0]);
-        }
-        writeShares(list);
-        return { rows: [], rowCount: before - list.length };
-      }
-      if (/SELECT\s+.*\s+FROM\s+["']?file_shares["']?/i.test(sql)) {
-        let list = readShares();
-        // Combined filter (file_id AND user_id) must be checked first.
-        if (/file_id\s*=\s*\$1/i.test(sql) && /user_id\s*=\s*\$2/i.test(sql) && params && params.length > 1) {
-          list = list.filter((s) => s.file_id === params[0] && s.user_id === params[1]);
-        } else if (/WHERE\s+file_id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((s) => s.file_id === params[0]);
-        } else if (/WHERE\s+user_id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((s) => s.user_id === params[0]);
-        }
-        // Ensure a role is always present for older rows persisted before roles existed.
-        return { rows: list.map((s) => ({ role: 'viewer', ...s })) };
-      }
-
-      // ----- file_stars table mocks (per-user starred files) -----
-      const starsRegistryPath = `${STORE_PATH}.stars.json`;
-      const readStars = () => {
-        if (fs.existsSync(starsRegistryPath)) {
-          try { return JSON.parse(fs.readFileSync(starsRegistryPath, 'utf8')); } catch (e) { return []; }
-        }
-        return [];
-      };
-      const writeStars = (list) => {
-        fs.writeFileSync(starsRegistryPath, JSON.stringify(list, null, 2), 'utf8');
-      };
-
-      if (/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?["']?file_stars["']?/i.test(sql)) {
-        return { rows: [] };
-      }
-      if (/INSERT\s+INTO\s+["']?file_stars["']?/i.test(sql)) {
-        const list = readStars();
-        const fileId = params && params[0];
-        const userId = params && params[1];
-        // Mirror ON CONFLICT (file_id, user_id) DO NOTHING.
-        if (!list.find((s) => s.file_id === fileId && s.user_id === userId)) {
-          list.push({ file_id: fileId, user_id: userId, created_at: new Date().toISOString() });
-          writeStars(list);
-        }
-        return { rows: [], rowCount: 1 };
-      }
-      if (/DELETE\s+FROM\s+["']?file_stars["']?/i.test(sql)) {
-        let list = readStars();
-        const before = list.length;
-        if (/user_id\s*=\s*\$2/i.test(sql) && params && params.length > 1) {
-          list = list.filter((s) => !(s.file_id === params[0] && s.user_id === params[1]));
-        } else if (/WHERE\s+user_id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((s) => s.user_id !== params[0]);
-        } else if (params && params.length > 0) {
-          list = list.filter((s) => s.file_id !== params[0]);
-        }
-        writeStars(list);
-        return { rows: [], rowCount: before - list.length };
-      }
-      if (/SELECT\s+.*\s+FROM\s+["']?file_stars["']?/i.test(sql)) {
-        let list = readStars();
-        if (/file_id\s*=\s*\$1/i.test(sql) && /user_id\s*=\s*\$2/i.test(sql) && params && params.length > 1) {
-          list = list.filter((s) => s.file_id === params[0] && s.user_id === params[1]);
-        } else if (/WHERE\s+user_id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((s) => s.user_id === params[0]);
-        } else if (/WHERE\s+file_id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          list = list.filter((s) => s.file_id === params[0]);
-        }
-        return { rows: list };
-      }
-
-      // Handle workbook_versions table creation query mock.
-      if (/CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?["']?workbook_versions["']?/i.test(sql)) {
-        return { rows: [] };
-      }
-
-      // Handle workbook_versions database insertion mock.
-      // Stores versions in a separate JSON file named like '${STORE_PATH}.versions.json'.
-      if (/INSERT\s+INTO\s+["']?workbook_versions["']?/i.test(sql)) {
-        let versions = [];
-        const versionsPath = STORE_PATH + '.versions.json';
-        if (fs.existsSync(versionsPath)) {
-          try {
-            versions = JSON.parse(fs.readFileSync(versionsPath, 'utf8'));
-          } catch (e) {
-            versions = [];
-          }
-        }
-        const newId = versions.length + 1;
-        const rawState = params && params[0];
-        let parsedState = rawState;
-        if (typeof rawState === 'string') {
-          try {
-            parsedState = JSON.parse(rawState);
-          } catch (e) {
-            // Keep as is if not valid JSON string
-          }
-        }
-        const newVersion = {
-          id: newId,
-          state: parsedState,
-          created_at: new Date().toISOString(),
-          created_by: (params && params[1]) || 'anonymous'
-        };
-        versions.push(newVersion);
-        fs.writeFileSync(versionsPath, JSON.stringify(versions, null, 2), 'utf8');
-        return { rows: [newVersion] };
-      }
-
-      // Handle workbook_versions query mock selection.
-      // Parses version logs, handles filtering by ID, and optionally reverses them for DESC sorting.
-      if (/SELECT\s+.*\s+FROM\s+["']?workbook_versions["']?/i.test(sql)) {
-        let versions = [];
-        const versionsPath = STORE_PATH + '.versions.json';
-        if (fs.existsSync(versionsPath)) {
-          try {
-            versions = JSON.parse(fs.readFileSync(versionsPath, 'utf8'));
-          } catch (e) {
-            versions = [];
-          }
-        }
-        const mappedVersions = versions.map(v => {
-          let parsedState = v.state;
-          if (typeof parsedState === 'string') {
-            try {
-              parsedState = JSON.parse(parsedState);
-            } catch (e) {
-              // Keep as is if not valid JSON string
-            }
-          }
-          return {
-            ...v,
-            state: parsedState
-          };
-        });
-        let resultRows = mappedVersions;
-        if (/WHERE\s+id\s*=\s*\$1/i.test(sql) && params && params.length > 0) {
-          const targetId = parseInt(params[0], 10);
-          resultRows = mappedVersions.filter(v => v.id === targetId);
-        } else if (/ORDER\s+BY\s+(created_at|id)\s+DESC/i.test(sql)) {
-          resultRows = [...mappedVersions].reverse();
-        }
-        return { rows: resultRows };
-      }
-
-      // CREATE TABLE / INSERT INTO workbook_state: return empty rows, and for INSERT
-      // write the state JSON (params[0]) to the path for its key (params[1], default 'default').
-      if (/CREATE\s+TABLE/i.test(sql) || /INSERT\s+INTO\s+["']?workbook_state["']?/i.test(sql)) {
-        if (/INSERT\s+INTO\s+["']?workbook_state["']?/i.test(sql) && params && params[0]) {
-          fs.writeFileSync(pathForKey(params[1]), params[0], 'utf8');
-        }
-        return { rows: [] };
-      }
-
-      // SELECT key FROM workbook_state: report existence of the backing file for the requested key.
-      if (/SELECT\s+key\s+FROM\s+["']?workbook_state["']?/i.test(sql)) {
-        const key = (params && params[0]) || 'default';
-        if (fs.existsSync(pathForKey(key))) {
-          return { rows: [{ key }] };
-        }
-        return { rows: [] };
-      }
-
-      // SELECT state FROM workbook_state: read state for the requested key (params[0], default 'default').
-      if (/SELECT\s+state\s+FROM\s+["']?workbook_state["']?/i.test(sql)) {
-        const key = (params && params[0]) || 'default';
-        const p = pathForKey(key);
-        if (fs.existsSync(p)) {
-          const data = fs.readFileSync(p, 'utf8');
-          const parsed = JSON.parse(data);
-          return { rows: [{ state: parsed }] };
-        }
-        return { rows: [] };
-      }
-
-      // UPDATE workbook_state SET state = $1 WHERE key = $2: write state (params[0]) to the key's path.
-      if (/UPDATE\s+["']?workbook_state["']?\s+SET\s+state\s*=/i.test(sql)) {
-        if (params && params[0]) {
-          fs.writeFileSync(pathForKey(params[1]), params[0], 'utf8');
-        }
-        return { rows: [] };
-      }
-
-      // DELETE FROM workbook_state WHERE key = $1: remove the key's backing sidecar (never the default store here).
-      if (/DELETE\s+FROM\s+["']?workbook_state["']?/i.test(sql)) {
-        const p = pathForKey(params && params[0]);
-        if (p !== STORE_PATH && fs.existsSync(p)) fs.unlinkSync(p);
-        return { rows: [] };
-      }
-
-      return { rows: [] };
-    },
-    async end() {
-      // Noop in mock mode.
-    }
-  };
-} else {
-  // Use real pg connection pool with DATABASE_URL in production/development.
-  pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL
-  });
-}
-
-/**
- * Provisions the workbook_state table and seeds the initial default state
- * if the key 'default' is absent.
- * @returns {Promise<void>}
- */
-async function initDatabase() {
-  // Provision workbook_state table
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS workbook_state (
-      key VARCHAR(50) PRIMARY KEY,
-      state JSONB,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Provision workbook_versions table for version history tracking
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS workbook_versions (
-      id SERIAL PRIMARY KEY,
-      state JSONB NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      created_by TEXT NOT NULL
-    )
-  `);
-
-  // Provision files table backing the file-management interface. Each row is a
-  // workbook whose cell data lives in workbook_state under the same key as files.id.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS files (
-      id VARCHAR(64) PRIMARY KEY,
-      name TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      created_by TEXT,
-      link_access TEXT NOT NULL DEFAULT 'restricted'
-    )
-  `);
-  // Idempotent migration for databases provisioned before link_access existed.
-  // 'restricted' = only owner/admin/shared users may open the file; 'anyone' = any
-  // signed-in user with the link may open it (view-only).
-  await pool.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS link_access TEXT NOT NULL DEFAULT 'restricted'`);
-
-  // Provision the users table backing the permissions page. Each row is a user
-  // who has signed in at least once; `role` is one of 'user' | 'admin' |
-  // 'superadmin'. Super admins are initialized from the environment (see
-  // SUPER_ADMIN_EMAILS) on login rather than seeded here.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT,
-      email TEXT,
-      role TEXT NOT NULL DEFAULT 'user',
-      provider TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Provision the file_shares table: each row grants a user access to a file owned
-  // by someone else, surfacing that file in the user's drive listing. `role` is
-  // 'editor' (can modify) or 'viewer' (read-only). New shares default to 'editor'
-  // at the API; the column default is 'viewer' so any pre-existing rows (created
-  // before roles existed) stay read-only.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS file_shares (
-      file_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'viewer',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (file_id, user_id)
-    )
-  `);
-  // Idempotent migration for databases provisioned before the role column existed.
-  await pool.query(`ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer'`);
-
-  // Provision the file_stars table: each row marks a file as "starred" (a personal
-  // favourite) by a user. Starring is per-user — the same file may be starred by
-  // some users and not others — so the drive's Starred view lists only the
-  // signed-in user's own starred files.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS file_stars (
-      file_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (file_id, user_id)
-    )
-  `);
-
-  // On a first run (no files at all), surface the legacy 'default' workbook as a
-  // file so the drive isn't empty and existing data is reachable. Once the user
-  // has any files, we don't re-create 'default' — so deleting it sticks.
-  const filesRes = await pool.query('SELECT id FROM files');
-  if (filesRes.rows.length === 0) {
-    await pool.query(
-      'INSERT INTO files (id, name, created_by) VALUES ($1, $2, $3)',
-      ['default', 'Untitled spreadsheet', 'system']
-    );
-  }
-
-  // Check if default key exists in workbook_state
-  const res = await pool.query(`
-    SELECT key FROM workbook_state WHERE key = $1
-  `, ['default']);
-
-  // If absent, initialize and seed with default sheets and metadata
-  if (res.rows.length === 0) {
-    const freshSheets = Object.create(null);
-    freshSheets['Sheet1'] = Object.create(null);
-    freshSheets['Sheet2'] = Object.create(null);
-    const defaultState = {
-      sheets: freshSheets,
-      sheetOrder: ['Sheet1', 'Sheet2'],
-      sheetColors: Object.create(null),
-      hiddenSheets: []
-    };
-
-    await pool.query(`
-      INSERT INTO workbook_state (state, key) VALUES ($1, $2)
-    `, [JSON.stringify(defaultState), 'default']);
-  }
-}
 
 /**
  * Loads the spreadsheet cell state from the store.json file.
@@ -1566,12 +1046,9 @@ const setupCellsProxy = (state) => {
  */
 const loadState = async (key = 'default') => {
   try {
-    const result = await pool.query(
-      'SELECT state FROM workbook_state WHERE key = $1',
-      [key]
-    );
-    if (result.rows.length > 0) {
-      let parsed = result.rows[0].state;
+    const stored = await workbookRepo.getWorkbookState(key);
+    if (stored !== undefined) {
+      let parsed = stored;
       if (typeof parsed === 'string') {
         parsed = JSON.parse(parsed);
       }
@@ -1645,10 +1122,7 @@ const saveState = async () => {
   isSaving = true;
 
   try {
-    await pool.query(
-      "UPDATE workbook_state SET state = $1, updated_at = CURRENT_TIMESTAMP WHERE key = 'default'",
-      [JSON.stringify(sheetState)]
-    );
+    await workbookRepo.updateDefaultWorkbookState(JSON.stringify(sheetState));
   } catch (err) {
     console.error('Failed to save state to PostgreSQL:', err.message);
   } finally {
@@ -1697,10 +1171,7 @@ const getWorkbook = async (fileId) => {
  */
 const saveWorkbook = async (fileId, state) => {
   try {
-    await pool.query(
-      'UPDATE workbook_state SET state = $1, updated_at = CURRENT_TIMESTAMP WHERE key = $2',
-      [JSON.stringify(state), fileId]
-    );
+    await workbookRepo.updateWorkbookState(JSON.stringify(state), fileId);
   } catch (err) {
     console.error(`Failed to save workbook ${fileId}:`, err.message);
   }
@@ -1723,9 +1194,7 @@ const persistWorkbook = (fileId) => {
  */
 app.get('/api/files', ensureAuthenticated, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, name, created_at, created_by, link_access FROM files ORDER BY created_at DESC'
-    );
+    const fileRows = await filesRepo.listFiles();
     const selfId = userIdentity(req.user);
     const role = await getUserRole(req.user);
     const isAdmin = role === 'admin' || role === 'superadmin';
@@ -1736,7 +1205,7 @@ app.get('/api/files', ensureAuthenticated, async (req, res) => {
     const sharedRoles = isAdmin ? new Map() : await getSharedRoleMap(selfId);
     // Per-user starred set, so each row can carry whether the viewer has starred it.
     const starredIds = await getStarredFileIds(selfId);
-    const visible = result.rows.filter((r) => {
+    const visible = fileRows.filter((r) => {
       if (isAdmin || r.id === 'default') return true;
       if (selfId && r.created_by === selfId) return true;
       return sharedRoles.has(r.id);
@@ -1794,8 +1263,8 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     // is system-owned and never counts against a user.
     const role = await getUserRole(req.user);
     if (role !== 'admin' && role !== 'superadmin') {
-      const owned = await pool.query('SELECT id FROM files WHERE created_by = $1', [creator]);
-      const ownedCount = (owned.rows || []).filter(r => r.id !== 'default').length;
+      const owned = await filesRepo.listFileIdsByCreator(creator);
+      const ownedCount = owned.filter(r => r.id !== 'default').length;
       if (ownedCount >= 1) {
         return res.status(403).json({
           error: 'file_limit',
@@ -1818,14 +1287,8 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
       hiddenSheets: []
     };
 
-    await pool.query(
-      'INSERT INTO workbook_state (state, key) VALUES ($1, $2)',
-      [JSON.stringify(freshState), id]
-    );
-    await pool.query(
-      'INSERT INTO files (id, name, created_by) VALUES ($1, $2, $3)',
-      [id, name, creator]
-    );
+    await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
+    await filesRepo.insertFile(id, name, creator);
     workbooks.set(id, setupCellsProxy(freshState));
 
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
@@ -1860,8 +1323,7 @@ app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
     // Resolve the copy's name (fall back to the source name with a generic suffix).
     let name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
     if (!name) {
-      const srcRow = await pool.query('SELECT name FROM files WHERE id = $1', [srcId]);
-      const srcName = (srcRow.rows && srcRow.rows[0] && srcRow.rows[0].name) || 'Untitled spreadsheet';
+      const srcName = (await filesRepo.getFileName(srcId)) || 'Untitled spreadsheet';
       name = `Copy of ${srcName}`;
     }
     if (name.length > 120) name = name.slice(0, 120);
@@ -1872,8 +1334,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
     // unlimited; a regular user may own at most one file besides 'default').
     const role = await getUserRole(req.user);
     if (role !== 'admin' && role !== 'superadmin') {
-      const owned = await pool.query('SELECT id FROM files WHERE created_by = $1', [creator]);
-      const ownedCount = (owned.rows || []).filter(r => r.id !== 'default').length;
+      const owned = await filesRepo.listFileIdsByCreator(creator);
+      const ownedCount = owned.filter(r => r.id !== 'default').length;
       if (ownedCount >= 1) {
         return res.status(403).json({
           error: 'file_limit',
@@ -1894,14 +1356,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
     }));
 
     const id = crypto.randomBytes(12).toString('hex');
-    await pool.query(
-      'INSERT INTO workbook_state (state, key) VALUES ($1, $2)',
-      [JSON.stringify(clonedState), id]
-    );
-    await pool.query(
-      'INSERT INTO files (id, name, created_by) VALUES ($1, $2, $3)',
-      [id, name, creator]
-    );
+    await workbookRepo.insertWorkbookState(JSON.stringify(clonedState), id);
+    await filesRepo.insertFile(id, name, creator);
     // Seed the in-memory cache with a prototype-free copy (guards against prototype
     // pollution, mirroring loadState) so the copy is live without a round-trip.
     const cachedSheets = Object.create(null);
@@ -1919,13 +1375,10 @@ app.post('/api/files/:id/copy', ensureAuthenticated, async (req, res) => {
     // owner as a share of their own copy).
     if (req.body && req.body.shareCollaborators) {
       try {
-        const shares = await pool.query('SELECT user_id, role FROM file_shares WHERE file_id = $1', [srcId]);
-        for (const s of (shares.rows || [])) {
+        const shares = await sharesRepo.listSharesByFile(srcId);
+        for (const s of shares) {
           if (s.user_id && s.user_id !== creator) {
-            await pool.query(
-              'INSERT INTO file_shares (file_id, user_id, role) VALUES ($1, $2, $3)',
-              [id, s.user_id, s.role || 'viewer']
-            );
+            await sharesRepo.insertShare(id, s.user_id, s.role || 'viewer');
           }
         }
       } catch (e) {
@@ -1957,13 +1410,11 @@ app.get('/api/files/:id/details', ensureAuthenticated, async (req, res) => {
     if (!(await canViewFile(req.user, id))) {
       return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view this file' });
     }
-    const fileRow = await pool.query('SELECT name, created_at, created_by FROM files WHERE id = $1', [id]);
-    const row = fileRow.rows && fileRow.rows[0];
+    const row = await filesRepo.getFileRow(id);
     if (!row) {
       return res.status(404).json({ error: 'not_found', message: 'File not found' });
     }
-    const stateRow = await pool.query('SELECT updated_at FROM workbook_state WHERE key = $1', [id]);
-    const updatedAt = (stateRow.rows && stateRow.rows[0] && stateRow.rows[0].updated_at) || row.created_at || null;
+    const updatedAt = (await workbookRepo.getWorkbookUpdatedAt(id)) || row.created_at || null;
     const selfId = userIdentity(req.user);
     const ownerIsSelf = !!(selfId && row.created_by && row.created_by === selfId);
     const systemOwner = row.created_by === 'system';
@@ -1998,10 +1449,7 @@ app.patch('/api/files/:id', ensureAuthenticated, async (req, res) => {
     if (!name || name.length > 120) {
       return res.status(400).json({ error: 'bad_request', message: 'name must be 1-120 characters' });
     }
-    const result = await pool.query(
-      'UPDATE files SET name = $1 WHERE id = $2',
-      [name, id]
-    );
+    const result = await filesRepo.renameFile(id, name);
     if (result.rows && result.rows.length === 0 && result.rowCount === 0) {
       // PG UPDATE returns rowCount; the test mock returns rows. Treat empty as not found.
     }
@@ -2026,10 +1474,10 @@ app.delete('/api/files/:id', ensureAuthenticated, async (req, res) => {
     if (!(await canModifyFile(req.user, id))) {
       return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to delete this file' });
     }
-    await pool.query('DELETE FROM files WHERE id = $1', [id]);
-    await pool.query('DELETE FROM workbook_state WHERE key = $1', [id]);
-    await pool.query('DELETE FROM file_shares WHERE file_id = $1', [id]);
-    await pool.query('DELETE FROM file_stars WHERE file_id = $1', [id]);
+    await filesRepo.deleteFile(id);
+    await workbookRepo.deleteWorkbookState(id);
+    await sharesRepo.deleteSharesByFile(id);
+    await starsRepo.deleteStarsByFile(id);
     workbooks.delete(id);
     res.json({ success: true });
   } catch (err) {
@@ -2057,8 +1505,8 @@ app.get('/api/users/search', ensureAuthenticated, async (req, res) => {
     const selfId = userIdentity(req.user);
     const owner = await getFileOwner(fileId);
     const alreadyShared = new Set(await getSharedUserIds(fileId));
-    const all = await pool.query('SELECT id, username, email, role FROM users');
-    const matches = (all.rows || [])
+    const all = await usersRepo.listUsersForSearch();
+    const matches = all
       .filter((u) => {
         if (!u.id || u.id === selfId || u.id === owner) return false;
         if (alreadyShared.has(u.id)) return false;
@@ -2087,12 +1535,12 @@ app.get('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
     if (!(await canModifyFile(req.user, id))) {
       return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view shares' });
     }
-    const shareRows = await pool.query('SELECT user_id, role FROM file_shares WHERE file_id = $1', [id]);
+    const shareRows = await sharesRepo.listSharesByFile(id);
     let users = [];
-    if (shareRows.rows && shareRows.rows.length) {
-      const all = await pool.query('SELECT id, username, email FROM users');
-      const byId = new Map((all.rows || []).map((u) => [u.id, u]));
-      users = shareRows.rows.map((s) => {
+    if (shareRows.length) {
+      const all = await usersRepo.listUsersBasic();
+      const byId = new Map(all.map((u) => [u.id, u]));
+      users = shareRows.map((s) => {
         const u = byId.get(s.user_id) || {};
         return { id: s.user_id, username: u.username || s.user_id, email: u.email || null, role: s.role || 'viewer' };
       });
@@ -2127,15 +1575,12 @@ app.post('/api/files/:id/shares', ensureAuthenticated, async (req, res) => {
     const role = req.body && req.body.role === 'viewer' ? 'viewer' : 'editor';
     const owner = await getFileOwner(id);
     const selfId = userIdentity(req.user);
-    const all = await pool.query('SELECT id FROM users');
-    const known = new Set((all.rows || []).map((u) => u.id));
+    const all = await usersRepo.listUserIds();
+    const known = new Set(all.map((u) => u.id));
     let added = 0;
     for (const uid of cleaned) {
       if (uid === owner || uid === selfId || !known.has(uid)) continue;
-      await pool.query(
-        'INSERT INTO file_shares (file_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (file_id, user_id) DO UPDATE SET role = EXCLUDED.role',
-        [id, uid, role]
-      );
+      await sharesRepo.upsertShare(id, uid, role);
       added++;
     }
     res.json({ success: true, added, role });
@@ -2164,7 +1609,7 @@ app.patch('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res)
       return res.status(400).json({ error: 'bad_request', message: "role must be 'owner', 'editor', or 'viewer'" });
     }
     const userId = String(req.params.userId || '').trim().toLowerCase();
-    const result = await pool.query('UPDATE file_shares SET role = $3 WHERE file_id = $1 AND user_id = $2', [id, userId, role]);
+    const result = await sharesRepo.updateShareRole(id, userId, role);
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'not_found', message: 'Share not found' });
     }
@@ -2189,7 +1634,7 @@ app.delete('/api/files/:id/shares/:userId', ensureAuthenticated, async (req, res
       return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to change shares' });
     }
     const userId = String(req.params.userId || '').trim().toLowerCase();
-    await pool.query('DELETE FROM file_shares WHERE file_id = $1 AND user_id = $2', [id, userId]);
+    await sharesRepo.deleteShare(id, userId);
     res.json({ success: true });
   } catch (err) {
     console.error('Error removing share:', err.message);
@@ -2216,7 +1661,7 @@ app.patch('/api/files/:id/access', ensureAuthenticated, async (req, res) => {
     if (!linkAccess) {
       return res.status(400).json({ error: 'bad_request', message: "linkAccess must be 'restricted' or 'anyone'" });
     }
-    await pool.query('UPDATE files SET link_access = $1 WHERE id = $2', [linkAccess, id]);
+    await filesRepo.updateFileLinkAccess(id, linkAccess);
     res.json({ success: true, linkAccess });
   } catch (err) {
     console.error('Error updating file access:', err.message);
@@ -2245,12 +1690,9 @@ app.put('/api/files/:id/star', ensureAuthenticated, async (req, res) => {
     }
     const starred = !!(req.body && req.body.starred);
     if (starred) {
-      await pool.query(
-        'INSERT INTO file_stars (file_id, user_id) VALUES ($1, $2) ON CONFLICT (file_id, user_id) DO NOTHING',
-        [id, userId]
-      );
+      await starsRepo.addStar(id, userId);
     } else {
-      await pool.query('DELETE FROM file_stars WHERE file_id = $1 AND user_id = $2', [id, userId]);
+      await starsRepo.removeStar(id, userId);
     }
     res.json({ success: true, starred });
   } catch (err) {
@@ -2461,10 +1903,8 @@ app.post('/api/cells', ensureAuthenticated, async (req, res) => {
  */
 app.get('/api/versions', ensureAuthenticated, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, created_at, created_by FROM workbook_versions ORDER BY id DESC'
-    );
-    const versions = result.rows.map(row => ({
+    const rows = await versionsRepo.listVersions();
+    const versions = rows.map(row => ({
       id: row.id,
       created_at: row.created_at,
       created_by: row.created_by
@@ -2487,15 +1927,11 @@ app.get('/api/versions/:id', ensureAuthenticated, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: 'bad_request', message: 'Invalid version ID' });
     }
-    const result = await pool.query(
-      'SELECT state FROM workbook_versions WHERE id = $1',
-      [id]
-    );
-    if (result.rows.length === 0) {
+    const versionState = await versionsRepo.getVersionState(id);
+    if (versionState === undefined) {
       return res.status(404).json({ error: 'not_found', message: 'Version not found' });
     }
 
-    const versionState = result.rows[0].state;
     let parsedState = versionState;
     if (typeof parsedState === 'string') {
       parsedState = JSON.parse(parsedState);
@@ -2520,15 +1956,11 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: 'bad_request', message: 'Invalid version ID' });
     }
-    const result = await pool.query(
-      'SELECT state FROM workbook_versions WHERE id = $1',
-      [id]
-    );
-    if (result.rows.length === 0) {
+    const versionState = await versionsRepo.getVersionState(id);
+    if (versionState === undefined) {
       return res.status(404).json({ error: 'not_found', message: 'Version not found' });
     }
 
-    const versionState = result.rows[0].state;
     let targetState = versionState;
     if (typeof targetState === 'string') {
       targetState = JSON.parse(targetState);
@@ -2557,10 +1989,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
 
     // Log the restoration event in the version history table
     const creator = req.user ? req.user.username : 'anonymous';
-    await pool.query(
-      'INSERT INTO workbook_versions (state, created_by) VALUES ($1, $2)',
-      [JSON.stringify(sheetState), creator]
-    );
+    await versionsRepo.insertVersion(JSON.stringify(sheetState), creator);
 
     // Broadcast the restored init state to all active connected WebSocket clients
     const initPayload = {
@@ -2738,10 +2167,7 @@ const autosaveInterval = setInterval(async () => {
         const editorsString = currentEditors.size > 0 ? Array.from(currentEditors).join(', ') : 'anonymous';
         
         // Create a new version snapshot in workbook_versions database table.
-        await pool.query(
-          'INSERT INTO workbook_versions (state, created_by) VALUES ($1, $2)',
-          [JSON.stringify(sheetState), editorsString]
-        );
+        await versionsRepo.insertVersion(JSON.stringify(sheetState), editorsString);
         
         console.log(`[Autosave] Created version snapshot. Editors: ${editorsString}`);
 
