@@ -16,7 +16,8 @@ alternate) and styled with a Material Design 3 light theme.
   WebSocket channel; cell edits, formatting, and sheet changes sync live.
 - **Spreadsheet editor** — multiple sheets per workbook, cell formatting (font, size, color,
   fill, borders, alignment, wrap), number formats, merge, undo/redo, copy/cut/paste, find &
-  replace, zoom, and range selection.
+  replace, sort, value filters, freeze rows/columns, hide/unhide sheets, zoom, and range
+  selection.
 - **Formula engine** — a real tokenizer / parser / evaluator with a library of ~150 functions
   (math, statistical, logical, text, lookup, date). Autocomplete is driven by a separate
   function catalog.
@@ -48,8 +49,10 @@ alternate) and styled with a Material Design 3 light theme.
 | Database     | PostgreSQL (`pg`); JSON-sidecar mock in test mode                  |
 | Frontend     | Vanilla JS + HTML, Tailwind-style utility classes, Material Symbols|
 | Tests        | Node's built-in test runner (`node --test`)                       |
+| Type-checking| TypeScript over opt-in JS files (`// @ts-check`; no migration)     |
 
-No build step — the frontend is served as static files.
+No build step — the frontend is served as static files. TypeScript is used only to
+type-check the existing JavaScript (`npm run typecheck`); the code is not compiled.
 
 ---
 
@@ -59,6 +62,7 @@ No build step — the frontend is served as static files.
 co-sheet-1/
 ├── server.js              # Express app, OIDC, REST API, WebSocket server, DB layer
 ├── package.json
+├── tsconfig*.json         # Opt-in TypeScript type-checking config (no emit, no build)
 ├── .env.example           # Environment template (copy to .env)
 ├── public/                # Static frontend assets (served without auth where noted)
 │   ├── app.js             # Spreadsheet editor client (grid, formulas, share dialog, ...)
@@ -146,6 +150,16 @@ npm test
 Coverage spans authentication & OIDC, the REST API, the WebSocket channel, the formula engine,
 clipboard/edit-menu behaviors, version history, permissions/RBAC, and file access control &
 sharing.
+
+### Type-checking
+
+JavaScript sources are type-checked with TypeScript on an **opt-in, per-file** basis: a file
+is only checked once it starts with `// @ts-check` (aided by JSDoc annotations). There is no
+migration to `.ts` and no compiled output (`noEmit`):
+
+```bash
+npm run typecheck
+```
 
 ---
 
