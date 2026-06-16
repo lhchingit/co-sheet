@@ -315,6 +315,8 @@
   "perm.role": "Role",
   "perm.you": "You",
   "perm.empty": "No users have signed in yet.",
+  "perm.noMatches": "No users match your search.",
+  "perm.searchPlaceholder": "Search by name or email",
   "perm.loadError": "Could not load users. Please try again.",
   "perm.updated": "Role updated",
   "perm.updateError": "Could not update role. Please try again.",

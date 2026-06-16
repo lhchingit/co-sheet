@@ -61,10 +61,13 @@ export async function initDatabase() {
       email TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       provider TEXT,
+      picture TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Backfill the avatar column for databases created before it existed.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT`);
 
   // Provision the file_shares table: each row grants a user access to a file owned
   // by someone else, surfacing that file in the user's drive listing. `role` is

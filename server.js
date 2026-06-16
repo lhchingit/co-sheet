@@ -152,6 +152,7 @@ async function upsertUser(user) {
   const username = user.username || null;
   const email = user.email || null;
   const provider = user.provider || null;
+  const picture = user.picture || null;
 
   const existing = await usersRepo.findUserById(id);
 
@@ -159,10 +160,10 @@ async function upsertUser(user) {
   if (existing) {
     if (envSuper) role = 'superadmin';
     else role = (existing.role === 'superadmin') ? 'admin' : (existing.role || 'user');
-    await usersRepo.updateUserProfile({ id, username, email, provider, role });
+    await usersRepo.updateUserProfile({ id, username, email, provider, role, picture });
   } else {
     role = envSuper ? 'superadmin' : 'user';
-    await usersRepo.insertUser({ id, username, email, role, provider });
+    await usersRepo.insertUser({ id, username, email, role, provider, picture });
   }
   return role;
 }
@@ -971,6 +972,7 @@ app.get('/api/users', ensureAdmin, async (req, res) => {
         email: r.email,
         role,
         provider: r.provider,
+        picture: r.picture || null,
         last_login: r.last_login,
         superAdmin,
         self: r.id === selfId

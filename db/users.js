@@ -20,25 +20,25 @@ export async function findUserById(id) {
 
 /**
  * Insert a new user row, stamping last_login to now.
- * @param {{ id: string, username: string|null, email: string|null, role: string, provider: string|null }} user
+ * @param {{ id: string, username: string|null, email: string|null, role: string, provider: string|null, picture?: string|null }} user
  * @returns {Promise<void>}
  */
-export async function insertUser({ id, username, email, role, provider }) {
+export async function insertUser({ id, username, email, role, provider, picture = null }) {
   await pool.query(
-    'INSERT INTO users (id, username, email, role, provider, last_login) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)',
-    [id, username, email, role, provider]
+    'INSERT INTO users (id, username, email, role, provider, picture, last_login) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)',
+    [id, username, email, role, provider, picture]
   );
 }
 
 /**
  * Update an existing user's profile fields and bump last_login.
- * @param {{ id: string, username: string|null, email: string|null, provider: string|null, role: string }} user
+ * @param {{ id: string, username: string|null, email: string|null, provider: string|null, role: string, picture?: string|null }} user
  * @returns {Promise<void>}
  */
-export async function updateUserProfile({ id, username, email, provider, role }) {
+export async function updateUserProfile({ id, username, email, provider, role, picture = null }) {
   await pool.query(
-    'UPDATE users SET username = $1, email = $2, provider = $3, role = $4, last_login = CURRENT_TIMESTAMP WHERE id = $5',
-    [username, email, provider, role, id]
+    'UPDATE users SET username = $1, email = $2, provider = $3, role = $4, picture = $5, last_login = CURRENT_TIMESTAMP WHERE id = $6',
+    [username, email, provider, role, picture, id]
   );
 }
 
@@ -58,7 +58,7 @@ export async function updateUserRole(id, role) {
  */
 export async function listUsers() {
   const res = await pool.query(
-    'SELECT id, username, email, role, provider, last_login FROM users ORDER BY last_login DESC'
+    'SELECT id, username, email, role, provider, picture, last_login FROM users ORDER BY last_login DESC'
   );
   return res.rows || [];
 }
