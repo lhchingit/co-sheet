@@ -2478,15 +2478,57 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     sel.addRange(range);
   }
 
+  // Formula editing: enable autocomplete, point mode and reference highlighting
+  // for this cell so it behaves like the formula bar.
+  const cellSession = makeCellSession(cellEl);
+  const syncFormulaState = () => {
+    const text = cellEl.innerText;
+    if (text[0] === '=') {
+      activeFormulaSession = cellSession;
+      if (!pointInserting) pointPending = null;
+      refreshFormulaEditing(cellSession);
+      updateFnAutocomplete(cellSession);
+    } else {
+      if (activeFormulaSession === cellSession) endFormulaSession();
+      closeFnAutocomplete();
+    }
+  };
+  cellEl.oninput = syncFormulaState;
+  // If editing started with '=' (typed or an existing formula), arm immediately.
+  syncFormulaState();
+
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
+    if (activeFormulaSession === cellSession) endFormulaSession();
+    closeFnAutocomplete();
     cellEl.removeAttribute('contenteditable');
     const text = cellEl.innerText.trim();
     saveCellUpdate(cellId, text);
   };
 
-  cellEl.onblur = saveInlineEdit;
+  let cancelled = false;
+  cellEl.onblur = () => { if (!cancelled) saveInlineEdit(); };
   cellEl.onkeydown = (e) => {
+    // Let the function autocomplete consume navigation/accept keys first.
+    if (isFnAutocompleteOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveFnAutocomplete(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptFnAutocomplete(cellSession); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); closeFnAutocomplete(); return; }
+    }
+    if (e.key === 'Escape') {
+      // Cancel the edit: restore the cell to its stored value, discard changes.
+      e.preventDefault();
+      e.stopPropagation();
+      cancelled = true;
+      if (activeFormulaSession === cellSession) endFormulaSession();
+      closeFnAutocomplete();
+      cellEl.removeAttribute('contenteditable');
+      const cellData = localCells[cellId] || { formula: '', value: '', style: {} };
+      cellEl.innerText = cellData.formula ? cellData.formula : cellData.value;
+      updateGridDOMCell(cellId, getCellValue(cellId), cellData.style);
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       // Stop the keydown bubbling to the document-level handler, which would
@@ -2582,18 +2624,33 @@ if (formulaBarInput) {
       e.preventDefault(); // Prevent default enter key behavior
       closeFnAutocomplete();
       saveCellUpdate(activeCellId, formulaBarInput.value); // Save cell update
+      endFormulaSession();
       formulaBarInput.blur(); // Remove focus from the formula bar
     }
   });
 
-  // Recompute suggestions as the user types / moves the caret. These are
-  // wrapped in arrows so the (const) handlers are resolved lazily at event
-  // time rather than read here during top-level execution (TDZ-safe).
-  formulaBarInput.addEventListener('input', () => updateFnAutocomplete());
-  formulaBarInput.addEventListener('click', () => updateFnAutocomplete());
+  // The formula bar's edit session: drives reference highlights + point mode +
+  // autocomplete the same way the in-cell editor does.
+  const barSession = makeBarSession();
+  formulaBarInput.addEventListener('focus', () => {
+    activeFormulaSession = barSession;
+    refreshFormulaEditing(barSession);
+  });
+  // Recompute suggestions / highlights as the user types or moves the caret.
+  formulaBarInput.addEventListener('input', () => {
+    activeFormulaSession = barSession;
+    if (!pointInserting) pointPending = null; // user typed -> pending no longer valid
+    refreshFormulaEditing(barSession);
+    updateFnAutocomplete(barSession);
+  });
+  formulaBarInput.addEventListener('click', () => { pointPending = null; updateFnAutocomplete(barSession); });
   // Close when leaving the field (delayed so a click on a suggestion still
-  // registers via its mousedown handler before blur tears the popup down).
-  formulaBarInput.addEventListener('blur', () => setTimeout(closeFnAutocomplete, 120));
+  // registers via its mousedown handler before blur tears the popup down). A
+  // point-mode mousedown preventDefaults, so a real blur means editing ended.
+  formulaBarInput.addEventListener('blur', () => {
+    setTimeout(closeFnAutocomplete, 120);
+    if (activeFormulaSession === barSession) endFormulaSession();
+  });
 }
 
 /* ---------------------------------------------------------------------------
