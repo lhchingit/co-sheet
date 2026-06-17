@@ -2617,7 +2617,7 @@ if (formulaBarInput) {
     if (isFnAutocompleteOpen()) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveFnAutocomplete(1); return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptFnAutocomplete(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptFnAutocomplete(barSession); return; }
       if (e.key === 'Escape')    { e.preventDefault(); closeFnAutocomplete(); return; }
     }
     if (e.key === 'Enter' && activeCellId) {
@@ -2667,6 +2667,7 @@ let fnAcEl = null;          // dropdown DOM element (null when closed)
 let fnAcMatches = [];       // current matching function entries
 let fnAcIndex = 0;          // highlighted index within fnAcMatches
 let fnAcTokenStart = -1;    // caret-relative start of the typed function token
+let fnAcSession = null;     // the FormulaEditSession the dropdown is bound to
 const FN_AC_MAX = 50;       // cap suggestions to keep the list manageable
 
 const isFnAutocompleteOpen = () => fnAcEl !== null;
@@ -2677,13 +2678,11 @@ const isFnAutocompleteOpen = () => fnAcEl !== null;
  * caret is not at the end of a letter-led identifier.
  * @returns {{ word: string, start: number } | null}
  */
-const getFnToken = () => {
-  if (!formulaBarInput) return null;
-  const value = formulaBarInput.value;
+const getFnToken = (session) => {
+  if (!session) return null;
+  const value = session.getText();
   if (!value.startsWith('=')) return null;
-  const caret = formulaBarInput.selectionStart;
-  // Caret must be a collapsed cursor (no selection) for predictable insertion.
-  if (caret !== formulaBarInput.selectionEnd) return null;
+  const caret = session.getCaret();
   const left = value.slice(0, caret);
   const m = left.match(/([A-Za-z][A-Za-z0-9_.]*)$/);
   if (!m) return null;
@@ -2691,10 +2690,10 @@ const getFnToken = () => {
 };
 
 /** Recomputes matches from the current token and shows/hides the dropdown. */
-const updateFnAutocomplete = () => {
+const updateFnAutocomplete = (session) => {
   const catalog = window.SHEET_FUNCTIONS;
   if (!Array.isArray(catalog) || catalog.length === 0) { closeFnAutocomplete(); return; }
-  const token = getFnToken();
+  const token = getFnToken(session);
   if (!token) { closeFnAutocomplete(); return; }
   const prefix = token.word.toUpperCase();
   const matches = catalog.filter(fn => fn.n.startsWith(prefix)).slice(0, FN_AC_MAX);
@@ -2702,6 +2701,7 @@ const updateFnAutocomplete = () => {
   fnAcMatches = matches;
   fnAcTokenStart = token.start;
   fnAcIndex = 0;
+  fnAcSession = session;
   renderFnAutocomplete();
 };
 
@@ -2749,11 +2749,12 @@ const renderFnAutocomplete = () => {
   positionFnAutocomplete();
 };
 
-/** Positions the dropdown beneath the formula bar input, clamped to viewport. */
+/** Positions the dropdown beneath the active editor (cell or bar), clamped to viewport. */
 const positionFnAutocomplete = () => {
-  if (!fnAcEl || !formulaBarInput) return;
-  const rect = formulaBarInput.getBoundingClientRect();
-  const width = Math.min(380, Math.max(220, rect.width));
+  const anchor = (fnAcSession && fnAcSession.el) || formulaBarInput;
+  if (!fnAcEl || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(380, Math.max(220, rect.width || 220));
   let left = rect.left;
   if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
   if (left < 8) left = 8;
@@ -2774,19 +2775,21 @@ const moveFnAutocomplete = (delta) => {
 };
 
 /** Replaces the typed token with "NAME(" and places the caret inside. */
-const acceptFnAutocomplete = () => {
-  if (!isFnAutocompleteOpen() || !formulaBarInput) return;
+const acceptFnAutocomplete = (session) => {
+  const s = session || fnAcSession;
+  if (!isFnAutocompleteOpen() || !s) return;
   const fn = fnAcMatches[fnAcIndex];
   if (!fn) { closeFnAutocomplete(); return; }
-  const value = formulaBarInput.value;
-  const caret = formulaBarInput.selectionStart;
+  const value = s.getText();
+  const caret = s.getCaret();
   const before = value.slice(0, fnAcTokenStart);
   const after = value.slice(caret);
   const insert = `${fn.n}(`;
-  formulaBarInput.value = before + insert + after;
   const newCaret = before.length + insert.length;
-  formulaBarInput.setSelectionRange(newCaret, newCaret);
-  formulaBarInput.focus();
+  s.setText(before + insert + after);
+  s.setCaret(newCaret);
+  s.focus();
+  if (s.kind === 'cell') refreshFormulaEditing(s); // keep tint/highlights in sync
   closeFnAutocomplete();
 };
 
@@ -2796,13 +2799,15 @@ const closeFnAutocomplete = () => {
   fnAcMatches = [];
   fnAcIndex = 0;
   fnAcTokenStart = -1;
+  fnAcSession = null;
 };
 
 // Reposition on viewport changes; close on outside interaction.
 window.addEventListener('resize', () => { if (isFnAutocompleteOpen()) positionFnAutocomplete(); });
 document.addEventListener('mousedown', (e) => {
   if (!isFnAutocompleteOpen()) return;
-  if (fnAcEl.contains(e.target) || e.target === formulaBarInput) return;
+  const anchorEl = (fnAcSession && fnAcSession.el) || formulaBarInput;
+  if (fnAcEl.contains(e.target) || e.target === anchorEl) return;
   closeFnAutocomplete();
 });
 
