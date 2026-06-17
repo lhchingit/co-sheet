@@ -11,7 +11,10 @@
      page is never stuck blank if i18n initialization fails. -->
 <style id="i18n-fouc-guard">html:not(.i18n-ready) body{visibility:hidden}</style>
 <script>setTimeout(function(){document.documentElement.classList.add('i18n-ready');},1500);</script>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind is vendored locally (public/vendor/tailwind.js) instead of loaded
+     from cdn.tailwindcss.com, which is blocked in some environments. This is the
+     exact CDN bundle built with the forms + container-queries plugins. -->
+<script src="/vendor/tailwind.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&amp;family=JetBrains+Mono&amp;display=swap" rel="stylesheet"/>
 <!-- Font picker preview fonts -->
 <link href="https://fonts.googleapis.com/css2?family=Alegreya&amp;family=Amatic+SC:wght@700&amp;family=Bree+Serif&amp;family=Comic+Neue&amp;family=Courier+Prime&amp;family=Merriweather&amp;family=Permanent+Marker&amp;family=Pinyon+Script&amp;family=Playfair+Display&amp;family=Roboto+Mono&amp;family=Ultra&amp;family=Varela+Round&amp;display=swap" rel="stylesheet"/>

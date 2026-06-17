@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Co-Sheet - Log In</title>
-    <!-- Use Tailwind CSS CDN for styling -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind is vendored locally (vendor/tailwind.js) instead of the blocked
+         cdn.tailwindcss.com. The plugins baked into the bundle are unused here but
+         harmless, and sharing one file keeps a single vendored copy. -->
+    <script src="/vendor/tailwind.js"></script>
     <!-- Use Roboto font from Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
