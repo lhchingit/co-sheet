@@ -200,6 +200,8 @@
   "tip.valignCenter": "Align Center",
   "tip.alignBottom": "Align Bottom",
   "tip.exitHistory": "Exit version history mode",
+  "tip.addSheet": "Add Sheet",
+  "tip.allSheets": "All Sheets",
   "font.theme": "Theme",
   "font.default": "Default (Arial)",
   "history.from": "Version history from",
