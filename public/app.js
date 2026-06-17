@@ -940,6 +940,52 @@ const endFormulaSession = () => {
   pointInserting = false;
 };
 
+/* ---------------------------------------------------------------------------
+ * Point mode — insert references by clicking/dragging cells
+ * ------------------------------------------------------------------------- */
+
+/** True when a formula editor is active and its text is in formula mode. */
+const isPointModeActive = () =>
+  !!activeFormulaSession && activeFormulaSession.getText()[0] === '=';
+
+/** Inserts (or replaces the pending) single-cell reference for a mousedown. */
+const pointInsertReference = (cellId) => {
+  const s = activeFormulaSession;
+  if (!s) return;
+  pointAnchorCellId = cellId;
+  const text = s.getText();
+  const start = pointPending ? pointPending.start : s.getCaret();
+  const end = pointPending ? pointPending.end : s.getCaret();
+  const newText = text.slice(0, start) + cellId + text.slice(end);
+  pointPending = { start, end: start + cellId.length };
+  pointInserting = true;
+  applySessionText(s, newText, start + cellId.length);
+  pointInserting = false;
+};
+
+/** Rewrites the pending reference to the anchor:hover range during a drag. */
+const pointExtendRange = (hoverId) => {
+  const s = activeFormulaSession;
+  if (!s || !pointAnchorCellId || !pointPending) return;
+  const a = parseCellCoord(pointAnchorCellId);
+  const b = parseCellCoord(hoverId);
+  if (!a || !b) return;
+  const c1 = Math.min(a.colIndex, b.colIndex);
+  const c2 = Math.max(a.colIndex, b.colIndex);
+  const r1 = Math.min(a.row, b.row);
+  const r2 = Math.max(a.row, b.row);
+  const single = c1 === c2 && r1 === r2;
+  const ref = single
+    ? `${getColLetter(c1)}${r1}`
+    : `${getColLetter(c1)}${r1}:${getColLetter(c2)}${r2}`;
+  const text = s.getText();
+  const newText = text.slice(0, pointPending.start) + ref + text.slice(pointPending.end);
+  pointInserting = true;
+  applySessionText(s, newText, pointPending.start + ref.length);
+  pointPending = { start: pointPending.start, end: pointPending.start + ref.length };
+  pointInserting = false;
+};
+
 /**
  * Copies values, formulas, and styles of the currently selected range of cells.
  */
@@ -1959,6 +2005,13 @@ const renderSpreadsheetGrid = () => {
       cellEl.addEventListener('mousedown', (e) => {
         if (isHistoryMode) return; // Disable selection in history mode
         if (e.button !== 0) return; // Only trigger selection on left mouse click
+        // Formula point mode: while editing a formula, a click inserts the cell's
+        // reference into the formula instead of changing the grid selection.
+        if (isPointModeActive()) {
+          e.preventDefault(); // keep focus/caret in the editor
+          pointInsertReference(cellId);
+          return;
+        }
         isSelecting = true;
         isColumnSelection = false; // a cell click is never a full-column selection
         selectionStartCellId = cellId;
@@ -1968,6 +2021,7 @@ const renderSpreadsheetGrid = () => {
 
       cellEl.addEventListener('mouseenter', () => {
         if (isHistoryMode) return; // Disable selection in history mode
+        if (isPointModeActive() && pointAnchorCellId) { pointExtendRange(cellId); return; }
         if (isSelecting) {
           selectionEndCellId = cellId;
           updateRangeSelectionUI();
@@ -6112,6 +6166,7 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 // Stop range selection dragging when releasing mouse button anywhere
 window.addEventListener('mouseup', () => {
   isSelecting = false;
+  pointAnchorCellId = null; // stop point-mode drag extension; pending ref is kept
 });
 
 // File navigation dropdown. New / Make a copy / Share / Rename / Details are the
