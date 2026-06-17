@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import https from 'https';
 import session from 'express-session';
 import passport from 'passport';
 import { Strategy as OIDCStrategy } from 'passport-openidconnect';
@@ -34,6 +35,7 @@ import * as workbookRepo from './db/workbook.js';
 import * as cellService from './services/cellService.js';
 import * as sheetService from './services/sheetService.js';
 import * as dimensionService from './services/dimensionService.js';
+import { shouldSkipOidcTls } from './services/oidcTls.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -391,6 +393,23 @@ const isExternalOidcConfigured = () => Boolean(
 );
 
 /**
+ * Build the HTTPS agent to hand the 'oidc-sso' strategy, or undefined to use the
+ * default (verifying) agent. Returns an insecure agent only when OIDC_TLS_VERIFY
+ * is disabled AND a configured endpoint is HTTPS (see services/oidcTls.js). This
+ * exists because a self-hosted OIDC server on the LAN often uses a self-signed
+ * certificate whose CA is not installed in the machine's trust store, which would
+ * otherwise fail token/userinfo calls with UNABLE_TO_VERIFY_LEAF_SIGNATURE /
+ * SELF_SIGNED_CERT_IN_CHAIN.
+ */
+const buildOidcAgent = () => {
+  if (!shouldSkipOidcTls()) return undefined;
+  console.warn('[OIDC] OIDC_TLS_VERIFY is disabled — skipping TLS certificate ' +
+    'verification for the external (Local OIDC) provider. Use only for a trusted ' +
+    'self-signed server on a trusted network.');
+  return new https.Agent({ rejectUnauthorized: false });
+};
+
+/**
  * Registers the OIDC authentication strategy dynamically.
  * This is done after the server starts listening because the port number
  * can be dynamic, and the strategy relies on the port for issuer and endpoint URLs.
@@ -432,7 +451,13 @@ const registerStrategies = () => {
       clientID: process.env.OIDC_CLIENT_ID,
       clientSecret: process.env.OIDC_CLIENT_SECRET,
       callbackURL: `${baseUrl}/auth/oidc-sso/callback`,
-      scope: process.env.OIDC_SCOPE || 'openid profile email'
+      scope: process.env.OIDC_SCOPE || 'openid profile email',
+      // When OIDC_TLS_VERIFY is disabled (self-signed local provider), pass an
+      // https.Agent that skips cert verification; otherwise undefined keeps the
+      // default verifying agent. Scoped to this strategy so Google/other TLS is
+      // unaffected. passport-openidconnect forwards this to the oauth2 client's
+      // token + userinfo requests via setAgent().
+      agent: buildOidcAgent()
     },
     // 9-argument verify signature so passport-openidconnect hands us `uiProfile`,
     // whose `_json` carries the raw userinfo claims. Different providers expose the
