@@ -2417,7 +2417,7 @@ wss.on('connection', async (ws, req) => {
           ? dimensionService.resizeColumn(sheetState, payload)
           : dimension === 'row'
             ? dimensionService.resizeRow(sheetState, payload)
-            : { ok: false };
+            : /** @type {{ ok: false }} */ ({ ok: false });
         if (result.ok) {
           // Persist and broadcast the new size to all clients (including sender, so
           // every peer applies the server-clamped value).

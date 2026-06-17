@@ -14,6 +14,7 @@ import { isValidSheetName } from './validators.js';
  * caller should silently ignore it.
  *
  * @typedef {{ sheets: Object, colWidths?: Object, rowHeights?: Object }} Workbook
+ * @typedef {{ ok: true, sheetName: string, col?: string, row?: number, size: number } | { ok: false }} ResizeResult
  */
 
 // Smallest / largest size (px) a column or row may be dragged to. The floor keeps
@@ -46,7 +47,7 @@ const bucketFor = (wb, mapName, sheetName) => {
  * Set the pixel width of a single column on a sheet.
  * @param {Workbook} wb
  * @param {{ sheetName: any, col: any, size: any }} payload
- * @returns {{ ok: true, sheetName: string, col: string, size: number } | { ok: false }}
+ * @returns {ResizeResult}
  */
 export const resizeColumn = (wb, { sheetName, col, size }) => {
   if (!isValidSheetName(sheetName) || !wb.sheets || !wb.sheets[sheetName]) {
@@ -67,7 +68,7 @@ export const resizeColumn = (wb, { sheetName, col, size }) => {
  * Set the pixel height of a single row on a sheet.
  * @param {Workbook} wb
  * @param {{ sheetName: any, row: any, size: any }} payload
- * @returns {{ ok: true, sheetName: string, row: number, size: number } | { ok: false }}
+ * @returns {ResizeResult}
  */
 export const resizeRow = (wb, { sheetName, row, size }) => {
   if (!isValidSheetName(sheetName) || !wb.sheets || !wb.sheets[sheetName]) {
