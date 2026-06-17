@@ -1390,9 +1390,12 @@
 <input id="formula-bar-input" class="w-full h-full bg-transparent border-none focus:ring-0 text-mono-data font-mono-data px-2" type="text" value="=SUM(C4:C20) * 1.15"/>
 </div>
 </div>
-<!-- Resize handle: drag down to grow the formula bar. Thin transparent strip
-     that reveals a primary-colored bar on hover. Min height = initial height. -->
-<div id="formula-resize-handle" class="relative h-1 -mt-px shrink-0 cursor-row-resize group z-20" data-i18n-title="formula.resize" title="拖曳以調整公式列高度">
+<!-- Resize handle: drag down to grow the formula bar. 1px-tall strip (matching
+     the 1px borders) pulled up over the formula bar's bottom border so it adds no
+     vertical gap — the column-header band sits flush against that border instead
+     of being pushed down. The grab/hover area comes from the absolutely-positioned
+     3px child below, which overflows this 1px box and stays easy to grab. -->
+<div id="formula-resize-handle" class="relative h-px -mt-px shrink-0 cursor-row-resize group z-20" data-i18n-title="formula.resize" title="拖曳以調整公式列高度">
 <div class="absolute inset-x-0 top-0 h-[3px] bg-transparent group-hover:bg-primary/50 transition-colors"></div>
 </div>
 <!-- Spreadsheet Grid Container. The viewport scrolls; its native scrollbars are
