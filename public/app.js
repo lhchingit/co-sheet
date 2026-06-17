@@ -825,6 +825,121 @@ const renderFormulaRefHighlights = (text) => {
   }
 };
 
+/* ---------------------------------------------------------------------------
+ * Formula edit sessions
+ * ---------------------------------------------------------------------------
+ * A FormulaEditSession is a thin adapter over whichever editor is active — the
+ * contenteditable cell or the formula-bar <input> — exposing a uniform text +
+ * caret interface so the point-mode controller and autocomplete can drive both.
+ * ------------------------------------------------------------------------- */
+
+let activeFormulaSession = null;  // the session currently being edited, or null
+let pointAnchorCellId = null;     // drag anchor cell during a point-mode drag
+let pointPending = null;          // { start, end } offsets of the last point-inserted ref
+let pointInserting = false;       // guard: true while we mutate text programmatically
+
+/** Linear plain-text caret offset within a contenteditable element. */
+const getCellCaretOffset = (el) => {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return el.innerText.length;
+  const range = sel.getRangeAt(0);
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.endContainer, range.endOffset);
+  return pre.toString().length;
+};
+
+/** Places the caret at a linear plain-text offset within a contenteditable element. */
+const setCellCaretOffset = (el, offset) => {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  let remaining = offset;
+  let target = null;
+  let targetOff = 0;
+  const walk = (node) => {
+    if (target) return;
+    if (node.nodeType === 3) {
+      const len = node.textContent.length;
+      if (remaining <= len) { target = node; targetOff = remaining; }
+      else remaining -= len;
+    } else {
+      for (const child of node.childNodes) { walk(child); if (target) return; }
+    }
+  };
+  walk(el);
+  if (target) { range.setStart(target, targetOff); range.collapse(true); }
+  else { range.selectNodeContents(el); range.collapse(false); }
+  sel.removeAllRanges();
+  sel.addRange(range);
+};
+
+/** Re-renders a cell editor's content with reference substrings tinted by color. */
+const renderCellFormulaHtml = (el, text) => {
+  const api = window.CoSheet && window.CoSheet.formulaRefs;
+  const esc = window.CoSheet.utils.escapeHtml;
+  const refs = (api && text[0] === '=') ? api.assignColors(api.scanReferences(text)) : [];
+  if (!refs.length) { el.textContent = text; return; }
+  let html = '';
+  let i = 0;
+  for (const r of refs) {
+    html += esc(text.slice(i, r.start));
+    html += `<span style="color:${r.color}">${esc(r.ref)}</span>`;
+    i = r.end;
+  }
+  html += esc(text.slice(i));
+  el.innerHTML = html;
+};
+
+/** Builds a session for the formula-bar input. */
+const makeBarSession = () => ({
+  kind: 'bar',
+  el: formulaBarInput,
+  getText: () => formulaBarInput.value,
+  setText: (s) => { formulaBarInput.value = s; },
+  getCaret: () => formulaBarInput.selectionStart,
+  setCaret: (i) => formulaBarInput.setSelectionRange(i, i),
+  focus: () => formulaBarInput.focus()
+});
+
+/** Builds a session for an inline (contenteditable) cell editor. */
+const makeCellSession = (cellEl) => ({
+  kind: 'cell',
+  el: cellEl,
+  getText: () => cellEl.innerText,
+  setText: (s) => renderCellFormulaHtml(cellEl, s),
+  getCaret: () => getCellCaretOffset(cellEl),
+  setCaret: (i) => setCellCaretOffset(cellEl, i),
+  focus: () => cellEl.focus()
+});
+
+/** Sets a session's text + caret and refreshes grid highlights in one shot. */
+const applySessionText = (session, text, caret) => {
+  session.setText(text);
+  session.setCaret(caret);
+  renderFormulaRefHighlights(text);
+};
+
+/** Called on every input/commit-change for the active session: tint + highlight. */
+const refreshFormulaEditing = (session) => {
+  const text = session.getText();
+  renderFormulaRefHighlights(text);
+  if (session.kind === 'cell') {
+    const caret = session.getCaret();
+    renderCellFormulaHtml(session.el, text);
+    session.setCaret(caret);
+  }
+};
+
+/** Ends the active formula session: clears highlights and the active pointer. */
+const endFormulaSession = () => {
+  clearFormulaRefHighlights();
+  activeFormulaSession = null;
+  pointAnchorCellId = null;
+  pointPending = null;
+  pointInserting = false;
+};
+
 /**
  * Copies values, formulas, and styles of the currently selected range of cells.
  */
