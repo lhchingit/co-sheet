@@ -291,6 +291,17 @@
             font-size: 12px;
             font-weight: 500;
         }
+        /* Colored dashed boxes drawn over referenced ranges while a formula is
+           being edited (formula point mode). Each distinct reference gets its own
+           palette color, set inline from formula-refs.js. pointer-events:none so
+           clicks fall through to the underlying cells (used by point mode). */
+        #formula-ref-highlights { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+        .formula-ref-highlight {
+            position: absolute;
+            border: 1px dashed;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
         .grid-cell {
             border-right: 1px solid #dadce0;
             border-bottom: 1px solid #dadce0;
@@ -1756,6 +1767,7 @@
      the window.CoSheet namespace each module publishes. -->
 <script src="/sheet-utils.js" defer></script>
 <script src="/formula-engine.js" defer></script>
+<script src="/formula-refs.js" defer></script>
 <script src="/i18n.js" defer></script>
 <script src="/sheet-functions.js" defer></script>
 <script src="/user-menu.js" defer></script>

@@ -16,6 +16,7 @@ export function readAppBundle() {
   return [
     read('sheet-utils.js'),
     read('formula-engine.js'),
+    read('formula-refs.js'),
     read('i18n.js'),
     read('app.js')
   ].join('\n;\n');
