@@ -761,6 +761,70 @@ const updateRangeSelectionUI = () => {
   overlay.style.height = `${height}px`;
 };
 
+/* ---------------------------------------------------------------------------
+ * Formula point mode — referenced-range highlights
+ * ---------------------------------------------------------------------------
+ * While a formula is being edited (in a cell or the formula bar), every cell/
+ * range reference in the text is outlined with a colored dashed box on the grid.
+ * Colors come from window.CoSheet.formulaRefs; identical references share one.
+ * ------------------------------------------------------------------------- */
+
+/** Converts '#rrggbb' to an rgba() string at the given alpha. */
+const hexToRgba = (hex, alpha) => {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+/** Returns (creating if needed) the absolute layer that holds highlight boxes. */
+const ensureRefHighlightLayer = () => {
+  let layer = document.getElementById('formula-ref-highlights');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'formula-ref-highlights';
+    const gridRoot = document.getElementById('grid-root');
+    if (gridRoot) gridRoot.appendChild(layer);
+  }
+  return layer;
+};
+
+/** Removes all highlight boxes (called when a formula edit ends). */
+const clearFormulaRefHighlights = () => {
+  const layer = document.getElementById('formula-ref-highlights');
+  if (layer) layer.innerHTML = '';
+};
+
+/** Draws a dashed colored box over each distinct in-grid reference in `text`. */
+const renderFormulaRefHighlights = (text) => {
+  const layer = ensureRefHighlightLayer();
+  layer.innerHTML = '';
+  const api = window.CoSheet && window.CoSheet.formulaRefs;
+  if (!api || typeof text !== 'string' || text[0] !== '=') return;
+  const refs = api.assignColors(api.scanReferences(text));
+  const seen = new Set();
+  for (const r of refs) {
+    const key = `${r.r1},${r.c1},${r.r2},${r.c2}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Skip references outside the 26-column grid (text is still tinted in-cell).
+    if (r.r1 < 0 || r.c1 < 0 || r.c2 > 25) continue;
+    const tl = document.querySelector(`[data-cell-id="${getColLetter(r.c1)}${r.r1 + 1}"]`);
+    const br = document.querySelector(`[data-cell-id="${getColLetter(r.c2)}${r.r2 + 1}"]`);
+    if (!tl || !br || typeof tl.offsetLeft !== 'number') continue;
+    const box = document.createElement('div');
+    box.className = 'formula-ref-highlight';
+    box.style.left = `${tl.offsetLeft}px`;
+    box.style.top = `${tl.offsetTop}px`;
+    box.style.width = `${br.offsetLeft + br.offsetWidth - tl.offsetLeft}px`;
+    box.style.height = `${br.offsetTop + br.offsetHeight - tl.offsetTop}px`;
+    box.style.borderColor = r.color;
+    box.style.backgroundColor = hexToRgba(r.color, 0.1);
+    layer.appendChild(box);
+  }
+};
+
 /**
  * Copies values, formulas, and styles of the currently selected range of cells.
  */
