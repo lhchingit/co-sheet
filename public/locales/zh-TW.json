@@ -200,6 +200,8 @@
   "tip.valignCenter": "中央對齊",
   "tip.alignBottom": "靠下對齊",
   "tip.exitHistory": "結束版本紀錄模式",
+  "tip.addSheet": "新增工作表",
+  "tip.allSheets": "所有工作表",
   "font.theme": "主題",
   "font.default": "預設 (Arial)",
   "history.from": "版本紀錄自",

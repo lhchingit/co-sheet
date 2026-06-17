@@ -6985,8 +6985,12 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
     const margin = 6;
     let left = r.left + r.width / 2 - t.width / 2;
     left = Math.max(4, Math.min(left, window.innerWidth - t.width - 4));
-    let top = r.bottom + margin;
-    if (top + t.height > window.innerHeight - 4) {
+    // Elements that opt in (e.g. the bottom sheet-tab controls, where a tooltip
+    // below would fall off-screen) are always placed above; everyone else shows
+    // below and only flips up when there is no room.
+    const preferAbove = el.getAttribute('data-tooltip-placement') === 'top';
+    let top = preferAbove ? r.top - t.height - margin : r.bottom + margin;
+    if (!preferAbove && top + t.height > window.innerHeight - 4) {
       top = r.top - t.height - margin; // flip above if no room below
     }
     tip.style.left = `${Math.round(left)}px`;

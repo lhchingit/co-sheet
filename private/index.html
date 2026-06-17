@@ -1424,11 +1424,11 @@
      with the right border of the row-index gutter (grid-template-columns: 46px …). -->
 <footer class="fixed bottom-0 left-0 w-full z-50 flex items-center h-[40px] pl-[46px] pr-2 bg-surface-container dark:bg-surface-container-high border-t border-outline-variant dark:border-outline">
   <!-- Button to add a new sheet dynamically -->
-  <button id="add-sheet-btn" class="p-1 hover:bg-surface-variant rounded transition-colors mr-1">
-    <span class="material-symbols-outlined">add</span>
+  <button id="add-sheet-btn" class="flex items-center justify-center p-1 hover:bg-surface-variant rounded transition-colors mr-1" title="Add Sheet" data-i18n-title="tip.addSheet" data-tooltip-placement="top">
+    <span class="material-symbols-outlined text-[20px]">add</span>
   </button>
-  <button class="p-1 hover:bg-surface-variant rounded transition-colors mr-2">
-    <span class="material-symbols-outlined">menu</span>
+  <button class="flex items-center justify-center p-1 hover:bg-surface-variant rounded transition-colors mr-2" title="All Sheets" data-i18n-title="tip.allSheets" data-tooltip-placement="top">
+    <span class="material-symbols-outlined text-[20px]">menu</span>
   </button>
   <!-- Dynamic tabs container element, to be populated with sheets in app.js -->
   <div id="sheet-tabs-container" class="flex items-center h-full"></div>
