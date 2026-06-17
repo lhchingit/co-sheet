@@ -861,6 +861,11 @@ const pasteSelectedCells = () => {
   if (historyChanges.length > 0) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
     recalculateSheet();
+    // Pasting a cell with a larger font grows the destination row (its
+    // font-driven min-height). Re-measure the selection so the overlay and its
+    // fill handle track the new cell height; otherwise they stay at the old,
+    // shorter size and leave a stray horizontal line across the middle.
+    updateRangeSelectionUI();
     if (localCells[activeCellId]) {
       const formulaBar = document.getElementById('formula-bar-input');
       if (formulaBar) {
@@ -1311,6 +1316,11 @@ const performUndo = () => {
     localCells[cellId] = JSON.parse(JSON.stringify(action.before));
     syncCellState(cellId);
   }
+  // Restoring a cell can change its font-driven height (e.g. undoing the delete
+  // of a tall cell). Re-measure the selection so the overlay tracks the new cell
+  // height instead of leaving a stray horizontal line across the middle. (A
+  // border change above already re-rendered, which refreshes the overlay too.)
+  updateRangeSelectionUI();
   updateUndoRedoButtonsState();
 };
 
@@ -1340,6 +1350,9 @@ const performRedo = () => {
     localCells[cellId] = JSON.parse(JSON.stringify(action.after));
     syncCellState(cellId);
   }
+  // See performUndo: re-measure the selection so the overlay tracks any
+  // height change from the reapplied state.
+  updateRangeSelectionUI();
   updateUndoRedoButtonsState();
 };
 
@@ -3241,6 +3254,11 @@ const clearCell = (cellId) => {
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
   recalculateSheet();
+  // Clearing a cell drops its font-driven min-height, so the row shrinks back to
+  // the default height. Re-measure the selection so the overlay and its fill
+  // handle follow the smaller cell; otherwise they stay at the old, taller size
+  // and leave a stray horizontal line across the middle.
+  updateRangeSelectionUI();
 };
 
 /* ---------------------------------------------------------------------------
