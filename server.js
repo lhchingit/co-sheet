@@ -549,7 +549,7 @@ const ensureAdmin = async (req, res, next) => {
  * Serves the OpenID provider configuration. This includes metadata about the
  * issuer URL, authorization endpoint, token endpoint, and user info endpoint.
  */
-app.get('/oidc/.well-known/openid-configuration', (req, res) => {
+app.get('/oidc/.well-known/openid-configuration', requireMockOidcEnabled, (req, res) => {
   const host = `http://localhost:${PORT}`;
   res.json({
     issuer: `${host}/oidc`,
@@ -567,7 +567,7 @@ app.get('/oidc/.well-known/openid-configuration', (req, res) => {
  * OIDC JWKS Endpoint:
  * Serves the public keys used for signing token signatures.
  */
-app.get('/oidc/jwks', (req, res) => {
+app.get('/oidc/jwks', requireMockOidcEnabled, (req, res) => {
   res.json({
     keys: [jwk]
   });
@@ -580,7 +580,7 @@ app.get('/oidc/jwks', (req, res) => {
  * Validates the redirect_uri is local to prevent open redirect vulnerabilities,
  * and escapes form properties to prevent reflective XSS.
  */
-app.get('/oidc/authorize', (req, res) => {
+app.get('/oidc/authorize', requireMockOidcEnabled, (req, res) => {
   const { redirect_uri, state, client_id } = req.query;
 
   // Open Redirect Validation: Validate that redirect_uri is defined and strictly local
@@ -612,7 +612,7 @@ app.get('/oidc/authorize', (req, res) => {
  * by encoding the username in base64, then redirects back to the client app.
  * Validates the redirect_uri is local to prevent open redirect vulnerabilities.
  */
-app.post('/oidc/login', (req, res) => {
+app.post('/oidc/login', requireMockOidcEnabled, (req, res) => {
   const { redirect_uri, state, username } = req.body;
 
   // Open Redirect Validation
@@ -637,7 +637,7 @@ app.post('/oidc/login', (req, res) => {
  * Exchanges the authorization code for access and ID tokens.
  * The id_token is returned as a valid signed JWT using RS256.
  */
-app.post('/oidc/token', (req, res) => {
+app.post('/oidc/token', requireMockOidcEnabled, (req, res) => {
   const { code, client_id } = req.body;
   try {
     if (!code) {
@@ -680,7 +680,7 @@ app.post('/oidc/token', (req, res) => {
  * Decodes the access token to return mock user profile metadata.
  * Validates that the authorization header starts with Bearer mock-access-token-.
  */
-app.get('/oidc/userinfo', (req, res) => {
+app.get('/oidc/userinfo', requireMockOidcEnabled, (req, res) => {
   const authHeader = req.headers.authorization || '';
   if (!authHeader.startsWith('Bearer mock-access-token-')) {
     return res.status(401).json({ error: 'invalid_token', error_description: 'Access token is missing or invalid.' });
@@ -694,9 +694,51 @@ app.get('/oidc/userinfo', (req, res) => {
   });
 });
 
+/**
+ * Whether the built-in "Mock OIDC" sign-in option is offered on the login page.
+ * The mock provider is intended for local development & tests, so it should be
+ * hidden in production deployments. Controlled by MOCK_OIDC_ENABLED:
+ *   - unset/blank: enabled outside production (NODE_ENV !== 'production')
+ *   - "false"/"0"/"no"/"off": always disabled
+ *   - any other value: always enabled
+ * This governs both the visibility of the login button and whether the mock
+ * provider/login routes respond at all (see requireMockOidcEnabled).
+ */
+function isMockOidcEnabled() {
+  const v = process.env.MOCK_OIDC_ENABLED;
+  if (v === undefined || v.trim() === '') {
+    return process.env.NODE_ENV !== 'production';
+  }
+  return !/^(false|0|no|off)$/i.test(v.trim());
+}
+
+/**
+ * Express middleware that gates the built-in mock OIDC routes. When mock OIDC is
+ * disabled the provider/login endpoints respond as if they don't exist (404), so
+ * the mock sign-in is fully unreachable in production rather than merely hidden.
+ * Declared as a function so it is hoisted for routes defined earlier in the file.
+ */
+function requireMockOidcEnabled(req, res, next) {
+  if (!isMockOidcEnabled()) {
+    return res.status(404).send('Not Found');
+  }
+  next();
+}
+
+// Cache the login page markup; strip the Mock OIDC block once at startup based on
+// the env flag so we don't re-read/re-parse the file on every request.
+const LOGIN_HTML_PATH = path.join(__dirname, 'public', 'login.html');
+let loginPageHtml = fs.readFileSync(LOGIN_HTML_PATH, 'utf8');
+if (!isMockOidcEnabled()) {
+  loginPageHtml = loginPageHtml.replace(
+    /\s*<!-- MOCK_OIDC_START:[\s\S]*?<!-- MOCK_OIDC_END -->/,
+    ''
+  );
+}
+
 // Serve the login page.
 app.get('/login', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+  res.type('html').send(loginPageHtml);
 });
 
 // Redirect direct requests for index.html to the home (drive) route, so they are subject to auth.
@@ -744,11 +786,12 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
   }
 });
 
-// Trigger the OIDC authentication flow.
-app.get('/auth/oidc', passport.authenticate('oidc'));
+// Trigger the built-in mock OIDC authentication flow. Gated so it is unreachable
+// when mock OIDC is disabled (e.g. production).
+app.get('/auth/oidc', requireMockOidcEnabled, passport.authenticate('oidc'));
 
-// OIDC Provider callback route after authentication is completed.
-app.get('/auth/oidc/callback', passport.authenticate('oidc', {
+// Mock OIDC provider callback route after authentication is completed.
+app.get('/auth/oidc/callback', requireMockOidcEnabled, passport.authenticate('oidc', {
   successRedirect: '/',
   failureRedirect: '/login'
 }));
