@@ -1843,6 +1843,10 @@ const renderSpreadsheetGrid = () => {
   // the freshly built DOM, so it survives re-renders and remote edits.
   applyFilter();
 
+  // Keep the toolbar funnel button (icon fill, tint, tooltip) in sync with the
+  // active sheet's filter state across re-renders and sheet switches.
+  updateFilterToolbarButton();
+
   // The content height/width just changed; resync the synthetic scrollbars.
   if (gridScrollbarLayout) gridScrollbarLayout();
 };
@@ -6366,6 +6370,15 @@ if (menuDataBtn && menuDataDropdown) {
     else createSheetFilter(sortColIndex());
   });
 
+  // The toolbar funnel button toggles the same per-sheet value filter as the
+  // Data ▸ Create/Remove filter entry, on the active cell's column.
+  const toolbarFilterBtn = document.getElementById('toolbar-filter');
+  if (toolbarFilterBtn) toolbarFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (sheetFilters[activeSheetName]) removeSheetFilter();
+    else createSheetFilter(sortColIndex());
+  });
+
   const azBtn = document.getElementById('data-sort-az');
   const zaBtn = document.getElementById('data-sort-za');
   if (azBtn) azBtn.addEventListener('click', (e) => { e.stopPropagation(); performSheetSort(sortColIndex(), true); });
@@ -6510,6 +6523,27 @@ function updateDataFilterLabel() {
   if (!label) return;
   const active = !!sheetFilters[activeSheetName];
   label.textContent = t(active ? 'data.removeFilter' : 'data.createFilter');
+}
+
+// Reflect the active sheet's filter state on the toolbar funnel button: a solid
+// (filled) icon over a grey tint when a filter is active, an outline icon when
+// not. The tooltip flips between "Create a filter" / "Remove filter", keeping
+// its data-i18n-title in sync so it re-translates on a language switch. The FILL
+// axis is set inline so it wins over the global `.material-symbols-outlined` rule.
+function updateFilterToolbarButton() {
+  const btn = document.getElementById('toolbar-filter');
+  if (!btn) return;
+  const active = !!sheetFilters[activeSheetName];
+  const icon = btn.querySelector('.material-symbols-outlined');
+  if (icon) icon.style.fontVariationSettings = active ? "'FILL' 1" : "'FILL' 0";
+  // Grey tint while active. Set inline (surface-variant token) rather than via a
+  // Tailwind class so it doesn't depend on the runtime JIT generating a class
+  // that only appears dynamically; clearing it lets the hover state show again.
+  btn.style.backgroundColor = active ? '#dfe3e8' : '';
+  const key = active ? 'data.removeFilter' : 'data.createFilter';
+  btn.setAttribute('data-i18n-title', key);
+  btn.title = t(key);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
 // Filters are local view state (never broadcast), so they survive reloads via
