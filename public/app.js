@@ -279,6 +279,42 @@ const WB_STATE_CHANGING_TYPES = [
   'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets', 'resize'
 ];
 
+// Footer save-status indicator. The server never acks a save, so this reflects
+// the only state we can truthfully observe: an edit was broadcast over an open
+// socket ('saving' → 'saved' after a quiet window), or the socket dropped and
+// edits can no longer reach the server ('reconnecting'). Swapping data-i18n in
+// addition to textContent keeps the label correct across a later language switch.
+const SAVE_STATUS = {
+  saved:        { key: 'status.allSaved',     dot: 'bg-green-500' },
+  saving:       { key: 'status.saving',       dot: 'bg-amber-500' },
+  reconnecting: { key: 'status.reconnecting', dot: 'bg-red-500' }
+};
+let saveStatusTimer = null;
+function setSaveStatus(state) {
+  const cfg = SAVE_STATUS[state];
+  if (!cfg) return;
+  const textEl = document.getElementById('save-status-text');
+  if (textEl) {
+    textEl.setAttribute('data-i18n', cfg.key);
+    textEl.textContent = t(cfg.key);
+  }
+  const dotEl = document.getElementById('save-status-dot');
+  if (dotEl) {
+    Object.values(SAVE_STATUS).forEach((s) => dotEl.classList.remove(s.dot));
+    dotEl.classList.add(cfg.dot);
+  }
+}
+
+// Show 'saving' on each broadcast edit, then settle back to 'saved' once edits
+// stop for a beat. A dropped socket clears this so 'reconnecting' isn't overwritten.
+function markSaving() {
+  clearTimeout(saveStatusTimer);
+  setSaveStatus('saving');
+  saveStatusTimer = setTimeout(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) setSaveStatus('saved');
+  }, 700);
+}
+
 // Wrap socket.send to automatically inject sheetName in outgoing events. Applied
 // to each freshly (re)connected socket by connectSocket() so the behavior survives
 // reconnects.
@@ -294,7 +330,12 @@ function applySendWrapper(sock) {
       if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move' || msg.type === 'resize') && msg.payload) {
         msg.payload.sheetName = activeSheetName;
       }
-      return originalSend.call(this, JSON.stringify(msg));
+      const result = originalSend.call(this, JSON.stringify(msg));
+      // A successfully broadcast state-changing edit means a save is in flight.
+      if (msg && WB_STATE_CHANGING_TYPES.includes(msg.type) && this.readyState === WebSocket.OPEN) {
+        markSaving();
+      }
+      return result;
     } catch (e) {
       return originalSend.call(this, data);
     }
@@ -587,9 +628,16 @@ function connectSocket() {
   socket.onopen = () => {
     // Connection established: reset the backoff so the next drop retries quickly.
     wsReconnectAttempts = 0;
+    // Reconnect re-sends the full init payload, so we're back in sync = saved.
+    clearTimeout(saveStatusTimer);
+    setSaveStatus('saved');
   };
 
   socket.onclose = () => {
+    // Socket down: edits can no longer reach the server, so surface that the
+    // workbook is not currently being saved.
+    clearTimeout(saveStatusTimer);
+    setSaveStatus('reconnecting');
     // Exponential backoff capped at 30s, plus jitter so that a fleet of clients
     // reconnecting after an instance restart doesn't stampede the server at once.
     const delay = Math.min(30000, 1000 * 2 ** wsReconnectAttempts) + Math.random() * 1000;
