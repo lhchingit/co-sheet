@@ -36,6 +36,7 @@ import * as cellService from './services/cellService.js';
 import * as sheetService from './services/sheetService.js';
 import * as dimensionService from './services/dimensionService.js';
 import { shouldSkipOidcTls } from './services/oidcTls.js';
+import { isExternalOidcUserinfoSkipped } from './services/oidcProfile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtimeBus.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
@@ -477,6 +478,12 @@ const registerStrategies = () => {
       clientSecret: process.env.OIDC_CLIENT_SECRET,
       callbackURL: `${baseUrl}/auth/oidc-sso/callback`,
       scope: process.env.OIDC_SCOPE || 'openid profile email',
+      // Some self-hosted providers don't expose a userinfo endpoint (or the
+      // `profile` scope). Our 9-arg verify would otherwise make passport-openidconnect
+      // always GET userinfo, so every login would fail with "Failed to fetch user
+      // profile". OIDC_SKIP_USERINFO skips that call and derives identity from the
+      // ID-token claims (the verify callback falls back to idProfile below).
+      skipUserProfile: isExternalOidcUserinfoSkipped(),
       // When OIDC_TLS_VERIFY is disabled (self-signed local provider), pass an
       // https.Agent that skips cert verification; otherwise undefined keeps the
       // default verifying agent. Scoped to this strategy so Google/other TLS is
