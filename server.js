@@ -36,6 +36,7 @@ import * as cellService from './services/cellService.js';
 import * as sheetService from './services/sheetService.js';
 import * as dimensionService from './services/dimensionService.js';
 import { shouldSkipOidcTls } from './services/oidcTls.js';
+import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtimeBus.js';
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +47,12 @@ const app = express();
 
 // Determine the port number: default to 3000 unless overridden by the PORT environment variable.
 const PORT = process.env.PORT || 3000;
+
+// Whether REDIS_URL points at a true (cluster-mode-enabled) Redis Cluster, which
+// needs a slot-aware client. Leave unset for a single endpoint (a standalone Redis
+// or a managed HA instance behind one address, e.g. Memorystore / ElastiCache
+// cluster-mode-disabled) — those work with the default single-node client.
+const REDIS_CLUSTER = /^(1|true|yes|on)$/i.test(process.env.REDIS_CLUSTER || '');
 
 // Generate RSA key pair for signing mock JWTs at server startup
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
@@ -353,8 +360,26 @@ app.use(express.json());
 // Middleware to parse urlencoded bodies, typical of form submissions.
 app.use(express.urlencoded({ extended: true }));
 
-// Instantiate a shared in-memory session store so that it can be queried during WebSocket upgrades.
-const sessionStore = new session.MemoryStore();
+// Shared session store, queried both by the HTTP session middleware and during
+// the WebSocket upgrade. With multiple app instances the store MUST be shared, or
+// a socket whose login landed on instance A can't be authenticated on instance B.
+// When REDIS_URL is set we back it with Redis; otherwise we keep the in-memory
+// store (single-instance / local / tests). Top-level await is fine here — ESM
+// supports it and it simply delays the rest of module init until the store is up.
+let sessionStore;
+const redisConfig = resolveRedisOptions({ redisUrl: process.env.REDIS_URL, cluster: REDIS_CLUSTER });
+if (redisConfig) {
+  const { RedisStore } = await import('connect-redis');
+  // A cluster-aware client when REDIS_CLUSTER is set, else a single-node client.
+  // connect-redis works with either.
+  const sessionRedisClient = await createRedisClient(redisConfig);
+  sessionRedisClient.on('error', (e) => console.error('[session] redis error:', e.message));
+  await sessionRedisClient.connect();
+  sessionStore = new RedisStore({ client: sessionRedisClient, prefix: 'cosheet:sess:' });
+  console.log(`[session] using Redis-backed session store (${redisConfig.cluster ? 'cluster' : 'single'})`);
+} else {
+  sessionStore = new session.MemoryStore();
+}
 
 // Configure express-session middleware with secure false cookie configuration.
 app.use(session({
@@ -2023,6 +2048,10 @@ const unsign = (val, secret) => {
 // Initialize WebSocket server instance.
 const wss = new WebSocketServer({ noServer: true });
 
+// Cross-instance message bus. In single-instance / local mode (no REDIS_URL) this
+// is a no-op and the server behaves exactly as before. init() runs in `ready`.
+const bus = createRealtimeBus({ redisUrl: process.env.REDIS_URL, cluster: REDIS_CLUSTER });
+
 // Run database initialization and start the HTTP server with WebSocket upgrade
 // support. `ready` resolves once the server is actually listening, so importers
 // (e.g. tests that load the module in-process) can await startup and then close
@@ -2033,6 +2062,9 @@ const ready = (async () => {
     await initDatabase();
     sheetState = await loadState();
 
+    // Connect the cross-instance realtime bus (no-op without REDIS_URL).
+    await bus.init();
+
     // Create the HTTP server and attach handlers before it begins listening.
     server = app.listen(PORT);
 
@@ -2041,6 +2073,7 @@ const ready = (async () => {
       if (typeof autosaveInterval !== 'undefined') {
         clearInterval(autosaveInterval);
       }
+      bus.close().catch(() => { /* best-effort */ });
     });
 
     // Attach Upgrade handler to the HTTP server for WebSocket handshakes.
@@ -2097,7 +2130,13 @@ const ready = (async () => {
 })();
 
 // Map to maintain details of active connected users: wsId -> { ws, username, color, activeCell }
+// This holds only sockets connected to THIS instance (each entry has a live `ws`).
 const activeUsers = new Map();
+
+// Mirror of users connected to OTHER instances (multi-instance mode), kept in sync
+// via the realtime bus. No `ws` — used only to build the presence list in `init`.
+// wsId -> { username, color, activeCell, activeSheet, fileId }
+const remoteUsers = new Map();
 
 // Autosave state tracking variables for periodic workbook version snapshots.
 let pendingChanges = false;
@@ -2124,7 +2163,21 @@ const autosaveInterval = setInterval(async () => {
       try {
         // Construct the editors string using comma and space separator.
         const editorsString = currentEditors.size > 0 ? Array.from(currentEditors).join(', ') : 'anonymous';
-        
+
+        // In multi-instance mode every instance that saw a local edit would
+        // otherwise snapshot independently, producing duplicate version-history
+        // entries. A short-lived distributed lock lets a single instance win the
+        // snapshot for this window (always granted in local mode).
+        const gotLock = await bus.acquireLock('autosave:default', Math.max(1000, AUTOSAVE_CHECK_INTERVAL - 500));
+        if (!gotLock) {
+          // Another instance is snapshotting; clear our local pending flag so we
+          // don't spin, and let its snapshot stand.
+          pendingChanges = false;
+          currentEditors.clear();
+          lastVersionTime = now;
+          return;
+        }
+
         // Create a new version snapshot in workbook_versions database table.
         await versionsRepo.insertVersion(JSON.stringify(sheetState), editorsString);
         
@@ -2148,6 +2201,213 @@ if (typeof autosaveInterval.unref === 'function') {
 
 // Color palette for user cursor highlights (from co-sheet design layout specs).
 const userColors = ['#1471e6', '#1e8e3e', '#d93025', '#e37400', '#a142f4', '#f06292'];
+
+/**
+ * Send a message to every local socket editing `fileId`, optionally excluding one
+ * connection (the sender, for "broadcast to others" semantics). This only reaches
+ * sockets held by THIS instance; cross-instance fan-out is layered on top via the
+ * realtime bus.
+ * @param {string} fileId
+ * @param {object} msg
+ * @param {string|null} [excludeWsId]
+ */
+const localBroadcast = (fileId, msg, excludeWsId = null) => {
+  const data = JSON.stringify(msg);
+  for (const [id, info] of activeUsers) {
+    if (info.fileId === fileId && id !== excludeWsId && info.ws.readyState === WebSocket.OPEN) {
+      info.ws.send(data);
+    }
+  }
+};
+
+/**
+ * Resolve the in-memory workbook for a file id WITHOUT loading it. The default
+ * workbook always lives in `sheetState`; other workbooks are only returned if
+ * already cached on this instance. Returns null when not cached — used by the
+ * replica path to skip ops for files this instance isn't currently serving (a
+ * later connection re-loads fresh state from Postgres).
+ * @param {string} fileId
+ * @returns {Object|null}
+ */
+const resolveCachedWorkbook = (fileId) => {
+  if (fileId === 'default') return getDefaultState();
+  return workbooks.get(fileId) || null;
+};
+
+/**
+ * Apply a state-changing op to `workbook` and return the client messages to emit.
+ * This is the single source of truth for how each op mutates state, run identically
+ * on the originating instance and on every replica (so all in-memory caches stay
+ * coherent). It does NOT persist or network — the caller decides that.
+ *
+ * @param {Object} workbook  The target workbook state.
+ * @param {string} type      Op type (one of stateChangingTypes).
+ * @param {Object} payload   Op payload.
+ * @returns {Array<{ all: boolean, msg: object }>} Messages to deliver locally;
+ *   `all` true => include the sender, false => exclude the sender.
+ */
+const applyStateOp = (workbook, type, payload) => {
+  /** @type {Array<{ all: boolean, msg: object }>} */
+  const out = [];
+
+  if (type === 'cell-edit') {
+    const { cellId, formula, value, style, sheetName } = payload;
+    const sheet = sheetName || 'Sheet1';
+    const result = cellService.writeCellValue(workbook, { cellId, formula, value, style, sheetName: sheet });
+    if (result.ok) {
+      out.push({ all: false, msg: { type: 'cell-update', payload: { cellId, formula, value, style, sheetName: result.sheet } } });
+    }
+  } else if (type === 'add-sheet') {
+    const result = sheetService.addSheet(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'add-sheet', payload: { sheetName: result.sheetName, sheetOrder: result.sheetOrder } } });
+    }
+  } else if (type === 'delete-sheet') {
+    const result = sheetService.deleteSheet(workbook, payload);
+    if (result.ok) {
+      // Switch local users on the deleted sheet to another visible sheet (presence).
+      for (const [, info] of activeUsers) {
+        if (info.activeSheet === result.sheetName) {
+          info.activeSheet = workbook.sheetOrder.find(s => !workbook.hiddenSheets.includes(s)) || 'Sheet1';
+          info.activeCell = null;
+        }
+      }
+      out.push({ all: true, msg: { type: 'delete-sheet', payload: { sheetName: result.sheetName } } });
+    }
+  } else if (type === 'copy-sheet') {
+    const result = sheetService.copySheet(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'add-sheet', payload: { sheetName: result.sheetName, sheetOrder: result.sheetOrder, cells: result.cells } } });
+    }
+  } else if (type === 'rename-sheet') {
+    const result = sheetService.renameSheet(workbook, payload);
+    if (result.ok) {
+      // Update local users on the renamed sheet (presence).
+      for (const [, info] of activeUsers) {
+        if (info.activeSheet === result.oldName) info.activeSheet = result.newName;
+      }
+      out.push({ all: true, msg: { type: 'rename-sheet', payload: { oldName: result.oldName, newName: result.newName } } });
+    }
+  } else if (type === 'color-sheet') {
+    const result = sheetService.colorSheet(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'color-sheet', payload: { sheetName: result.sheetName, color: result.color } } });
+    }
+  } else if (type === 'hide-sheet') {
+    const result = sheetService.hideSheet(workbook, payload);
+    if (result.ok) {
+      // Move local users on the hidden sheet to another visible sheet (presence).
+      for (const [, info] of activeUsers) {
+        if (info.activeSheet === result.sheetName) {
+          info.activeSheet = workbook.sheetOrder.find(s => !workbook.hiddenSheets.includes(s)) || 'Sheet1';
+          info.activeCell = null;
+        }
+      }
+      out.push({ all: true, msg: { type: 'hide-sheet', payload: { sheetName: result.sheetName } } });
+    }
+  } else if (type === 'unhide-sheet') {
+    const result = sheetService.unhideSheet(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'unhide-sheet', payload: { sheetName: result.sheetName } } });
+    }
+  } else if (type === 'reorder-sheets') {
+    const result = sheetService.reorderSheets(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'reorder-sheets', payload: { sheetOrder: result.sheetOrder } } });
+    }
+  } else if (type === 'resize') {
+    const dimension = payload && payload.dimension;
+    const result = dimension === 'col'
+      ? dimensionService.resizeColumn(workbook, payload)
+      : dimension === 'row'
+        ? dimensionService.resizeRow(workbook, payload)
+        : /** @type {{ ok: false }} */ ({ ok: false });
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'resize-update', payload: { dimension, sheetName: result.sheetName, col: result.col, row: result.row, size: result.size } } });
+    }
+  }
+
+  return out;
+};
+
+/**
+ * Run a state op end-to-end on this instance: mutate the cached workbook, emit the
+ * resulting messages to local sockets, and (origin only) persist. Returns true if
+ * the op changed state.
+ * @param {{ fileId: string, type: string, payload: object, excludeWsId?: string|null, persist: boolean }} args
+ * @returns {boolean}
+ */
+const processStateOp = ({ fileId, type, payload, excludeWsId = null, persist }) => {
+  const workbook = resolveCachedWorkbook(fileId);
+  if (!workbook) return false; // not served on this instance
+  const broadcasts = applyStateOp(workbook, type, payload);
+  if (!broadcasts.length) return false;
+  if (persist) persistWorkbook(fileId);
+  for (const b of broadcasts) {
+    localBroadcast(fileId, b.msg, b.all ? null : excludeWsId);
+  }
+  return true;
+};
+
+/**
+ * Build the presence list for a file: local sockets plus mirrored remote users.
+ * @param {string} fileId
+ * @returns {Array<{ userId: string, username: string, color: string, activeCell: any, activeSheet: string }>}
+ */
+const presenceForFile = (fileId) => {
+  const list = [];
+  for (const [id, info] of activeUsers) {
+    if (info.fileId === fileId) {
+      list.push({ userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' });
+    }
+  }
+  for (const [id, info] of remoteUsers) {
+    if (info.fileId === fileId) {
+      list.push({ userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' });
+    }
+  }
+  return list;
+};
+
+/**
+ * Handle a message received from ANOTHER instance via the realtime bus. State ops
+ * are re-applied to the local cache and fanned out to local sockets; presence
+ * events update the remote-user mirror and notify local sockets.
+ * @param {object} msg
+ */
+const handleBusMessage = (msg) => {
+  try {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.kind === 'op') {
+      // Replica apply: no persist (the origin already persisted), no sender to exclude.
+      processStateOp({ fileId: msg.fileId, type: msg.type, payload: msg.payload, excludeWsId: null, persist: false });
+      return;
+    }
+    if (msg.kind === 'presence') {
+      const { event, fileId } = msg;
+      if (event === 'join' || event === 'update') {
+        const u = msg.user;
+        remoteUsers.set(u.userId, { username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet, fileId });
+        localBroadcast(fileId, { type: 'cursor-update', payload: { userId: u.userId, username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet } });
+      } else if (event === 'leave') {
+        remoteUsers.delete(msg.userId);
+        localBroadcast(fileId, { type: 'user-leave', payload: { userId: msg.userId } });
+      } else if (event === 'sync-request') {
+        // A peer (re)joined and wants the current roster — re-announce our local
+        // users for that file so the requester's clients can render them.
+        for (const [id, info] of activeUsers) {
+          if (info.fileId === fileId) {
+            bus.publish({ kind: 'presence', event: 'join', fileId, user: { userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' } });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[realtime] error handling bus message:', e.message);
+  }
+};
+
+bus.onMessage(handleBusMessage);
 
 // Handle incoming WebSocket connection requests.
 wss.on('connection', async (ws, req) => {
@@ -2177,8 +2437,6 @@ wss.on('connection', async (ws, req) => {
 
   // Load (and cache) this connection's workbook. For 'default' this is the global sheetState.
   const connWorkbook = await getWorkbook(fileId);
-  // Persist whichever workbook this connection edits.
-  const persist = () => persistWorkbook(fileId);
 
   // Resolve whether this connection may make changes. The shared 'default' workbook
   // stays editable by anyone; for other files only the owner / admins / super admins
@@ -2206,47 +2464,34 @@ wss.on('connection', async (ws, req) => {
       rowHeights: connWorkbook.rowHeights,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
-      users: Array.from(activeUsers.entries())
-        .filter(([id, info]) => info.fileId === fileId)
-        .map(([id, info]) => ({
-          userId: id,
-          username: info.username,
-          color: info.color,
-          activeCell: info.activeCell,
-          activeSheet: info.activeSheet || 'Sheet1'
-        }))
+      // Presence list merges this instance's sockets with users mirrored from
+      // other instances (empty in single-instance mode).
+      users: presenceForFile(fileId)
     }
   }));
 
-  /**
-   * Broadcast a message to all OTHER clients editing the SAME file.
-   * @param {Object} msg - The JSON message to broadcast.
-   */
-  const broadcast = (msg) => {
-    for (const [id, info] of activeUsers) {
-      if (id !== wsId && info.fileId === fileId && info.ws.readyState === WebSocket.OPEN) {
-        info.ws.send(JSON.stringify(msg));
-      }
-    }
-  };
+  // 2. Announce this user's presence: to local clients directly, and to other
+  // instances over the bus. Also ask peers to re-announce their rosters so this
+  // client learns about users already connected elsewhere.
+  const joinUser = { userId: wsId, username, color, activeCell: null, activeSheet: 'Sheet1' };
+  localBroadcast(fileId, { type: 'cursor-update', payload: joinUser }, wsId);
+  bus.publish({ kind: 'presence', event: 'join', fileId, user: joinUser });
+  bus.publish({ kind: 'presence', event: 'sync-request', fileId });
 
-  /**
-   * Broadcast a message to all clients editing the SAME file (including sender).
-   * @param {Object} msg - The JSON message to broadcast.
-   */
-  const broadcastToAll = (msg) => {
-    for (const [id, info] of activeUsers) {
-      if (info.fileId === fileId && info.ws.readyState === WebSocket.OPEN) {
-        info.ws.send(JSON.stringify(msg));
-      }
-    }
-  };
-
-  // 2. Broadcast a cursor-update message notifying other clients of this user's presence.
-  broadcast({
-    type: 'cursor-update',
-    payload: { userId: wsId, username, color, activeCell: null, activeSheet: 'Sheet1' }
-  });
+  // State-changing op types (everything except presence/cursor). Used for the
+  // write-permission gate, autosave bookkeeping, and cross-instance fan-out.
+  const stateChangingTypes = [
+    'cell-edit',
+    'add-sheet',
+    'delete-sheet',
+    'copy-sheet',
+    'rename-sheet',
+    'color-sheet',
+    'hide-sheet',
+    'unhide-sheet',
+    'reorder-sheets',
+    'resize'
+  ];
 
   // Handle incoming WebSocket message events.
   ws.on('message', (message) => {
@@ -2254,253 +2499,55 @@ wss.on('connection', async (ws, req) => {
     try {
       const { type, payload } = JSON.parse(message);
 
-      // Bind this connection's workbook to the `sheetState` name for the remainder of
-      // the handler so the existing logic operates on the correct file. For 'default'
-      // this is the live global workbook; otherwise it is this file's cached workbook.
-      // Likewise route `saveState()` calls to persist the right workbook.
-      const sheetState = (fileId === 'default') ? getDefaultState() : connWorkbook;
-      const saveState = persist;
+      // Live workbook for cursor validation (default => global binding).
+      const workbook = (fileId === 'default') ? getDefaultState() : connWorkbook;
 
-      // Track client edits and workbook state modifications for the autosave engine.
-      // Autosave/version snapshots currently apply to the default workbook only.
-      const stateChangingTypes = [
-        'cell-edit',
-        'add-sheet',
-        'delete-sheet',
-        'copy-sheet',
-        'rename-sheet',
-        'color-sheet',
-        'hide-sheet',
-        'unhide-sheet',
-        'reorder-sheets',
-        'resize'
-      ];
-      // Enforce file-level write access: clients without edit permission on this
-      // file may still move their cursor (presence) but cannot change state.
-      if (!canEdit && stateChangingTypes.includes(type)) {
-        return;
-      }
-
-      if (fileId === 'default' && stateChangingTypes.includes(type)) {
-        pendingChanges = true;
-        currentEditors.add(username);
-        lastEditTime = Date.now();
-      }
-      
-      // Handle client cell cursor navigation.
+      // Handle client cell cursor navigation (presence — no state mutation).
       if (type === 'cursor-move') {
         const info = activeUsers.get(wsId);
         if (info) {
-          // Verify that the sheetName is a string matching /^[a-zA-Z0-9 ]{2,30}$/ and exists in sheetState.sheets before assigning it.
+          // Verify that the sheetName is a string matching the sheet-name regex and exists before assigning it.
           const sheetName = payload.sheetName;
-          if (typeof sheetName === 'string' && /^[\p{L}\p{N} ]{2,30}$/u.test(sheetName) && sheetState.sheets && sheetState.sheets[sheetName]) {
+          if (typeof sheetName === 'string' && /^[\p{L}\p{N} ]{2,30}$/u.test(sheetName) && workbook.sheets && workbook.sheets[sheetName]) {
             info.activeSheet = sheetName;
           } else {
             info.activeSheet = 'Sheet1';
           }
 
-          // Check that cellId is either null or matches the standard cell ID regex /^[A-Z]{1,2}[1-9][0-9]{0,2}$/ before updating.
+          // Check that cellId is either null or matches the standard cell ID regex before updating.
           const cellId = payload.cellId;
           if (cellId === null || (typeof cellId === 'string' && /^[A-Z]{1,2}[1-9][0-9]{0,2}$/.test(cellId))) {
             info.activeCell = cellId;
           }
-          
-          // Broadcast cursor position and active sheet changes to all other connected clients.
-          broadcast({
-            type: 'cursor-update',
-            payload: {
-              userId: wsId,
-              username: info.username,
-              color: info.color,
-              activeCell: info.activeCell,
-              activeSheet: info.activeSheet
-            }
-          });
-        }
-      }
-      
-      // Handle client cell text/formula updates.
-      if (type === 'cell-edit') {
-        // Set pending changes flag, record the editor, and update edit time for the autosave engine
-        // (default workbook only; per-file autosave snapshots are out of scope this pass).
-        if (fileId === 'default') {
-          pendingChanges = true;
-          currentEditors.add(username);
-          lastEditTime = Date.now();
-        }
 
-        const { cellId, formula, value, style, sheetName } = payload;
-        // Default to Sheet1 so an omitted sheet targets a concrete sheet (never the
-        // REST-style `cells` accessor). The service validates the sheet name and its
-        // existence, plus the full payload; an invalid edit is silently ignored.
-        const sheet = sheetName || 'Sheet1';
-        const result = cellService.writeCellValue(sheetState, { cellId, formula, value, style, sheetName: sheet });
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Broadcast cell state changes to all other connected clients.
-          broadcast({
-            type: 'cell-update',
-            payload: { cellId, formula, value, style, sheetName: result.sheet }
-          });
+          const cu = { userId: wsId, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet };
+          // Notify local peers and mirror to other instances.
+          localBroadcast(fileId, { type: 'cursor-update', payload: cu }, wsId);
+          bus.publish({ kind: 'presence', event: 'update', fileId, user: cu });
         }
+        return;
       }
 
-      // Handle sheet creation event.
-      if (type === 'add-sheet') {
-        const result = sheetService.addSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
+      // All remaining handled types are state-changing.
+      if (!stateChangingTypes.includes(type)) return;
 
-          // Broadcast add-sheet event containing the new sheetName and sheetOrder to all clients.
-          broadcastToAll({
-            type: 'add-sheet',
-            payload: { sheetName: result.sheetName, sheetOrder: result.sheetOrder }
-          });
-        }
+      // Enforce file-level write access: clients without edit permission on this
+      // file may still move their cursor (presence) but cannot change state.
+      if (!canEdit) return;
+
+      // Autosave/version snapshots currently track the default workbook only.
+      if (fileId === 'default') {
+        pendingChanges = true;
+        currentEditors.add(username);
+        lastEditTime = Date.now();
       }
 
-      // Handle sheet deletion event.
-      if (type === 'delete-sheet') {
-        const result = sheetService.deleteSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Switch users on the deleted sheet to another visible sheet (presence).
-          for (const [id, info] of activeUsers) {
-            if (info.activeSheet === result.sheetName) {
-              const nextSheet = sheetState.sheetOrder.find(s => !sheetState.hiddenSheets.includes(s)) || 'Sheet1';
-              info.activeSheet = nextSheet;
-              info.activeCell = null;
-            }
-          }
-
-          // Broadcast the sheet deletion event to all clients.
-          broadcastToAll({ type: 'delete-sheet', payload: { sheetName: result.sheetName } });
-        }
-      }
-
-      // Handle sheet copy event.
-      if (type === 'copy-sheet') {
-        const result = sheetService.copySheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Broadcast add-sheet event with new sheetName, sheetOrder, and cloned cells to all clients.
-          broadcastToAll({
-            type: 'add-sheet',
-            payload: {
-              sheetName: result.sheetName,
-              sheetOrder: result.sheetOrder,
-              cells: result.cells
-            }
-          });
-        }
-      }
-
-      // Handle sheet rename event.
-      if (type === 'rename-sheet') {
-        const result = sheetService.renameSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Update active users on the renamed sheet (presence).
-          for (const [id, info] of activeUsers) {
-            if (info.activeSheet === result.oldName) {
-              info.activeSheet = result.newName;
-            }
-          }
-
-          // Broadcast rename-sheet event to all clients.
-          broadcastToAll({ type: 'rename-sheet', payload: { oldName: result.oldName, newName: result.newName } });
-        }
-      }
-
-      // Handle sheet tab color event.
-      if (type === 'color-sheet') {
-        const result = sheetService.colorSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Broadcast color-sheet event to all clients.
-          broadcastToAll({ type: 'color-sheet', payload: { sheetName: result.sheetName, color: result.color } });
-        }
-      }
-
-      // Handle sheet hide event.
-      if (type === 'hide-sheet') {
-        const result = sheetService.hideSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Move active users on the hidden sheet to another visible sheet (presence).
-          for (const [id, info] of activeUsers) {
-            if (info.activeSheet === result.sheetName) {
-              const nextSheet = sheetState.sheetOrder.find(s => !sheetState.hiddenSheets.includes(s)) || 'Sheet1';
-              info.activeSheet = nextSheet;
-              info.activeCell = null;
-            }
-          }
-
-          // Broadcast hide-sheet event to all clients.
-          broadcastToAll({ type: 'hide-sheet', payload: { sheetName: result.sheetName } });
-        }
-      }
-
-      // Handle sheet unhide event.
-      if (type === 'unhide-sheet') {
-        const result = sheetService.unhideSheet(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Broadcast unhide-sheet event to all clients.
-          broadcastToAll({ type: 'unhide-sheet', payload: { sheetName: result.sheetName } });
-        }
-      }
-
-      // Handle sheet reordering event.
-      if (type === 'reorder-sheets') {
-        const result = sheetService.reorderSheets(sheetState, payload);
-        if (result.ok) {
-          // Save updated state asynchronously and atomically to file store.
-          saveState();
-
-          // Broadcast reorder-sheets event with the new order list to all clients.
-          broadcastToAll({ type: 'reorder-sheets', payload: { sheetOrder: result.sheetOrder } });
-        }
-      }
-
-      // Handle column-width / row-height resize event.
-      if (type === 'resize') {
-        const dimension = payload && payload.dimension;
-        const result = dimension === 'col'
-          ? dimensionService.resizeColumn(sheetState, payload)
-          : dimension === 'row'
-            ? dimensionService.resizeRow(sheetState, payload)
-            : /** @type {{ ok: false }} */ ({ ok: false });
-        if (result.ok) {
-          // Persist and broadcast the new size to all clients (including sender, so
-          // every peer applies the server-clamped value).
-          saveState();
-          broadcastToAll({
-            type: 'resize-update',
-            payload: {
-              dimension,
-              sheetName: result.sheetName,
-              col: result.col,
-              row: result.row,
-              size: result.size
-            }
-          });
-        }
+      // Apply locally (mutate cache + persist + fan out to local sockets). When it
+      // actually changed state, relay the op so every other instance applies the
+      // same mutation to its cache and notifies its own clients.
+      const changed = processStateOp({ fileId, type, payload, excludeWsId: wsId, persist: true });
+      if (changed) {
+        bus.publish({ kind: 'op', fileId, type, payload });
       }
     } catch (e) {
       console.error('WebSocket message parsing error:', e.message);
@@ -2512,12 +2559,10 @@ wss.on('connection', async (ws, req) => {
     console.log(`[WS Server] Closed: ${username} (${wsId})`);
     // Remove user entry from active users registry.
     activeUsers.delete(wsId);
-    
-    // Broadcast user leaving event to alert other connected clients.
-    broadcast({
-      type: 'user-leave',
-      payload: { userId: wsId }
-    });
+
+    // Notify local clients and other instances that this user left.
+    localBroadcast(fileId, { type: 'user-leave', payload: { userId: wsId } }, wsId);
+    bus.publish({ kind: 'presence', event: 'leave', fileId, userId: wsId });
   });
 });
 

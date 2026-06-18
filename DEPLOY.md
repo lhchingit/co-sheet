@@ -3,17 +3,19 @@
 co-sheet is a stateful, real-time app: it keeps a persistent **WebSocket** open per
 client, holds live workbook state and sessions **in the server process**, and
 persists data to **PostgreSQL**. That rules out serverless platforms that can't
-hold a socket (e.g. Vercel functions) and means the app must currently run as a
-**single instance**. Google Cloud Run + Cloud SQL is the recommended target and is
-what the included `deploy.sh` and `cloudbuild.yaml` automate.
+hold a socket (e.g. Vercel functions). It runs as a **single instance** by default,
+and scales to **multiple instances** when a Redis (`REDIS_URL`) is configured.
+Google Cloud Run + Cloud SQL is the recommended target and is what the included
+`deploy.sh` and `cloudbuild.yaml` automate.
 
-> **⚠️ Scaling caveat — read first.** Live edits are broadcast only to the WebSocket
-> connections on the **same process** (`server.js` `broadcast()`), and sessions use
-> an in-memory store (`server.js:349`). If you run more than one instance, users on
-> different instances won't see each other's edits and logins won't be sticky. Both
-> `deploy.sh` and `cloudbuild.yaml` therefore pin Cloud Run to `--min/--max-instances=1`.
-> To scale horizontally you'd add Memorystore (Redis) for WebSocket fan-out and a
-> shared session store. Not required to launch.
+> **⚠️ Scaling caveat — read first.** Without `REDIS_URL`, live edits are broadcast
+> only to the WebSocket connections on the **same process** and sessions use an
+> in-memory store, so you **must** run a single instance — `deploy.sh` and
+> `cloudbuild.yaml` therefore pin Cloud Run to `--min/--max-instances=1`. To run
+> more than one instance, set `REDIS_URL`: the app then shares sessions in Redis and
+> fans edits/presence out across instances over Redis pub/sub. See
+> [Horizontal scaling with Redis](#horizontal-scaling-with-redis) below before
+> raising the instance cap. Not required to launch.
 
 ---
 
@@ -162,16 +164,72 @@ These don't block a launch but you should address them for real production use:
   session cookie is only sent over HTTPS.
 - **Move secrets to Secret Manager** even on the `deploy.sh` path (it currently passes
   them as env vars), via `--set-secrets`.
-- **Horizontal scale**: add Redis (Memorystore) pub/sub for WebSocket fan-out and a
-  shared session store before raising `--max-instances` above 1.
+- **Horizontal scale**: set `REDIS_URL` (Memorystore on Cloud Run) before raising
+  `--max-instances` above 1. See [Horizontal scaling with Redis](#horizontal-scaling-with-redis).
 
 ---
 
 ## Alternative: a single VM (Compute Engine)
 
-If you'd rather not use Cloud Run, the repo's `docker-compose.yml` runs the app and
-Postgres together. Create a small Compute Engine VM with a container-optimized image,
-copy the repo and a populated `.env`, and run `docker compose up -d`. This is the
-simplest single-instance model (no scaling caveats to manage) but you own patching
-and uptime of the box. Use Cloud SQL instead of the bundled Postgres if you want
-managed backups.
+If you'd rather not use Cloud Run, the repo's `docker-compose.yml` runs the app,
+Postgres, and Redis together. Create a small Compute Engine VM with a
+container-optimized image, copy the repo and a populated `.env`, and run
+`docker compose up -d`. This is the simplest model but you own patching and uptime
+of the box. Use Cloud SQL instead of the bundled Postgres if you want managed backups.
+
+---
+
+## Horizontal scaling with Redis
+
+By default the app is single-instance: edits fan out only to the WebSocket
+connections held by one process, and sessions live in memory. Setting `REDIS_URL`
+switches on multi-instance mode, which adds three things:
+
+1. **Shared sessions** — the session store moves to Redis (`connect-redis`), so a
+   socket whose login landed on one instance authenticates on any instance.
+2. **Edit fan-out** — every state-changing op is published to Redis pub/sub; each
+   instance re-applies it to its own in-memory workbook cache and forwards it to its
+   local sockets (`services/realtimeBus.js`). This keeps all instances' caches
+   coherent, so a newly connecting client gets up-to-date state regardless of which
+   instance it lands on.
+3. **Presence fan-out** — cursors and join/leave events propagate across instances,
+   and the connect-time roster (`init`) merges local and remote users.
+
+### Enable it
+
+- **docker-compose**: already wired. The `redis` service is included and the app's
+  `REDIS_URL` points at it (`redis://redis:6379`). To actually run multiple app
+  replicas you must put a WebSocket-aware load balancer (nginx/traefik/Caddy) in
+  front and drop the app's host `ports:` mapping, since two containers can't bind
+  the same host port.
+- **Cloud Run**: provision Memorystore (Redis), add a
+  [Serverless VPC connector](https://cloud.google.com/run/docs/configuring/connecting-vpc)
+  so Cloud Run can reach it, set `REDIS_URL` (e.g. via `--set-env-vars` or
+  `--set-secrets`), then raise `--max-instances`. WebSocket connections are sticky
+  per socket for their lifetime, so no session affinity config is needed.
+
+### Single endpoint vs. Redis Cluster
+
+`REDIS_URL` alone targets a **single endpoint** — a standalone Redis or a managed
+HA instance behind one address (Memorystore Basic/Standard, ElastiCache
+*cluster-mode-disabled*). This is the common case and needs no other config.
+
+For a **true Redis Cluster** (cluster-mode *enabled*, data sharded across nodes),
+also set `REDIS_CLUSTER=true`. The app then uses a slot-aware cluster client for
+sessions, the pub/sub channel, and the autosave lock, and `REDIS_URL` may be a
+comma-separated list of seed node URLs. Note: fan-out still uses a single global
+pub/sub channel, which on a cluster propagates messages cluster-wide (correct, but
+not sharded) — fine for typical edit/cursor volume. Sharding pub/sub per document
+would be a further change.
+
+### Known limitations (v1)
+
+- **No conflict resolution.** Concurrent edits to the same cell remain last-write-wins
+  (unchanged from single-instance); this is independent of the fan-out transport.
+- **Presence of a crashed instance** can linger in peers' rosters until the next
+  roster event, since cleanup is event-driven (graceful leave) rather than
+  heartbeat-based.
+- **Lazy cache + eventual consistency.** A per-file workbook that isn't yet cached on
+  an instance is loaded from Postgres on the next connection there; persistence is
+  asynchronous, so there is a small window where a just-connected client could miss
+  an in-flight edit (the live fan-out then delivers subsequent edits).
