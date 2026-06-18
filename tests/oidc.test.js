@@ -244,3 +244,78 @@ test('OIDC edge cases: protocol restriction, invalid token, and invalid code val
   }
 });
 
+/**
+ * Boots the server with the given extra env vars, fetches /login, and returns the
+ * page HTML. Always kills the child process afterwards.
+ */
+async function fetchLoginPage(extraEnv) {
+  const child = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT: '31236', ...extraEnv }
+  });
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  try {
+    const res = await fetch('http://localhost:31236/login');
+    return await res.text();
+  } finally {
+    child.kill();
+  }
+}
+
+test('Login page shows the Mock OIDC button by default (non-production)', async (t) => {
+  // NODE_ENV=test (set at the top of this file) is not production, so the mock
+  // button should be present without any explicit flag.
+  const html = await fetchLoginPage({ MOCK_OIDC_ENABLED: '' });
+  assert.ok(html.includes('Sign in with Mock OIDC'));
+  // Other providers are unaffected by the flag.
+  assert.ok(html.includes('Sign in with Local OIDC'));
+  assert.ok(html.includes('Sign in with Google'));
+});
+
+test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async (t) => {
+  const html = await fetchLoginPage({ MOCK_OIDC_ENABLED: 'false' });
+  assert.ok(!html.includes('Sign in with Mock OIDC'));
+  // The other login options remain intact.
+  assert.ok(html.includes('Sign in with Local OIDC'));
+  assert.ok(html.includes('Sign in with Google'));
+});
+
+test('Login page hides the Mock OIDC button in production by default', async (t) => {
+  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: '' });
+  assert.ok(!html.includes('Sign in with Mock OIDC'));
+});
+
+test('Login page shows the Mock OIDC button in production when explicitly enabled', async (t) => {
+  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: 'true' });
+  assert.ok(html.includes('Sign in with Mock OIDC'));
+});
+
+test('Mock OIDC endpoints return 404 when disabled', async (t) => {
+  // Boot with the mock provider disabled and confirm the provider/login routes are
+  // unreachable, not merely hidden on the login page.
+  const child = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT: '31237', MOCK_OIDC_ENABLED: 'false' }
+  });
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  try {
+    const discovery = await fetch('http://localhost:31237/oidc/.well-known/openid-configuration');
+    assert.strictEqual(discovery.status, 404);
+
+    const jwks = await fetch('http://localhost:31237/oidc/jwks');
+    assert.strictEqual(jwks.status, 404);
+
+    // /auth/oidc must not start the passport flow (which would redirect); it 404s.
+    const authStart = await fetch('http://localhost:31237/auth/oidc', { redirect: 'manual' });
+    assert.strictEqual(authStart.status, 404);
+
+    const token = await fetch('http://localhost:31237/oidc/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code: 'x', client_id: 'co-sheet-client-id' })
+    });
+    assert.strictEqual(token.status, 404);
+  } finally {
+    child.kill();
+  }
+});
+

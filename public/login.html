@@ -40,10 +40,13 @@
                 Sign in with Local OIDC
             </a>
 
-            <!-- Built-in Mock OIDC (no external provider needed; for local development & tests) -->
+            <!-- MOCK_OIDC_START: Built-in Mock OIDC (no external provider needed; for
+                 local development & tests). The server strips this block from the
+                 served page when mock OIDC is disabled (see MOCK_OIDC_ENABLED). -->
             <a href="/auth/oidc" class="w-full flex items-center justify-center gap-3 py-3 border border-slate-200 rounded-xl hover:bg-slate-50 font-medium text-slate-700 transition-all">
                 Sign in with Mock OIDC
             </a>
+            <!-- MOCK_OIDC_END -->
         </div>
 
         <!-- Shown when the Local OIDC button is used but no provider is configured -->
