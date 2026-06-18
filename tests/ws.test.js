@@ -510,6 +510,12 @@ test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reo
   });
 
   try {
+    // --- Act 0: Client A adds Sheet2 ---
+    // New workbooks start with a single sheet, so create Sheet2 explicitly before
+    // exercising the hide/reorder operations that reference it below.
+    clientA.send(JSON.stringify({ type: 'add-sheet', payload: { sheetName: 'Sheet2' } }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
     // --- Act 1: Client A renames Sheet1 to Revenue ---
     clientA.send(JSON.stringify({ type: 'rename-sheet', payload: { oldName: 'Sheet1', newName: 'Revenue' } }));
     await new Promise((resolve) => setTimeout(resolve, 300));

@@ -506,7 +506,7 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
   assert.ok(loadedState.sheets, 'State should have sheets');
   assert.ok(loadedState.sheets['Sheet1'], 'Sheet1 should exist');
   assert.strictEqual(loadedState.sheets['Sheet1']['A1'].value, 'LegacyValue', 'Legacy cell value should be migrated to Sheet1');
-  assert.deepStrictEqual(Array.from(loadedState.sheetOrder), ['Sheet1', 'Sheet2'], 'sheetOrder should default to including Sheet1 and Sheet2');
+  assert.deepStrictEqual(Array.from(loadedState.sheetOrder), ['Sheet1'], 'sheetOrder should default to a single Sheet1 (legacy cells migrate into it)');
   assert.deepStrictEqual(loadedState.sheetColors, Object.create(null), 'sheetColors should default to empty object');
   assert.deepStrictEqual(Array.from(loadedState.hiddenSheets), [], 'hiddenSheets should default to empty array');
   assert.strictEqual(loadedState.cells['A1'].value, 'LegacyValue', 'cells getter should map to first visible sheet (Sheet1)');

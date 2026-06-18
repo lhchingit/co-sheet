@@ -1175,15 +1175,19 @@ const loadState = async (key = 'default') => {
         sheets['Sheet1'] = Object.assign(Object.create(null), parsed.cells);
       }
       
-      // Ensure default sheets exist
-      if (!sheets['Sheet1']) sheets['Sheet1'] = Object.create(null);
-      if (!sheets['Sheet2']) sheets['Sheet2'] = Object.create(null);
-      
+      // Ensure at least one sheet exists (new files start with a single sheet;
+      // additional sheets are created on demand). Don't force a second sheet —
+      // doing so re-created Sheet2 on every load.
+      if (Object.keys(sheets).length === 0) sheets['Sheet1'] = Object.create(null);
+
       // Initialize/migrate sheetOrder, sheetColors, and hiddenSheets
-      const sheetOrder = (parsed && Array.isArray(parsed.sheetOrder)) ? parsed.sheetOrder : Object.keys(sheets);
-      // Ensure default sheets are in the order array
-      if (!sheetOrder.includes('Sheet1')) sheetOrder.push('Sheet1');
-      if (!sheetOrder.includes('Sheet2')) sheetOrder.push('Sheet2');
+      const sheetOrder = (parsed && Array.isArray(parsed.sheetOrder) && parsed.sheetOrder.length)
+        ? parsed.sheetOrder
+        : Object.keys(sheets);
+      // Make sure every existing sheet is represented in the order array.
+      for (const name of Object.keys(sheets)) {
+        if (!sheetOrder.includes(name)) sheetOrder.push(name);
+      }
       
       const sheetColors = (parsed && parsed.sheetColors && typeof parsed.sheetColors === 'object') ? parsed.sheetColors : Object.create(null);
       const hiddenSheets = (parsed && Array.isArray(parsed.hiddenSheets)) ? parsed.hiddenSheets : [];
@@ -1203,10 +1207,9 @@ const loadState = async (key = 'default') => {
   // Return fresh state if absent or query fails.
   const freshSheets = Object.create(null);
   freshSheets['Sheet1'] = Object.create(null);
-  freshSheets['Sheet2'] = Object.create(null);
   const freshState = {
     sheets: freshSheets,
-    sheetOrder: ['Sheet1', 'Sheet2'],
+    sheetOrder: ['Sheet1'],
     sheetColors: Object.create(null),
     hiddenSheets: [],
     colWidths: Object.create(null),
@@ -1443,13 +1446,13 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     // Mint a unique, URL-safe file id.
     const id = crypto.randomBytes(12).toString('hex');
 
-    // Initialize a fresh, prototype-free workbook for this file.
+    // Initialize a fresh, prototype-free workbook for this file. A new file starts
+    // with a single sheet; users add more via the add-sheet control.
     const freshSheets = Object.create(null);
     freshSheets['Sheet1'] = Object.create(null);
-    freshSheets['Sheet2'] = Object.create(null);
     const freshState = {
       sheets: freshSheets,
-      sheetOrder: ['Sheet1', 'Sheet2'],
+      sheetOrder: ['Sheet1'],
       sheetColors: Object.create(null),
       hiddenSheets: [],
       colWidths: Object.create(null),
@@ -1512,8 +1515,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
     // accessor is intentionally dropped.
     const src = await getWorkbook(srcId);
     const clonedState = JSON.parse(JSON.stringify({
-      sheets: src.sheets || { Sheet1: {}, Sheet2: {} },
-      sheetOrder: src.sheetOrder || ['Sheet1', 'Sheet2'],
+      sheets: src.sheets || { Sheet1: {} },
+      sheetOrder: src.sheetOrder || ['Sheet1'],
       sheetColors: src.sheetColors || {},
       hiddenSheets: src.hiddenSheets || [],
       colWidths: src.colWidths || {},
