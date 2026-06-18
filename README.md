@@ -155,6 +155,7 @@ cp .env.example .env
 | `OIDC_AUTHORIZATION_URL` / `OIDC_TOKEN_URL` / `OIDC_USERINFO_URL` | External OIDC endpoints (userinfo defaults to `<issuer>/userinfo`). |
 | `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | External OIDC client credentials. Redirect URI: `<BASE_URL>/auth/oidc-sso/callback`. |
 | `OIDC_SCOPE`         | Optional OAuth scopes (space-separated); defaults to `openid profile email`. |
+| `OIDC_SKIP_USERINFO` | Skip the Local OIDC provider's userinfo call and derive identity from the ID-token claims (off by default). Set `true` only for a provider that has no userinfo endpoint (or no `profile` scope); otherwise login fails with "Failed to fetch user profile". |
 | `OIDC_TLS_VERIFY`    | TLS cert verification for the Local OIDC provider's token/userinfo calls (on by default). Set `false` only for a self-signed HTTPS provider whose CA isn't installed; scoped to that strategy, never affects Google. |
 | `SUPER_ADMIN_EMAILS` | Comma-separated emails (or usernames for mock login) always granted `superadmin`. |
 
