@@ -678,7 +678,9 @@
       if (cb) cb(val);
     });
     $('modal-cancel').addEventListener('click', closeModal);
-    $('modal-overlay').addEventListener('click', (e) => { if (e.target === $('modal-overlay')) closeModal(); });
+    // Intentionally no backdrop click-to-dismiss: clicking outside the dialog must
+    // NOT close it (it was closing accidentally while interacting with the form).
+    // The modal closes only via the Cancel button or the Escape key.
     $('modal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && modalOnOk) modalOnOk(/** @type {HTMLInputElement} */ ($('modal-input')).value); });
     $('modal-copy').addEventListener('click', () => copyToClipboard(/** @type {HTMLInputElement} */ ($('modal-link')).value));
 

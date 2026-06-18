@@ -140,7 +140,7 @@ if (typeof setTimeout === 'undefined') {
 // Global state variables
 let localSheets = Object.create(null);
 let activeSheetName = 'Sheet1';
-let sheetOrder = ['Sheet1', 'Sheet2'];
+let sheetOrder = ['Sheet1'];
 let sheetColors = Object.create(null);
 let hiddenSheets = [];
 // Name of the sheet currently being renamed inline (null when not editing).

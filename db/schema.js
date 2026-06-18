@@ -111,10 +111,9 @@ export async function initDatabase() {
   if (!(await workbookKeyExists('default'))) {
     const freshSheets = Object.create(null);
     freshSheets['Sheet1'] = Object.create(null);
-    freshSheets['Sheet2'] = Object.create(null);
     const defaultState = {
       sheets: freshSheets,
-      sheetOrder: ['Sheet1', 'Sheet2'],
+      sheetOrder: ['Sheet1'],
       sheetColors: Object.create(null),
       hiddenSheets: []
     };
