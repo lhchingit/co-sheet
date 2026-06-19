@@ -1020,10 +1020,21 @@
          </button>
          <div id="fmt-fontsize-list" class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-32 z-50 max-h-[80vh] overflow-y-auto"></div>
        </div>
-       <!-- Merge cells (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
-         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge">Merge cells</span></span>
-         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       <!-- Merge cells submenu (flyout). The whole group is greyed/disabled
+            (pointer-events-none added by JS) unless 2+ cells are selected; the
+            individual options enable based on the selection shape and whether the
+            selection already contains merged cells (see updateMergeMenuState). -->
+       <div id="fmt-merge-group" class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge">Merge cells</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <div class="hidden group-hover:block absolute left-full top-0 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+           <button id="fmt-merge-all" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge.all">Merge all</span></button>
+           <button id="fmt-merge-vertically" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">vertical_distribute</span><span data-i18n="fmt.merge.vertically">Merge vertically</span></button>
+           <button id="fmt-merge-horizontally" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">horizontal_distribute</span><span data-i18n="fmt.merge.horizontally">Merge horizontally</span></button>
+           <button id="fmt-merge-unmerge" class="flex items-center gap-3 w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">cell_merge</span><span data-i18n="fmt.merge.unmerge">Unmerge</span></button>
+         </div>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Convert to table (unsupported – greyed out) -->
@@ -1780,6 +1791,24 @@
         <dd id="details-created" class="text-on-surface"></dd>
       </div>
     </dl>
+  </div>
+</div>
+
+<!-- Generic message dialog (e.g. the "can't filter a range with merged cells"
+     error). Title + body are set by JS before it's shown; the single OK button
+     just dismisses it. Mirrors Google Sheets' error popup. -->
+<div id="message-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[110] hidden" data-purpose="modal-overlay">
+  <div class="bg-surface-container-lowest dark:bg-inverse-surface rounded-3xl shadow-xl w-full max-w-[460px] p-6">
+    <header class="flex items-start justify-between mb-4">
+      <h1 id="message-modal-title" class="text-xl text-on-surface"></h1>
+      <button id="message-modal-close" type="button" data-i18n-title="find.close" title="Close" class="p-1 -mr-1 -mt-1 rounded-full text-on-surface-variant hover:bg-surface-container transition-colors">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </header>
+    <p id="message-modal-body" class="text-sm text-on-surface-variant mb-6"></p>
+    <div class="flex items-center justify-end">
+      <button id="message-modal-ok" type="button" class="h-10 px-6 rounded-full bg-secondary-container text-on-secondary text-sm font-medium hover:brightness-95 transition-all" data-i18n="dialog.ok">OK</button>
+    </div>
   </div>
 </div>
 
