@@ -192,6 +192,17 @@ let isSelecting = false; // Whether selection drag is active
 let isColumnSelection = false; // Whether the current selection is a full-column header click
 let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
+// Formula "point mode": while a formula is being edited (inline cell or formula
+// bar) and the caret sits where a cell reference is expected, clicking/dragging
+// over the grid paints an orange box and writes the picked A1[:B4] range into the
+// formula instead of moving the selection. See the formula-pick module below.
+let activeFormulaEditor = null; // adapter for the formula editor with focus (or null)
+let fpActive = false;           // a point-mode drag is currently in progress
+let fpStartCell = null;         // anchor cell of the current pick
+let fpEndCell = null;           // far cell of the current pick
+let fpInsertStart = -1;         // caret offset in the formula where the ref begins
+let fpInsertLen = 0;            // length of the ref text currently written there
+let fpJustPicked = false;       // true after a pick until the user types (drag replaces)
 let socket = null; // WebSocket connection
 let clipboardData = null; // Stores copied cell data offset details
 let frozenRows = 0; // Number of top rows frozen via View > Freeze (0 = none)
@@ -1951,6 +1962,15 @@ const renderSpreadsheetGrid = () => {
       cellEl.addEventListener('mousedown', (e) => {
         if (isHistoryMode) return; // Disable selection in history mode
         if (e.button !== 0) return; // Only trigger selection on left mouse click
+        // Formula point mode: while editing a formula that expects a reference,
+        // clicking a cell picks it into the formula instead of moving selection.
+        // preventDefault keeps the formula editor focused (no blur / commit).
+        if (formulaPickCapable()) {
+          e.preventDefault();
+          e.stopPropagation();
+          beginFormulaPick(cellId);
+          return;
+        }
         isSelecting = true;
         isColumnSelection = false; // a cell click is never a full-column selection
         selectionStartCellId = cellId;
@@ -1960,6 +1980,7 @@ const renderSpreadsheetGrid = () => {
 
       cellEl.addEventListener('mouseenter', () => {
         if (isHistoryMode) return; // Disable selection in history mode
+        if (fpActive) { extendFormulaPick(cellId); return; } // formula range drag
         if (isSelecting) {
           selectionEndCellId = cellId;
           updateRangeSelectionUI();
@@ -2441,15 +2462,24 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
 
   // Route the function autocomplete to this cell while it is being edited, so a
   // formula typed inline gets the same suggestion dropdown as the formula bar.
+  // The same adapter drives formula point mode (range picking by drag).
   fnAcEditor = makeCellEditor(cellEl);
-  cellEl.oninput = () => updateFnAutocomplete();
+  activeFormulaEditor = fnAcEditor;
+  resetFormulaPick();
+  // Highlight the references of an existing formula (e.g. double-clicking a SUM
+  // cell outlines its range in orange); refreshed on every keystroke below.
+  refreshFormulaRefHighlights();
+  cellEl.oninput = () => { onFormulaEditorTyped(); updateFnAutocomplete(); };
 
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
     closeFnAutocomplete();
     cellEl.oninput = null;
     cellEl.removeAttribute('contenteditable');
-    const text = cellEl.innerText.trim();
+    // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4" → ")").
+    const text = balanceFormulaParens(cellEl.innerText.trim());
+    activeFormulaEditor = null;
+    resetFormulaPick();
     saveCellUpdate(cellId, text);
   };
 
@@ -2462,6 +2492,13 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
       if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); acceptFnAutocomplete(); return; }
       if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); closeFnAutocomplete(); return; }
+    }
+    // Esc ends an in-progress range pick (removing the just-picked reference)
+    // before it would cancel the whole cell edit.
+    if (e.key === 'Escape' && cancelFormulaPick()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
     }
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -2554,22 +2591,45 @@ if (formulaBarInput) {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptFnAutocomplete(); return; }
       if (e.key === 'Escape')    { e.preventDefault(); closeFnAutocomplete(); return; }
     }
+    // Esc ends an in-progress range pick (removing the just-picked reference).
+    if (e.key === 'Escape' && cancelFormulaPick()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'Enter' && activeCellId) {
       e.preventDefault(); // Prevent default enter key behavior
       closeFnAutocomplete();
-      saveCellUpdate(activeCellId, formulaBarInput.value); // Save cell update
+      // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4").
+      const text = balanceFormulaParens(formulaBarInput.value);
+      resetFormulaPick();
+      saveCellUpdate(activeCellId, text); // Save cell update
       formulaBarInput.blur(); // Remove focus from the formula bar
     }
+  });
+
+  // Track the formula bar as the active formula editor while it has focus, so a
+  // click on the grid picks a reference into it (point mode).
+  formulaBarInput.addEventListener('focus', () => {
+    activeFormulaEditor = makeInputEditor(formulaBarInput);
+    resetFormulaPick();
+    refreshFormulaRefHighlights(); // outline an existing formula's references
   });
 
   // Recompute suggestions as the user types / moves the caret. These are
   // wrapped in arrows so the (const) handlers are resolved lazily at event
   // time rather than read here during top-level execution (TDZ-safe).
-  formulaBarInput.addEventListener('input', () => { fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
+  formulaBarInput.addEventListener('input', () => { onFormulaEditorTyped(); fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
   formulaBarInput.addEventListener('click', () => { fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
   // Close when leaving the field (delayed so a click on a suggestion still
-  // registers via its mousedown handler before blur tears the popup down).
-  formulaBarInput.addEventListener('blur', () => setTimeout(closeFnAutocomplete, 120));
+  // registers via its mousedown handler before blur tears the popup down). A
+  // point-mode grid click keeps focus (preventDefault), so this only runs on a
+  // real exit — clear the pick state and drop the formula-editor context.
+  formulaBarInput.addEventListener('blur', () => setTimeout(() => {
+    closeFnAutocomplete();
+    activeFormulaEditor = null;
+    resetFormulaPick();
+  }, 120));
 }
 
 /* ---------------------------------------------------------------------------
@@ -2670,6 +2730,244 @@ function makeCellEditor(cellEl) {
     },
   };
 }
+
+/* ---------------------------------------------------------------------------
+ * Formula range picking ("point mode")
+ * ---------------------------------------------------------------------------
+ * Mirrors Google Sheets / Excel. While a formula is being edited (inline in a cell
+ * or in the top formula bar), every cell/range it references is outlined with an
+ * orange dashed, light-orange-filled box (see renderFormulaRefHighlights) — so
+ * double-clicking "=SUM(B3:C8)" frames B3:C8 immediately. When the caret sits where
+ * a reference is expected — right after "=", "(", a comma, or an operator — clicking
+ * a cell and dragging writes that A1[:B4] reference into the formula; the boxes are
+ * always rebuilt from the current formula text, so the dragged range and any other
+ * references stay outlined. The boxes clear on commit; on commit (Enter or blur)
+ * any unbalanced "(" is auto-closed with ")".
+ *
+ * The two editors are reached through the same getValue/getCaret/replaceToken
+ * adapters used by the function autocomplete (makeInputEditor / makeCellEditor),
+ * stored in `activeFormulaEditor` while that editor holds focus.
+ * ------------------------------------------------------------------------- */
+
+// Characters after which (ignoring trailing spaces) a cell reference may follow.
+const FORMULA_REF_TRIGGER = /[(,=+\-*/^&<>]\s*$/;
+
+/** True when the formula text up to `caret` is at a reference-accepting position. */
+const formulaExpectsReference = (value, caret) => {
+  if (typeof caret !== 'number' || caret < 0) caret = value.length;
+  const left = value.slice(0, caret);
+  if (!left.startsWith('=')) return false;
+  return FORMULA_REF_TRIGGER.test(left);
+};
+
+/** Normalised A1-style reference for a pick: "B1" for a single cell, "B1:B4" else. */
+const buildRangeRef = (startId, endId) => {
+  const s = parseCellCoord(startId);
+  const e = parseCellCoord(endId);
+  if (!s || !e) return startId;
+  const minCol = Math.min(s.colIndex, e.colIndex);
+  const maxCol = Math.max(s.colIndex, e.colIndex);
+  const minRow = Math.min(s.row, e.row);
+  const maxRow = Math.max(s.row, e.row);
+  const topLeft = `${getColLetter(minCol)}${minRow}`;
+  if (minCol === maxCol && minRow === maxRow) return topLeft;
+  return `${topLeft}:${getColLetter(maxCol)}${maxRow}`;
+};
+
+/** Appends the ")" needed to balance unclosed "(" in a committed formula. */
+const balanceFormulaParens = (text) => {
+  if (!text.startsWith('=')) return text;
+  let depth = 0;
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') inStr = !inStr;
+    else if (!inStr) {
+      if (ch === '(') depth++;
+      else if (ch === ')') depth = Math.max(0, depth - 1);
+    }
+  }
+  return depth > 0 ? text + ')'.repeat(depth) : text;
+};
+
+// Matches an A1-style cell reference or A1:B4 range, ignoring an optional "$" and
+// not consuming a function name (a trailing "(" rules the token out, e.g. LOG10().
+// Capture groups: 1=col, 2=row, 3=end col, 4=end row (3/4 absent for a single cell).
+const FORMULA_REF_RE =
+  /(?<![A-Za-z0-9_$])\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?(?![A-Za-z0-9_(])/g;
+
+/**
+ * Extracts every cell/range reference from a formula string as {startId,endId}
+ * pairs (e.g. "B3:C8" -> {startId:"B3", endId:"C8"}). String literals are masked
+ * out first so text like "A1" inside quotes is not treated as a reference.
+ */
+const parseFormulaRefs = (value) => {
+  if (!value || !value.startsWith('=')) return [];
+  // Blank out quoted strings (keep length/positions) so refs inside them are skipped.
+  const masked = value.replace(/"(?:[^"\\]|\\.)*"/g, (m) => ' '.repeat(m.length));
+  const refs = [];
+  let m;
+  FORMULA_REF_RE.lastIndex = 0;
+  while ((m = FORMULA_REF_RE.exec(masked)) !== null) {
+    const startId = `${m[1].toUpperCase()}${m[2]}`;
+    const endId = m[3] ? `${m[3].toUpperCase()}${m[4]}` : startId;
+    refs.push({ startId, endId });
+  }
+  return refs;
+};
+
+/** Pixel rect ({left,top,width,height}) for the cell range startId..endId, or null. */
+const rangeRectFor = (startId, endId) => {
+  const s = parseCellCoord(startId);
+  const e = parseCellCoord(endId);
+  if (!s || !e) return null;
+  const minCol = Math.min(s.colIndex, e.colIndex);
+  const maxCol = Math.max(s.colIndex, e.colIndex);
+  const minRow = Math.min(s.row, e.row);
+  const maxRow = Math.max(s.row, e.row);
+  const topLeftEl = document.querySelector(`[data-cell-id="${getColLetter(minCol)}${minRow}"]`);
+  if (!topLeftEl) return null; // off-grid reference (no cell to anchor to)
+  // Measure from the top-left cell and sum column widths / row heights, matching
+  // the way the blue selection overlay is positioned (see updateRangeSelectionUI).
+  let width = 0;
+  for (let c = minCol; c <= maxCol; c++) width += getColWidth(getColLetter(c));
+  let height = 0;
+  for (let r = minRow; r <= maxRow; r++) {
+    const rh = document.querySelector(`[data-row-id="${r}"]`);
+    height += (rh && rh.offsetHeight) ? rh.offsetHeight : 21;
+  }
+  return { left: topLeftEl.offsetLeft, top: topLeftEl.offsetTop, width, height };
+};
+
+/** Removes every orange reference box from the grid. */
+const clearFormulaRefHighlights = () => {
+  document.querySelectorAll('.formula-ref-box').forEach((el) => el.remove());
+};
+
+/**
+ * Draws an orange dashed box around each cell/range the formula references. Used
+ * both when editing an existing formula (double-click) and live while picking a
+ * range by drag — in either case the boxes are derived from the formula text.
+ */
+const renderFormulaRefHighlights = (value) => {
+  clearFormulaRefHighlights();
+  const gridRoot = document.getElementById('grid-root');
+  if (!gridRoot) return;
+  for (const { startId, endId } of parseFormulaRefs(value)) {
+    const rect = rangeRectFor(startId, endId);
+    if (!rect) continue;
+    const box = document.createElement('div');
+    box.className = 'formula-ref-box';
+    box.style.left = `${rect.left}px`;
+    box.style.top = `${rect.top}px`;
+    box.style.width = `${rect.width}px`;
+    box.style.height = `${rect.height}px`;
+    gridRoot.appendChild(box);
+  }
+};
+
+/** Re-highlights references from whichever formula editor currently has focus. */
+const refreshFormulaRefHighlights = () => {
+  if (activeFormulaEditor) renderFormulaRefHighlights(activeFormulaEditor.getValue());
+  else clearFormulaRefHighlights();
+};
+
+/** True when a grid click should pick a reference rather than move the selection. */
+const formulaPickCapable = () => {
+  if (!canEditWorkbook || isHistoryMode || !activeFormulaEditor) return false;
+  const value = activeFormulaEditor.getValue();
+  if (!value.startsWith('=')) return false;
+  // Right after a pick (before any typing) a fresh click replaces that reference.
+  if (fpJustPicked) return true;
+  return formulaExpectsReference(value, activeFormulaEditor.getCaret());
+};
+
+/** Writes the current pick range into the formula and redraws the reference boxes. */
+const applyFormulaPick = () => {
+  const ed = activeFormulaEditor;
+  if (!ed) return;
+  const ref = buildRangeRef(fpStartCell, fpEndCell);
+  ed.replaceToken(fpInsertStart, fpInsertStart + fpInsertLen, ref);
+  fpInsertLen = ref.length;
+  fpJustPicked = true;
+  closeFnAutocomplete(); // the picked ref takes precedence over any suggestions
+  renderFormulaRefHighlights(ed.getValue());
+};
+
+/** Starts a pick at `cellId` (mousedown on the grid while editing a formula). */
+const beginFormulaPick = (cellId) => {
+  const ed = activeFormulaEditor;
+  if (!ed) return;
+  fpActive = true;
+  fpStartCell = cellId;
+  fpEndCell = cellId;
+  // Reuse the previous insertion span only when the last pick hasn't been typed
+  // over (so a second drag overwrites it); otherwise insert at the caret.
+  if (!fpJustPicked || fpInsertStart < 0) {
+    let caret = ed.getCaret();
+    if (typeof caret !== 'number' || caret < 0) caret = ed.getValue().length;
+    fpInsertStart = caret;
+    fpInsertLen = 0;
+  }
+  applyFormulaPick();
+};
+
+/** Extends the in-progress pick to `cellId` (mouseenter during a drag). */
+const extendFormulaPick = (cellId) => {
+  if (!fpActive) return;
+  fpEndCell = cellId;
+  applyFormulaPick();
+};
+
+/** Ends the drag on mouseup; the written range and the boxes stay until typed over. */
+const endFormulaPick = () => {
+  if (fpActive) fpActive = false;
+};
+
+/**
+ * Cancels an in-progress range pick: removes the reference text the drag/click
+ * wrote and clears its orange box, leaving the rest of the formula (and the caret)
+ * intact. Returns true when there was a pick to cancel — the Esc key uses this so
+ * it ends the range selection instead of cancelling the whole edit.
+ */
+const cancelFormulaPick = () => {
+  const ed = activeFormulaEditor;
+  if (!ed || fpInsertStart < 0 || fpInsertLen <= 0) return false;
+  ed.replaceToken(fpInsertStart, fpInsertStart + fpInsertLen, '');
+  fpActive = false;
+  fpStartCell = null;
+  fpEndCell = null;
+  fpInsertStart = -1;
+  fpInsertLen = 0;
+  fpJustPicked = false;
+  refreshFormulaRefHighlights(); // redraw any references that remain in the formula
+  return true;
+};
+
+/** Clears all point-mode state and the reference boxes (on commit / leaving an editor). */
+const resetFormulaPick = () => {
+  fpActive = false;
+  fpStartCell = null;
+  fpEndCell = null;
+  fpInsertStart = -1;
+  fpInsertLen = 0;
+  fpJustPicked = false;
+  clearFormulaRefHighlights();
+};
+
+/**
+ * Called when the user types into the formula editor. A freshly picked range is
+ * now "locked in" as text, so the next pick starts at the new caret; the
+ * reference boxes are then redrawn from the updated formula text. (Programmatic
+ * edits from applyFormulaPick do not fire input events, so this runs only for
+ * real keystrokes.)
+ */
+const onFormulaEditorTyped = () => {
+  fpJustPicked = false;
+  fpInsertStart = -1;
+  fpInsertLen = 0;
+  refreshFormulaRefHighlights();
+};
 
 const isFnAutocompleteOpen = () => fnAcEl !== null;
 
@@ -6349,6 +6647,7 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 // Stop range selection dragging when releasing mouse button anywhere
 window.addEventListener('mouseup', () => {
   isSelecting = false;
+  endFormulaPick(); // freeze the formula pick range; the box stays until typed over
 });
 
 // File navigation dropdown. New / Make a copy / Share / Rename / Details are the

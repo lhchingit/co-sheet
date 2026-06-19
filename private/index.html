@@ -280,6 +280,19 @@
                dot at the bottom-right corner isn't clipped by that frame. */
             z-index: 7;
         }
+        /* Box outlining a cell/range referenced by the formula being edited — both
+           when picking a range by drag ("point mode") and when editing an existing
+           formula (one box per reference). A thick orange dashed outline (no fill),
+           matching Google Sheets' reference highlight. Sits above the blue selection
+           overlay (z-index 7) so it stays visible while a formula is built;
+           pointer-events:none lets a drag fall through to the cells underneath. */
+        .formula-ref-box {
+            position: absolute;
+            border: 2px dashed #f29900;
+            box-sizing: border-box;
+            pointer-events: none;
+            z-index: 8;
+        }
         .grid-header {
             background-color: #f8f9fa;
             border-right: 1px solid #c3c6d6;
