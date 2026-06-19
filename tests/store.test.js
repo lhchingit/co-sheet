@@ -12,10 +12,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
-
-
-// Define the store path.
-const STORE_PATH = path.resolve('store.test.json');
+import { createTestDb } from './helpers/db.js';
 
 /**
  * Helper to make a JSON HTTP request, optionally passing headers (like Cookie).
@@ -86,43 +83,31 @@ async function loginAndGetCookie(port, username = 'Test User') {
 }
 
 /**
- * Helper that polls for a file to exist and be fully written.
- * Resolves with the parsed JSON data once loaded.
- * @param {string} filePath - Absolute path to the file.
- * @param {number} [timeoutMs] - Maximum time to wait.
- * @returns {Promise<Object>} The parsed JSON file content.
+ * Polls the test database until the default workbook's Sheet1 contains `cellId`.
+ * Resolves with the Sheet1 cells map once present.
+ * @param {import('./helpers/db.js').default | any} db
+ * @param {string} cellId
+ * @param {number} [timeoutMs]
  */
-async function waitForFile(filePath, timeoutMs = 2000, validator = null) {
+async function waitForCell(db, cellId, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (fs.existsSync(filePath)) {
-      try {
-        const data = fs.readFileSync(filePath, 'utf8');
-        if (data.trim().startsWith('{')) {
-          const parsed = JSON.parse(data);
-          if (!validator || validator(parsed)) {
-            return parsed;
-          }
-        }
-      } catch (e) {
-        // File may be locked/partially written, retry
-      }
+    const cells = await db.getCells('default', 'Sheet1');
+    if (cells && cells[cellId] !== undefined) {
+      return cells;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`Timeout waiting for file: ${filePath}`);
+  throw new Error(`Timeout waiting for cell ${cellId} to persist`);
 }
 
-test('Sheet cell state is correctly loaded from and saved to store.json', async (t) => {
+test('Sheet cell state is correctly loaded from and saved to the database', async (t) => {
   // --- Arrange ---
-  // Ensure we start with no store.json file to test initial boot behavior.
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
+  const db = await createTestDb('store');
 
   // Start the server process on a custom port (31260) in test mode to expose /auth/test-login.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31260', NODE_ENV: 'test', STORE_PATH: 'store.test.json' }
+    env: { ...process.env, PORT: '31260', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
   // Wait 1.5 seconds for the Express server to boot up and start listening.
@@ -134,7 +119,7 @@ test('Sheet cell state is correctly loaded from and saved to store.json', async 
 
     // --- Act 1: Fetch initial cells (should be empty) ---
     const initialRes = await makeRequest('http://localhost:31260/api/cells', 'GET', null, { Cookie: cookie });
-    
+
     // --- Assert 1 ---
     assert.strictEqual(initialRes.statusCode, 200);
     assert.deepStrictEqual(initialRes.data, {});
@@ -152,11 +137,9 @@ test('Sheet cell state is correctly loaded from and saved to store.json', async 
     assert.strictEqual(saveRes.statusCode, 200);
     assert.strictEqual(saveRes.data.success, true);
 
-    // Verify that the file store.test.json was created and contains the cell data.
-    const storeContents = await waitForFile(STORE_PATH, 2000, (content) => {
-      return content && content.sheets && content.sheets.Sheet1 && content.sheets.Sheet1['A1'] !== undefined;
-    });
-    assert.deepStrictEqual(storeContents.sheets.Sheet1['A1'], {
+    // Verify that the cell was persisted to the database.
+    const persisted = await waitForCell(db, 'A1');
+    assert.deepStrictEqual(persisted['A1'], {
       formula: '=1+2',
       value: '3',
       style: { bold: true }
@@ -168,9 +151,9 @@ test('Sheet cell state is correctly loaded from and saved to store.json', async 
     // Wait a short moment for the process to exit.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Spawn a new server instance.
+    // Spawn a new server instance against the same database.
     const secondChild = spawn('node', ['server.js'], {
-      env: { ...process.env, PORT: '31260', NODE_ENV: 'test', STORE_PATH: 'store.test.json' }
+      env: { ...process.env, PORT: '31260', NODE_ENV: 'test', DATABASE_URL: db.url }
     });
 
     // Wait for the server to boot up.
@@ -197,17 +180,17 @@ test('Sheet cell state is correctly loaded from and saved to store.json', async 
   } finally {
     // Clean up
     child.kill();
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await db.cleanup();
   }
 });
 
 test('Access to /api/cells requires authentication when not authenticated', async (t) => {
   // --- Arrange ---
   // Spawn the server in test mode, but do not log in.
+  const db = await createTestDb('store-auth');
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31261', NODE_ENV: 'test', STORE_PATH: 'store.test.json' }
+    env: { ...process.env, PORT: '31261', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   await new Promise(resolve => setTimeout(resolve, 1500));
 
@@ -222,14 +205,17 @@ test('Access to /api/cells requires authentication when not authenticated', asyn
     assert.deepStrictEqual(res.data, { error: 'unauthorized', message: 'Authentication required' });
   } finally {
     child.kill();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await db.cleanup();
   }
 });
 
 test('POST /api/cells validates cell ID, prototype keys, and strict payload schema', async (t) => {
   // --- Arrange ---
   // Spawn the server in test mode.
+  const db = await createTestDb('store-validate');
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31262', NODE_ENV: 'test', STORE_PATH: 'store.test.json' }
+    env: { ...process.env, PORT: '31262', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   await new Promise(resolve => setTimeout(resolve, 1500));
 
@@ -426,9 +412,8 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
     assert.strictEqual(res17.data.error, 'bad_request');
   } finally {
     child.kill();
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await db.cleanup();
   }
 });
 

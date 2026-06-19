@@ -7,10 +7,23 @@ process.env.NODE_ENV = 'test';
  * token exchange, signed JWT validation, and user info endpoints work correctly.
  */
 
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
+import { createTestDb } from './helpers/db.js';
+
+// One throwaway database for the whole file; spawned servers inherit it via
+// DATABASE_URL (including the production-mode login-page tests, which previously
+// needed a file-store shim to boot without a real database).
+let db;
+before(async () => {
+  db = await createTestDb('oidc');
+  process.env.DATABASE_URL = db.url;
+});
+after(async () => {
+  if (db) await db.cleanup();
+});
 
 test('OIDC metadata endpoint serves openid-configuration JSON', async (t) => {
   // --- Arrange ---
@@ -280,12 +293,12 @@ test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async
 });
 
 test('Login page hides the Mock OIDC button in production by default', async (t) => {
-  const html = await fetchLoginPage({ NODE_ENV: 'production', USE_FILE_STORE: '1', MOCK_OIDC_ENABLED: '' });
+  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: '' });
   assert.ok(!html.includes('Sign in with Mock OIDC'));
 });
 
 test('Login page shows the Mock OIDC button in production when explicitly enabled', async (t) => {
-  const html = await fetchLoginPage({ NODE_ENV: 'production', USE_FILE_STORE: '1', MOCK_OIDC_ENABLED: 'true' });
+  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: 'true' });
   assert.ok(html.includes('Sign in with Mock OIDC'));
 });
 

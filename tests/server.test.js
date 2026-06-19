@@ -6,10 +6,21 @@ process.env.NODE_ENV = 'test';
  * This test file verifies that the Express server starts up and serves the root page (index.html) correctly.
  */
 
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
+import { createTestDb } from './helpers/db.js';
+
+// One throwaway database for the whole file (these tests only check page serving).
+let db;
+before(async () => {
+  db = await createTestDb('server');
+  process.env.DATABASE_URL = db.url;
+});
+after(async () => {
+  if (db) await db.cleanup();
+});
 
 test('HTTP Server returns 200 OK for login page', async (t) => {
   // --- Arrange ---

@@ -15,10 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-
-const STORE_PATH = 'store.perms.test.json';
+import { createTestDb } from './helpers/db.js';
 
 /** Make a JSON HTTP request, optionally with headers (e.g. Cookie). */
 function makeRequest(url, method, body = null, headers = {}) {
@@ -59,21 +56,12 @@ async function loginAndRegister(port, username) {
   return { cookie, me: me.data };
 }
 
-function cleanupStore() {
-  const dir = process.cwd();
-  for (const f of fs.readdirSync(dir)) {
-    if (f === STORE_PATH || f.startsWith(STORE_PATH + '.')) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
-    }
-  }
-}
-
 test('Permissions - RBAC roles, env super admin bootstrap, and role-change guardrails', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('perms');
   const PORT = '31460';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH, SUPER_ADMIN_EMAILS: 'boss,root' }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'boss,root' }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -147,6 +135,6 @@ test('Permissions - RBAC roles, env super admin bootstrap, and role-change guard
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });

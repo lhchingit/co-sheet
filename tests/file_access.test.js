@@ -15,10 +15,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import WebSocket from 'ws';
-import fs from 'fs';
-import path from 'path';
-
-const STORE_PATH = 'store.access.test.json';
+import { createTestDb } from './helpers/db.js';
 
 function makeRequest(url, method, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -65,21 +62,12 @@ async function wsSendOnce(port, fileId, message, cookie) {
   await new Promise((r) => { ws.on('close', r); setTimeout(r, 300); });
 }
 
-function cleanupStore() {
-  const dir = process.cwd();
-  for (const f of fs.readdirSync(dir)) {
-    if (f === STORE_PATH || f.startsWith(STORE_PATH + '.')) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
-    }
-  }
-}
-
 test('File access control - ownership, one-file quota, and edit/rename/delete gating', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('access');
   const PORT = '31480';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH, SUPER_ADMIN_EMAILS: 'boss' }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'boss' }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -147,6 +135,6 @@ test('File access control - ownership, one-file quota, and edit/rename/delete ga
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });

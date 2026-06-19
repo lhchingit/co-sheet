@@ -14,10 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-
-const STORE_PATH = 'store.star.test.json';
+import { createTestDb } from './helpers/db.js';
 
 function makeRequest(url, method, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -50,21 +47,12 @@ async function loginAndRegister(port, username) {
 
 const rowFor = (list, id) => (Array.isArray(list) ? list.find((f) => f.id === id) : null);
 
-function cleanupStore() {
-  const dir = process.cwd();
-  for (const f of fs.readdirSync(dir)) {
-    if (f === STORE_PATH || f.startsWith(STORE_PATH + '.')) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
-    }
-  }
-}
-
 test('File starring - per-user favourites, view-access gating, and starred flag', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('star');
   const PORT = '31490';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH, SUPER_ADMIN_EMAILS: 'boss' }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'boss' }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -121,6 +109,6 @@ test('File starring - per-user favourites, view-access gating, and starred flag'
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });

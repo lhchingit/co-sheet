@@ -13,8 +13,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
+import { createTestDb } from './helpers/db.js';
 
 /**
  * Helper to make a JSON HTTP request, optionally passing headers (like Cookie).
@@ -87,15 +86,11 @@ async function loginAndGetCookie(port, username) {
 test('WebSocket - Client receives init payload on connect', async (t) => {
   // --- Arrange ---
   const PORT = '31301';
-  const STORE_PATH = path.resolve(`store.ws.test.${PORT}.json`);
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('ws-init');
 
   // Spawn the server process on a unique port in test mode.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', STORE_PATH: STORE_PATH }
+    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
@@ -134,24 +129,18 @@ test('WebSocket - Client receives init payload on connect', async (t) => {
     }
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 500));
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await db.cleanup();
   }
 });
 
 test('WebSocket - Active cursor presence and cursor-move events are broadcasted to other clients', async (t) => {
   // --- Arrange ---
   const PORT = '31302';
-  const STORE_PATH = path.resolve(`store.ws.test.${PORT}.json`);
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('ws-cursor');
 
   // Spawn the server process on a unique port in test mode.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', STORE_PATH: STORE_PATH }
+    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
@@ -222,24 +211,18 @@ test('WebSocket - Active cursor presence and cursor-move events are broadcasted 
     }
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 500));
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await db.cleanup();
   }
 });
 
 test('WebSocket - Cell-edit events are processed, saved to store, and broadcasted to other clients', async (t) => {
   // --- Arrange ---
   const PORT = '31303';
-  const STORE_PATH = path.resolve(`store.ws.test.${PORT}.json`);
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('ws-celledit');
 
   // Spawn the server process on a unique port in test mode.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', STORE_PATH: STORE_PATH }
+    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
@@ -298,10 +281,10 @@ test('WebSocket - Cell-edit events are processed, saved to store, and broadcaste
     assert.strictEqual(cellUpdateMessage.payload.value, '25');
     assert.deepStrictEqual(cellUpdateMessage.payload.style, { bold: true, color: '#1471e6' });
 
-    // Verify that the file store was updated with the edited cell.
-    await new Promise((resolve) => setTimeout(resolve, 200)); // wait for file persistence
-    const storeContents = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-    assert.deepStrictEqual(storeContents.sheets.Sheet1['C3'], {
+    // Verify that the database was updated with the edited cell.
+    await new Promise((resolve) => setTimeout(resolve, 300)); // wait for persistence
+    const cells = await db.getCells('default', 'Sheet1');
+    assert.deepStrictEqual(cells['C3'], {
       formula: '=5*5',
       value: '25',
       style: { bold: true, color: '#1471e6' }
@@ -318,24 +301,18 @@ test('WebSocket - Cell-edit events are processed, saved to store, and broadcaste
     }
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 500));
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await db.cleanup();
   }
 });
 
 test('WebSocket - Client disconnect broadcasts user-leave event to remaining clients', async (t) => {
   // --- Arrange ---
   const PORT = '31304';
-  const STORE_PATH = path.resolve(`store.ws.test.${PORT}.json`);
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('ws-leave');
 
   // Spawn the server process on a unique port in test mode.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', STORE_PATH: STORE_PATH }
+    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
@@ -407,17 +384,16 @@ test('WebSocket - Client disconnect broadcasts user-leave event to remaining cli
     }
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 500));
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
+    await db.cleanup();
   }
 });
 
 test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-specific cursors', async (t) => {
   // --- Arrange ---
   const wsUrl = 'ws://localhost:31305';
+  const db = await createTestDb('ws-sheets');
   const serverProcess = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31305', NODE_ENV: 'test', STORE_PATH: 'store.test.json' }
+    env: { ...process.env, PORT: '31305', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
   await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -468,9 +444,8 @@ test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-spec
     clientA.close();
     clientB.close();
     serverProcess.kill();
-    if (fs.existsSync('store.test.json')) {
-      fs.unlinkSync('store.test.json');
-    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await db.cleanup();
   }
 });
 
@@ -483,8 +458,9 @@ test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reo
   // --- Arrange ---
   // Define WebSocket URL and clean up any pre-existing test files on port 31306
   const wsUrl = 'ws://localhost:31306';
+  const db = await createTestDb('ws-sheetops');
   const serverProcess = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31306', NODE_ENV: 'test', STORE_PATH: 'store.test.actions.json' }
+    env: { ...process.env, PORT: '31306', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
   // Wait 1.5 seconds for the server to start listening
@@ -605,9 +581,8 @@ test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reo
     clientA.close();
     clientB.close();
     serverProcess.kill();
-    if (fs.existsSync('store.test.actions.json')) {
-      fs.unlinkSync('store.test.actions.json');
-    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await db.cleanup();
   }
 });
 

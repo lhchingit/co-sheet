@@ -19,16 +19,10 @@ docs/superpowers/
 images/
 k8s/
 
-# Test-run artifacts (per-file workbook registry / version / users sidecars)
-*.files.json
-*.versions.json
-*.users.json
-*.shares.json
-store.*.test.json
-store.test*.json
-
 # Runtime data store
 store.json
 
-# Test-run output logs
+# Test-run output logs & coverage artifacts
 *.out
+*.log
+coverage/

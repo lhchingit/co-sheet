@@ -13,10 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-
-const STORE_PATH = 'store.share.test.json';
+import { createTestDb } from './helpers/db.js';
 
 function makeRequest(url, method, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -47,21 +44,12 @@ async function loginAndRegister(port, username) {
   return cookie;
 }
 
-function cleanupStore() {
-  const dir = process.cwd();
-  for (const f of fs.readdirSync(dir)) {
-    if (f === STORE_PATH || f.startsWith(STORE_PATH + '.')) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
-    }
-  }
-}
-
 test('File sharing - search users, share, and shared visibility without edit rights', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('share');
   const PORT = '31500';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -187,6 +175,6 @@ test('File sharing - search users, share, and shared visibility without edit rig
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });

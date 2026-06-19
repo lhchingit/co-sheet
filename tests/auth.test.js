@@ -6,10 +6,23 @@ process.env.NODE_ENV = 'test';
  * Verifies that unauthenticated requests to the root path are redirected to the login page.
  */
 
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
+import { createTestDb } from './helpers/db.js';
+
+// One throwaway database for the whole file: these tests only exercise auth routing
+// and don't assert on cross-test DB state, so spawned servers share it via the
+// inherited DATABASE_URL.
+let db;
+before(async () => {
+  db = await createTestDb('auth');
+  process.env.DATABASE_URL = db.url;
+});
+after(async () => {
+  if (db) await db.cleanup();
+});
 
 test('Accessing / redirects to /login if unauthenticated', async (t) => {
   // --- Arrange ---

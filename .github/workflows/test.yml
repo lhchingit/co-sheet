@@ -39,9 +39,12 @@ jobs:
           NODE_ENV: test
         run: |
           mkdir -p coverage
-          # `--test-force-exit`: a test file leaves a lingering handle (WS/HTTP server);
-          # without this the runner hangs before the coverage report is printed.
-          node --test --test-force-exit --experimental-test-coverage \
+          # Integration tests run against a real PostgreSQL database started via
+          # Testcontainers (Docker is preinstalled on ubuntu-latest). The runner boots
+          # one container, exposes it as DATABASE_URL, then invokes `node --test` with
+          # the flags below. `--test-force-exit`: a test file leaves a lingering handle
+          # (WS/HTTP server); without it the runner hangs before coverage is printed.
+          node tests/run-integration.mjs --test-force-exit --experimental-test-coverage \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=lcov --test-reporter-destination=coverage/lcov.info \
             tests/*.test.js | tee test-output.txt

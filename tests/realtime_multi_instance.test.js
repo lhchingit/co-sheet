@@ -4,10 +4,10 @@ process.env.NODE_ENV = 'test';
  * @file realtime_multi_instance.test.js
  * @description Integration tests for cross-instance realtime fan-out via Redis.
  *
- * These spin up TWO server processes sharing one Redis (and one STORE_PATH, which
- * stands in for a shared database) and verify that an edit / presence event made
- * on a client connected to instance A is delivered to a client connected to
- * instance B — the behavior that makes horizontal scaling correct.
+ * These spin up TWO server processes sharing one Redis and one PostgreSQL database
+ * and verify that an edit / presence event made on a client connected to instance A
+ * is delivered to a client connected to instance B — the behavior that makes
+ * horizontal scaling correct.
  *
  * A running Redis is required, so the whole suite is skipped unless REDIS_URL is
  * set. Run it locally with, e.g. (after `docker compose up -d redis`):
@@ -19,16 +19,15 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
-import fs from 'fs';
-import path from 'path';
+import { createTestDb } from './helpers/db.js';
 
 const REDIS_URL = process.env.REDIS_URL;
 const skip = REDIS_URL ? false : 'REDIS_URL not set — skipping multi-instance Redis tests';
 
-/** Spawn a server instance on `port` sharing `storePath` and REDIS_URL. */
-function spawnInstance(port, storePath) {
+/** Spawn a server instance on `port` sharing `dbUrl` (one DB stands in for shared state) and REDIS_URL. */
+function spawnInstance(port, dbUrl) {
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: String(port), NODE_ENV: 'test', STORE_PATH: storePath, REDIS_URL }
+    env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATABASE_URL: dbUrl, REDIS_URL }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${port} STDERR] ${d.toString().trim()}`));
   return child;
@@ -66,12 +65,10 @@ function waitFor(messages, pred, timeoutMs = 3000) {
 }
 
 test('Realtime - cell edits fan out across instances via Redis', { skip }, async () => {
-  const STORE_PATH = path.resolve('store.multi.cell.test.json');
-  if (fs.existsSync(STORE_PATH)) fs.unlinkSync(STORE_PATH);
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('multi-cell');
 
-  const a = spawnInstance(31401, STORE_PATH);
-  const b = spawnInstance(31402, STORE_PATH);
+  const a = spawnInstance(31401, db.url);
+  const b = spawnInstance(31402, db.url);
   // Wait for both servers to boot and connect to Redis.
   await new Promise((r) => setTimeout(r, 2000));
 
@@ -98,19 +95,15 @@ test('Realtime - cell edits fan out across instances via Redis', { skip }, async
     a.kill();
     b.kill();
     await new Promise((r) => setTimeout(r, 400));
-    for (const p of [STORE_PATH, `${STORE_PATH}.versions.json`]) {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    }
+    await db.cleanup();
   }
 });
 
 test('Realtime - presence (cursor) fans out across instances via Redis', { skip }, async () => {
-  const STORE_PATH = path.resolve('store.multi.presence.test.json');
-  if (fs.existsSync(STORE_PATH)) fs.unlinkSync(STORE_PATH);
-  fs.writeFileSync(STORE_PATH, JSON.stringify({ cells: {} }, null, 2), 'utf8');
+  const db = await createTestDb('multi-presence');
 
-  const a = spawnInstance(31403, STORE_PATH);
-  const b = spawnInstance(31404, STORE_PATH);
+  const a = spawnInstance(31403, db.url);
+  const b = spawnInstance(31404, db.url);
   await new Promise((r) => setTimeout(r, 2000));
 
   let clientA, clientB;
@@ -138,8 +131,6 @@ test('Realtime - presence (cursor) fans out across instances via Redis', { skip 
     a.kill();
     b.kill();
     await new Promise((r) => setTimeout(r, 400));
-    for (const p of [STORE_PATH, `${STORE_PATH}.versions.json`]) {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    }
+    await db.cleanup();
   }
 });

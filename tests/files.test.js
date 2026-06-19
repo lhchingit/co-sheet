@@ -12,10 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-
-const STORE_PATH = 'store.files.test.json';
+import { createTestDb } from './helpers/db.js';
 
 /** Make a JSON HTTP request, optionally with headers (e.g. Cookie). */
 function makeRequest(url, method, body = null, headers = {}) {
@@ -48,22 +45,12 @@ async function loginAndGetCookie(port, username = 'Drive User') {
   return Array.isArray(setCookie) ? setCookie[0] : setCookie;
 }
 
-/** Remove the store file and any per-file / registry sidecars it spawned. */
-function cleanupStore() {
-  const dir = process.cwd();
-  for (const f of fs.readdirSync(dir)) {
-    if (f === STORE_PATH || f.startsWith(STORE_PATH + '.')) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
-    }
-  }
-}
-
 test('Files API - CRUD, unique URL, and per-file workbook isolation', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('files');
   const PORT = '31420';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -127,16 +114,16 @@ test('Files API - CRUD, unique URL, and per-file workbook isolation', async (t) 
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });
 
 test('Files API - copy duplicates workbook data into an independent file', async (t) => {
   // --- Arrange ---
-  cleanupStore();
+  const db = await createTestDb('files-copy');
   const PORT = '31421';
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
   await new Promise((r) => setTimeout(r, 1500));
@@ -184,6 +171,6 @@ test('Files API - copy duplicates workbook data into an independent file', async
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 400));
-    cleanupStore();
+    await db.cleanup();
   }
 });
