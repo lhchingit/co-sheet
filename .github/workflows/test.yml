@@ -44,7 +44,10 @@ jobs:
           # one container, exposes it as DATABASE_URL, then invokes `node --test` with
           # the flags below. `--test-force-exit`: a test file leaves a lingering handle
           # (WS/HTTP server); without it the runner hangs before coverage is printed.
+          # `--test-coverage-exclude=tests/**`: report coverage of the application code
+          # under test, not the test files / harness themselves.
           node tests/run-integration.mjs --test-force-exit --experimental-test-coverage \
+            --test-coverage-exclude='tests/**' \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=lcov --test-reporter-destination=coverage/lcov.info \
             tests/*.test.js | tee test-output.txt
