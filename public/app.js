@@ -2310,8 +2310,15 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     sel.addRange(range);
   }
 
+  // Route the function autocomplete to this cell while it is being edited, so a
+  // formula typed inline gets the same suggestion dropdown as the formula bar.
+  fnAcEditor = makeCellEditor(cellEl);
+  cellEl.oninput = () => updateFnAutocomplete();
+
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
+    closeFnAutocomplete();
+    cellEl.oninput = null;
     cellEl.removeAttribute('contenteditable');
     const text = cellEl.innerText.trim();
     saveCellUpdate(cellId, text);
@@ -2319,6 +2326,14 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
 
   cellEl.onblur = saveInlineEdit;
   cellEl.onkeydown = (e) => {
+    // When the autocomplete is open, let it consume navigation/accept keys
+    // first so Enter/Tab pick a suggestion instead of committing the cell.
+    if (isFnAutocompleteOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveFnAutocomplete(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); acceptFnAutocomplete(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); closeFnAutocomplete(); return; }
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       // Stop the keydown bubbling to the document-level handler, which would
@@ -2421,8 +2436,8 @@ if (formulaBarInput) {
   // Recompute suggestions as the user types / moves the caret. These are
   // wrapped in arrows so the (const) handlers are resolved lazily at event
   // time rather than read here during top-level execution (TDZ-safe).
-  formulaBarInput.addEventListener('input', () => updateFnAutocomplete());
-  formulaBarInput.addEventListener('click', () => updateFnAutocomplete());
+  formulaBarInput.addEventListener('input', () => { fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
+  formulaBarInput.addEventListener('click', () => { fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
   // Close when leaving the field (delayed so a click on a suggestion still
   // registers via its mousedown handler before blur tears the popup down).
   formulaBarInput.addEventListener('blur', () => setTimeout(closeFnAutocomplete, 120));
@@ -2444,6 +2459,89 @@ let fnAcIndex = 0;          // highlighted index within fnAcMatches
 let fnAcTokenStart = -1;    // caret-relative start of the typed function token
 const FN_AC_MAX = 50;       // cap suggestions to keep the list manageable
 
+/**
+ * The editor the autocomplete is currently attached to. The dropdown serves two
+ * very different inputs — the top formula bar (an <input>) and an inline-editing
+ * cell (a contenteditable <div>) — so each is wrapped in a small adapter with a
+ * uniform interface (getValue/getCaret/getRect/focus/replaceToken). All the
+ * autocomplete logic below talks to this adapter and never to a concrete element.
+ * @type {{ el: HTMLElement, getValue: () => string, getCaret: () => number,
+ *          getRect: () => DOMRect, focus: () => void,
+ *          replaceToken: (start: number, caret: number, insert: string) => void } | null}
+ */
+let fnAcEditor = null;
+
+/** Adapter for the formula-bar <input> (value / selection / setSelectionRange). */
+function makeInputEditor(input) {
+  return {
+    el: input,
+    getValue: () => input.value,
+    // Collapsed caret only; -1 signals a selection (insertion would be ambiguous).
+    getCaret: () => (input.selectionStart === input.selectionEnd ? input.selectionStart : -1),
+    getRect: () => input.getBoundingClientRect(),
+    focus: () => input.focus(),
+    replaceToken: (start, caret, insert) => {
+      const value = input.value;
+      const next = value.slice(0, start) + insert + value.slice(caret);
+      input.value = next;
+      const newCaret = start + insert.length;
+      input.setSelectionRange(newCaret, newCaret);
+      input.focus();
+    },
+  };
+}
+
+/**
+ * Caret offset (in characters from the start of the element) for a collapsed
+ * selection inside a contenteditable. Returns -1 when there is no collapsed
+ * caret within `el`. Inline cell edits hold a single text node, so the range
+ * text length is the character offset.
+ */
+function ceCaretOffset(el) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return -1;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return -1;
+  const pre = range.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.startContainer, range.startOffset);
+  return pre.toString().length;
+}
+
+/** Places a collapsed caret at character `offset` inside a contenteditable. */
+function ceSetCaret(el, offset) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  const node = el.firstChild;
+  if (node && node.nodeType === 3 /* TEXT_NODE */) {
+    range.setStart(node, Math.min(offset, node.textContent.length));
+    range.collapse(true);
+  } else {
+    range.selectNodeContents(el);
+    range.collapse(false);
+  }
+  sel.removeAllRanges();
+  sel.addRange(range);
+  el.focus();
+}
+
+/** Adapter for an inline-editing cell (contenteditable <div>). */
+function makeCellEditor(cellEl) {
+  return {
+    el: cellEl,
+    getValue: () => cellEl.innerText,
+    getCaret: () => ceCaretOffset(cellEl),
+    getRect: () => cellEl.getBoundingClientRect(),
+    focus: () => cellEl.focus(),
+    replaceToken: (start, caret, insert) => {
+      const value = cellEl.innerText;
+      cellEl.innerText = value.slice(0, start) + insert + value.slice(caret);
+      ceSetCaret(cellEl, start + insert.length);
+    },
+  };
+}
+
 const isFnAutocompleteOpen = () => fnAcEl !== null;
 
 /**
@@ -2453,12 +2551,12 @@ const isFnAutocompleteOpen = () => fnAcEl !== null;
  * @returns {{ word: string, start: number } | null}
  */
 const getFnToken = () => {
-  if (!formulaBarInput) return null;
-  const value = formulaBarInput.value;
+  if (!fnAcEditor) return null;
+  const value = fnAcEditor.getValue();
   if (!value.startsWith('=')) return null;
-  const caret = formulaBarInput.selectionStart;
+  const caret = fnAcEditor.getCaret();
   // Caret must be a collapsed cursor (no selection) for predictable insertion.
-  if (caret !== formulaBarInput.selectionEnd) return null;
+  if (caret < 0) return null;
   const left = value.slice(0, caret);
   const m = left.match(/([A-Za-z][A-Za-z0-9_.]*)$/);
   if (!m) return null;
@@ -2524,10 +2622,10 @@ const renderFnAutocomplete = () => {
   positionFnAutocomplete();
 };
 
-/** Positions the dropdown beneath the formula bar input, clamped to viewport. */
+/** Positions the dropdown beneath the active editor, clamped to viewport. */
 const positionFnAutocomplete = () => {
-  if (!fnAcEl || !formulaBarInput) return;
-  const rect = formulaBarInput.getBoundingClientRect();
+  if (!fnAcEl || !fnAcEditor) return;
+  const rect = fnAcEditor.getRect();
   const width = Math.min(380, Math.max(220, rect.width));
   let left = rect.left;
   if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
@@ -2550,18 +2648,12 @@ const moveFnAutocomplete = (delta) => {
 
 /** Replaces the typed token with "NAME(" and places the caret inside. */
 const acceptFnAutocomplete = () => {
-  if (!isFnAutocompleteOpen() || !formulaBarInput) return;
+  if (!isFnAutocompleteOpen() || !fnAcEditor) return;
   const fn = fnAcMatches[fnAcIndex];
   if (!fn) { closeFnAutocomplete(); return; }
-  const value = formulaBarInput.value;
-  const caret = formulaBarInput.selectionStart;
-  const before = value.slice(0, fnAcTokenStart);
-  const after = value.slice(caret);
-  const insert = `${fn.n}(`;
-  formulaBarInput.value = before + insert + after;
-  const newCaret = before.length + insert.length;
-  formulaBarInput.setSelectionRange(newCaret, newCaret);
-  formulaBarInput.focus();
+  const caret = fnAcEditor.getCaret();
+  if (caret < 0) { closeFnAutocomplete(); return; }
+  fnAcEditor.replaceToken(fnAcTokenStart, caret, `${fn.n}(`);
   closeFnAutocomplete();
 };
 
@@ -2577,7 +2669,9 @@ const closeFnAutocomplete = () => {
 window.addEventListener('resize', () => { if (isFnAutocompleteOpen()) positionFnAutocomplete(); });
 document.addEventListener('mousedown', (e) => {
   if (!isFnAutocompleteOpen()) return;
-  if (fnAcEl.contains(e.target) || e.target === formulaBarInput) return;
+  const editorEl = fnAcEditor && fnAcEditor.el;
+  if (fnAcEl.contains(e.target)) return;
+  if (editorEl && (e.target === editorEl || editorEl.contains(e.target))) return;
   closeFnAutocomplete();
 });
 
@@ -4217,6 +4311,12 @@ const updateToolbarFormattingStates = (style) => {
 };
 
 // Make the document title editable on double-click (it is the file name).
+// Maximum file-name length, kept in lockstep with the server (POST/PATCH
+// /api/files enforce 1–120 chars). Enforcing the same cap on the client gives
+// immediate feedback and prevents a renamed name from being silently rejected
+// server-side while still showing on screen.
+const MAX_FILE_NAME_LEN = 120;
+
 const fileNameEl = document.getElementById('file-name');
 if (fileNameEl) {
   let fileNameBeforeEdit = '';
@@ -4257,7 +4357,10 @@ if (fileNameEl) {
 
   const commitFileName = () => {
     fileNameEl.removeAttribute('contenteditable');
-    const name = fileNameEl.innerText.replace(/\s+/g, ' ').trim();
+    // Collapse whitespace, trim, and cap to the server limit so the on-screen
+    // name always matches what is actually persisted.
+    let name = fileNameEl.innerText.replace(/\s+/g, ' ').trim();
+    if (name.length > MAX_FILE_NAME_LEN) name = name.slice(0, MAX_FILE_NAME_LEN);
     // Revert to the previous name if left blank.
     const finalName = name || fileNameBeforeEdit;
     fileNameEl.innerText = finalName;
@@ -4269,6 +4372,21 @@ if (fileNameEl) {
   };
 
   fileNameEl.addEventListener('blur', commitFileName);
+  // Hard-cap the length live (contenteditable has no maxlength), so typing or
+  // pasting past the limit is rejected immediately rather than truncated only
+  // on commit. Excess is trimmed from the end and the caret restored there.
+  fileNameEl.addEventListener('input', () => {
+    if (fileNameEl.innerText.length <= MAX_FILE_NAME_LEN) return;
+    fileNameEl.innerText = fileNameEl.innerText.slice(0, MAX_FILE_NAME_LEN);
+    if (typeof window.getSelection !== 'undefined' && typeof document.createRange !== 'undefined') {
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(fileNameEl);
+      range.collapse(false); // caret to end
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
   fileNameEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();

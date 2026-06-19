@@ -14,6 +14,10 @@
   const root = (typeof window !== 'undefined') ? window : globalThis;
   const { t, getLang, translatePage, loadLocales } = (root.CoSheet && root.CoSheet.i18n) || {};
 
+  // Max file-name length, kept in lockstep with the server (POST/PATCH
+  // /api/files enforce 1–120 chars).
+  const MAX_FILE_NAME_LEN = 120;
+
   // ----- module state -----
   let files = [];        // [{ id, name, created_at, created_by }]
   let selectedId = null; // currently selected file id (single-select)
@@ -105,6 +109,8 @@
     const input = /** @type {HTMLInputElement} */ ($('modal-input'));
     if (opts.inputValue != null) {
       input.value = opts.inputValue;
+      // The modal input is only ever a file-name field; cap it to the server limit.
+      input.maxLength = MAX_FILE_NAME_LEN;
       input.classList.remove('hidden');
     } else {
       input.classList.add('hidden');

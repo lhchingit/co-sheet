@@ -94,7 +94,11 @@
 <!-- ============ Top app bar (default state) ============ -->
 <header id="app-bar" class="sticky top-0 z-40 flex items-center justify-between w-full h-16 px-4 sm:px-6 bg-surface border-b border-outline-variant">
     <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center text-on-primary-container">
+        <!-- Brand mark: keep these explicit hex colors in sync with the sheet
+             editor logo (private/index.html) and favicon.svg — solid blue box
+             with a light glyph. The homepage palette's primary-container token
+             is a pale tint, so it is overridden here to match the brand. -->
+        <div class="w-10 h-10 bg-[#0b57d0] rounded-lg flex items-center justify-center text-[#ced9ff]">
             <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">table_chart</span>
         </div>
         <span class="text-xl font-medium text-on-surface" data-i18n="drive.appName">Co-Sheet</span>
