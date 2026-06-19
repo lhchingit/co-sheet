@@ -315,6 +315,7 @@
   "drive.untitled": "未命名的試算表",
   "drive.promptName": "檔案名稱：",
   "drive.confirmDelete": "確定要刪除「{name}」嗎？此動作無法復原。",
+  "drive.confirmDeleteMany": "確定要刪除 {n} 個檔案嗎？此動作無法復原。",
   "drive.promptRename": "輸入「{name}」的新名稱：",
   "drive.createdBy": "擁有者：{name}",
   "drive.sharedSample": "共用範例",
