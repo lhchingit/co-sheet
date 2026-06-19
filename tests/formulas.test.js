@@ -478,7 +478,9 @@ test('Toolbar - Formatting buttons toggle style on active cell', (t) => {
   sandbox.toggleBorder('A1');
   // Trigger click on the center alignment option in the mock dropdown
   mockButtons['toolbar-align-center'].listeners['click']();
-  mockButtons['toolbar-link'].listeners['click']();
+  // The toolbar link button now opens an interactive dialog; the link-setting
+  // path it ultimately drives is changeCellLink, exercised directly here.
+  sandbox.changeCellLink('A1', 'https://example.com');
   mockButtons['toolbar-color-text-input'].listeners['change']({ target: { value: '#ff0000' } });
   mockButtons['toolbar-color-fill-input'].listeners['change']({ target: { value: '#00ff00' } });
 

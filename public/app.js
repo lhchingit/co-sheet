@@ -1906,9 +1906,11 @@ const renderSpreadsheetGrid = () => {
       const val = formatCellDisplay(rawVal, cellData && cellData.style);
 
       if (cellData && cellData.style && cellData.style.link) {
-        const escapedValue = escapeHtml(val);
+        // Fall back to the URL as link text when the cell has no value, so a link
+        // inserted into an empty cell is still visible (matches Google Sheets).
+        const escapedValue = escapeHtml(val || cellData.style.link);
         const escapedLink = escapeHtml(cellData.style.link);
-        cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800" onclick="event.stopPropagation();">${escapedValue}</a>`;
+        cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
       } else {
         cellEl.innerText = val;
       }
@@ -1984,6 +1986,19 @@ const renderSpreadsheetGrid = () => {
         if (isSelecting) {
           selectionEndCellId = cellId;
           updateRangeSelectionUI();
+        }
+      });
+
+      // Clicking a linked cell shows a chip (favicon · URL · copy/edit/remove)
+      // instead of navigating immediately. preventDefault cancels the anchor's
+      // default navigation; selection still happens via the mousedown handler.
+      cellEl.addEventListener('click', (e) => {
+        if (isHistoryMode) return;
+        if (formulaPickCapable() || fpActive) return; // don't interrupt reference picking
+        const cd = localCells[cellId];
+        if (cd && cd.style && cd.style.link) {
+          e.preventDefault();
+          showLinkPopup(cellId, cellEl);
         }
       });
 
@@ -2271,9 +2286,11 @@ const updateGridDOMCell = (cellId, value, style) => {
   // Display evaluated cell value (render as anchor element if link exists, otherwise plain text)
   const val = formatCellDisplay(value || '', style);
   if (style && style.link) {
-    const escapedValue = escapeHtml(val);
+    // Fall back to the URL as link text when the cell has no value, so a link
+    // inserted into an empty cell is still visible (matches Google Sheets).
+    const escapedValue = escapeHtml(val || style.link);
     const escapedLink = escapeHtml(style.link);
-    cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800" onclick="event.stopPropagation();">${escapedValue}</a>`;
+    cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
   } else {
     cellEl.innerText = val;
   }
@@ -3893,6 +3910,256 @@ const changeCellLink = (cellId, url) => {
   updateToolbarFormattingStates(cell.style);
 };
 
+/** Teardown callback for the currently-open link chip popup, if any. */
+let linkPopupCleanup = null;
+
+/** Close the floating link-chip popup and detach its dismiss listeners. */
+const closeLinkPopup = () => {
+  const existing = document.getElementById('cell-link-popup');
+  if (existing) existing.remove();
+  if (linkPopupCleanup) { linkPopupCleanup(); linkPopupCleanup = null; }
+};
+
+/**
+ * Show a Google-Sheets-style link chip anchored beneath a cell: favicon, the URL,
+ * and copy / edit / remove actions. Clicking a linked cell opens this chip instead
+ * of navigating straight to the URL.
+ * @param {string} cellId - The cell whose link is shown.
+ * @param {HTMLElement} cellEl - The cell element the chip is anchored to.
+ */
+const showLinkPopup = (cellId, cellEl) => {
+  closeLinkPopup();
+  const cell = localCells[cellId];
+  const url = cell && cell.style && cell.style.link;
+  if (!url) return;
+
+  const safeUrl = escapeHtml(url);
+  let host = url;
+  try { host = new URL(url, window.location.href).hostname || url; } catch { /* keep raw */ }
+  const btnCls = 'flex items-center justify-center w-8 h-8 rounded-full hover:bg-surface-variant cursor-pointer';
+  const iconCls = 'material-symbols-outlined text-[18px] leading-none text-on-surface-variant';
+
+  const popup = document.createElement('div');
+  popup.id = 'cell-link-popup';
+  popup.className = 'fixed z-[1002] flex items-center gap-1 max-w-md pl-3 pr-1.5 py-1 bg-surface-container-lowest dark:bg-inverse-surface text-on-surface dark:text-on-surface-variant rounded-lg shadow-lg border border-outline-variant';
+  popup.innerHTML = `
+    <img id="link-popup-favicon" src="https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(host)}" alt="" class="w-4 h-4 shrink-0">
+    <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="flex-1 min-w-0 truncate text-blue-600 hover:underline text-label-lg" title="${safeUrl}">${safeUrl}</a>
+    <button type="button" id="link-popup-copy" class="${btnCls}" title="${escapeHtml(t('link.copy'))}"><span class="${iconCls}">content_copy</span></button>
+    <button type="button" id="link-popup-edit" class="${btnCls}" title="${escapeHtml(t('link.edit'))}"><span class="${iconCls}">edit</span></button>
+    <button type="button" id="link-popup-remove" class="${btnCls}" title="${escapeHtml(t('link.remove'))}"><span class="${iconCls}">link_off</span></button>
+  `;
+  document.body.appendChild(popup);
+
+  // If the remote favicon fails to load, fall back to a generic globe glyph.
+  const favicon = popup.querySelector('#link-popup-favicon');
+  favicon.addEventListener('error', () => {
+    const globe = document.createElement('span');
+    globe.className = iconCls + ' shrink-0';
+    globe.textContent = 'public';
+    favicon.replaceWith(globe);
+  });
+
+  // Position below the cell, clamped to the viewport (flip above if it would overflow).
+  const rect = cellEl.getBoundingClientRect();
+  const pr = popup.getBoundingClientRect();
+  let left = rect.left;
+  let top = rect.bottom + 4;
+  if (left + pr.width > window.innerWidth) left = Math.max(4, window.innerWidth - pr.width - 4);
+  if (top + pr.height > window.innerHeight) top = Math.max(4, rect.top - pr.height - 4);
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+
+  // Copy: write the URL to the clipboard, with brief icon feedback.
+  const copyBtn = popup.querySelector('#link-popup-copy');
+  copyBtn.onclick = async () => {
+    try { await navigator.clipboard.writeText(url); } catch { /* clipboard unavailable */ }
+    const icon = copyBtn.querySelector('span');
+    if (icon) icon.textContent = 'check';
+    copyBtn.title = t('link.copied');
+  };
+  // Edit: open the insert/edit-link dialog seeded with this cell's text and URL.
+  popup.querySelector('#link-popup-edit').onclick = () => {
+    closeLinkPopup();
+    openLinkDialog(cellId, cellEl);
+  };
+  // Remove: strip the link from the cell.
+  popup.querySelector('#link-popup-remove').onclick = () => {
+    changeCellLink(cellId, '');
+    closeLinkPopup();
+  };
+
+  // Dismiss on outside click, Escape, or scroll/resize. The mousedown listener is
+  // attached on the next tick so the click that opened the chip doesn't close it.
+  const onDocMouseDown = (e) => { if (!popup.contains(e.target)) closeLinkPopup(); };
+  const onKey = (e) => { if (e.key === 'Escape') closeLinkPopup(); };
+  const onReflow = () => closeLinkPopup();
+  setTimeout(() => document.addEventListener('mousedown', onDocMouseDown), 0);
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', onReflow);
+  window.addEventListener('scroll', onReflow, true);
+  linkPopupCleanup = () => {
+    document.removeEventListener('mousedown', onDocMouseDown);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', onReflow);
+    window.removeEventListener('scroll', onReflow, true);
+  };
+};
+
+/**
+ * Commits a cell's display text and link together as a single undoable action.
+ * Mirrors saveCellUpdate's value/formula handling, then sets or clears the link.
+ * @param {string} cellId - The target cell ID.
+ * @param {string} text - The text to display in the cell (may be a formula).
+ * @param {string} url - The link URL; empty string removes the link.
+ */
+const applyCellLink = (cellId, text, url) => {
+  if (!canEditWorkbook) return; // read-only: ignore
+  const before = localCells[cellId] ? JSON.parse(JSON.stringify(localCells[cellId])) : { formula: '', value: '', style: {} };
+
+  const cell = localCells[cellId] || { formula: '', value: '', style: {} };
+  if (!cell.style) cell.style = {};
+  if (text.startsWith('=')) {
+    cell.formula = text;
+    cell.value = evaluateFormula(text, 0, cellId);
+  } else {
+    cell.formula = '';
+    cell.value = text;
+  }
+  if (url) cell.style.link = url; else delete cell.style.link;
+  localCells[cellId] = cell;
+
+  recordHistoryAction(cellId, before, cell);
+  recalculateSheet();
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      type: 'cell-edit',
+      payload: { cellId, formula: cell.formula, value: cell.value, style: cell.style }
+    }));
+  }
+  updateGridDOMCell(cellId, getCellValue(cellId), cell.style);
+  if (activeCellId === cellId) {
+    const formulaBar = document.getElementById('formula-bar-input');
+    if (formulaBar) formulaBar.value = cell.formula ? cell.formula : cell.value;
+    updateToolbarFormattingStates(cell.style);
+  }
+};
+
+/** Teardown callback for the currently-open insert/edit-link dialog, if any. */
+let linkDialogCleanup = null;
+
+/** Close the insert/edit-link dialog and detach its listeners. */
+const closeLinkDialog = () => {
+  const existing = document.getElementById('cell-link-dialog');
+  if (existing) existing.remove();
+  if (linkDialogCleanup) { linkDialogCleanup(); linkDialogCleanup = null; }
+};
+
+/**
+ * Open the insert/edit-link dialog: a small panel with a "Text" field (what the
+ * cell shows) and a link field, plus an Apply action. Used by the toolbar button,
+ * the right-click "Insert link" item, and the link chip's "Edit" button. Esc
+ * cancels; clicking outside dismisses.
+ * @param {string} cellId - The cell receiving the link.
+ * @param {HTMLElement} [cellEl] - Cell element to anchor the dialog to (defaults to the cell's DOM node).
+ */
+const openLinkDialog = (cellId, cellEl) => {
+  if (!canEditWorkbook) return; // viewers cannot edit
+  closeLinkPopup();
+  closeLinkDialog();
+
+  const anchorEl = cellEl || document.querySelector(`[data-cell-id="${cellId}"]`);
+  const cellData = localCells[cellId] || { formula: '', value: '', style: {} };
+  const currentText = cellData.formula ? cellData.formula : (cellData.value || '');
+  const currentUrl = cellData.style && cellData.style.link ? cellData.style.link : '';
+
+  // Both fields share one size: ~2.5x a default cell wide, ~1.3x a default cell tall.
+  const groupCls = 'flex items-center gap-2 px-2.5 w-[250px] h-[27px] rounded-lg border border-outline-variant focus-within:border-primary focus-within:ring-1 focus-within:ring-primary';
+  const iconCls = 'material-symbols-outlined text-[18px] leading-none text-on-surface-variant';
+  const inputCls = 'flex-1 min-w-0 bg-transparent border-0 outline-none focus:ring-0 text-label-lg text-on-surface placeholder:text-on-surface-variant';
+
+  const dialog = document.createElement('div');
+  dialog.id = 'cell-link-dialog';
+  dialog.className = 'fixed z-[1003] w-fit flex flex-col gap-2 p-3 bg-surface-container-lowest dark:bg-inverse-surface text-on-surface dark:text-on-surface-variant rounded-xl shadow-lg border border-outline-variant';
+  dialog.innerHTML = `
+    <label class="${groupCls}">
+      <span class="${iconCls}">text_fields</span>
+      <input id="link-dialog-text" type="text" class="${inputCls}" placeholder="${escapeHtml(t('link.text'))}">
+    </label>
+    <div class="flex items-center gap-2">
+      <label class="${groupCls}">
+        <span class="${iconCls}">search</span>
+        <input id="link-dialog-url" type="text" class="${inputCls}" placeholder="${escapeHtml(t('link.urlPlaceholder'))}">
+      </label>
+      <button type="button" id="link-dialog-apply" class="shrink-0 px-3 py-1.5 rounded-lg text-label-lg font-medium text-primary hover:bg-surface-variant disabled:text-on-surface-variant/50 disabled:cursor-default disabled:hover:bg-transparent">${escapeHtml(t('link.apply'))}</button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+
+  const textInput = /** @type {HTMLInputElement} */ (dialog.querySelector('#link-dialog-text'));
+  const urlInput = /** @type {HTMLInputElement} */ (dialog.querySelector('#link-dialog-url'));
+  const applyBtn = /** @type {HTMLButtonElement} */ (dialog.querySelector('#link-dialog-apply'));
+  textInput.value = currentText;
+  urlInput.value = currentUrl;
+
+  // Apply is enabled only once there is a URL to link to.
+  const syncApplyEnabled = () => { applyBtn.disabled = urlInput.value.trim() === ''; };
+  syncApplyEnabled();
+  urlInput.addEventListener('input', syncApplyEnabled);
+
+  // Position below the anchored cell, clamped to the viewport (flip above if needed).
+  if (anchorEl && typeof anchorEl.getBoundingClientRect === 'function') {
+    const rect = anchorEl.getBoundingClientRect();
+    const dr = dialog.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.bottom + 4;
+    if (left + dr.width > window.innerWidth) left = Math.max(4, window.innerWidth - dr.width - 4);
+    if (top + dr.height > window.innerHeight) top = Math.max(4, rect.top - dr.height - 4);
+    dialog.style.left = `${left}px`;
+    dialog.style.top = `${top}px`;
+  } else {
+    dialog.style.left = '50%';
+    dialog.style.top = '120px';
+    dialog.style.transform = 'translateX(-50%)';
+  }
+
+  const commit = () => {
+    const url = urlInput.value.trim();
+    if (!url) return; // nothing to link
+    // Default the visible text to the URL when left blank, matching Google Sheets.
+    const text = textInput.value !== '' ? textInput.value : url;
+    closeLinkDialog();
+    applyCellLink(cellId, text, url);
+  };
+  applyBtn.addEventListener('click', commit);
+
+  // Enter applies (from either field); Esc cancels without changes.
+  const onFieldKey = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeLinkDialog(); }
+  };
+  textInput.addEventListener('keydown', onFieldKey);
+  urlInput.addEventListener('keydown', onFieldKey);
+
+  // Dismiss on outside click; reflow/scroll closes to avoid a detached panel.
+  // Ignore scrolls originating inside the dialog (e.g. a long pasted URL scrolling
+  // the link input horizontally fires a captured 'scroll' that must not dismiss it).
+  const onDocMouseDown = (e) => { if (!dialog.contains(e.target)) closeLinkDialog(); };
+  const onReflow = (e) => { if (e && e.target && e.target.nodeType && dialog.contains(e.target)) return; closeLinkDialog(); };
+  setTimeout(() => document.addEventListener('mousedown', onDocMouseDown), 0);
+  window.addEventListener('resize', onReflow);
+  window.addEventListener('scroll', onReflow, true);
+  linkDialogCleanup = () => {
+    document.removeEventListener('mousedown', onDocMouseDown);
+    window.removeEventListener('resize', onReflow);
+    window.removeEventListener('scroll', onReflow, true);
+  };
+
+  // Focus the most useful field: the link box (text usually already reflects the cell).
+  urlInput.focus();
+  urlInput.select();
+};
+
 /**
  * Wipes out cell contents and triggers calculations for selection range.
  * @param {string} cellId - Chosen cell ID.
@@ -4664,11 +4931,8 @@ const showContextMenu = (cellId, x, y) => {
   if (delCellUp) delCellUp.onclick = () => { performCellDelete('up'); menu.remove(); };
   document.getElementById('menu-history').onclick = () => { toggleHistoryMode(true); menu.remove(); };
   document.getElementById('menu-link').onclick = () => {
-    const cell = localCells[cellId] || { formula: '', value: '', style: {} };
-    const currentLink = cell.style && cell.style.link ? cell.style.link : '';
-    const url = prompt('Enter link URL (e.g. https://google.com):', currentLink);
-    if (url !== null) changeCellLink(cellId, url);
     menu.remove();
+    openLinkDialog(cellId);
   };
   // Note: paste-special, convert-to-table, create-filter, comment, note,
   // pre-built table, dropdown, smart chips and "more actions" are rendered
@@ -5615,14 +5879,7 @@ window.addEventListener('click', (e) => {
 const toolbarLinkBtn = document.getElementById('toolbar-link');
 if (toolbarLinkBtn) {
   toolbarLinkBtn.addEventListener('click', () => {
-    if (activeCellId) {
-      const cell = localCells[activeCellId] || { formula: '', value: '', style: {} };
-      const currentLink = cell.style && cell.style.link ? cell.style.link : '';
-      const url = prompt('Enter link URL (e.g. https://google.com):', currentLink);
-      if (url !== null) {
-        changeCellLink(activeCellId, url);
-      }
-    }
+    if (activeCellId) openLinkDialog(activeCellId);
   });
 }
 
