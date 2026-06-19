@@ -408,6 +408,16 @@ if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test
     }
   };
 } else {
+  // The `created_at` / `last_login` columns are `TIMESTAMP WITHOUT TIME ZONE` and are
+  // written with `CURRENT_TIMESTAMP` on a UTC database session, i.e. they hold UTC
+  // wall-clock values. By default node-postgres parses such columns into a JS Date
+  // using the *Node process* local time zone, which mislabels the instant whenever the
+  // server is not running in UTC (e.g. a UTC+8 host renders the value back as the raw
+  // UTC time). Force OID 1114 to be interpreted as UTC so the serialized ISO string is
+  // a correct absolute instant and the browser can convert it to the viewer's zone.
+  pg.types.setTypeParser(1114, (val) =>
+    val == null ? val : new Date(val.replace(' ', 'T') + 'Z')
+  );
   // Use real pg connection pool with DATABASE_URL in production/development.
   pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL
