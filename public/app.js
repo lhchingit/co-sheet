@@ -4003,19 +4003,6 @@ const performCellDelete = (direction) => {
   }
 };
 
-/** Inserts a blank row above the given cell's row, shifting rows down. */
-const insertRowAbove = (cellId) => {
-  const m = String(cellId).match(/^[A-Z]+(\d+)$/);
-  if (!m) return;
-  performStructuralInsert('row', parseInt(m[1], 10));
-};
-
-/** Inserts a blank column to the left of the given cell's column. */
-const insertColumnLeft = (cellId) => {
-  const coord = parseCoordinates(cellId);
-  performStructuralInsert('col', coord.col);
-};
-
 /**
  * Rewrites the cell references inside a formula to account for a deleted row or
  * column: references past the removed line shift back by one, and references
@@ -4210,6 +4197,15 @@ const showContextMenu = (cellId, x, y) => {
   // than guessed at, per the project's "don't guess — gray it out" rule.
   const disabledCls = 'w-full flex items-center gap-3 px-3 py-1.5 cursor-not-allowed opacity-40 text-left';
 
+  // When several cells across multiple rows/columns are selected, the insert
+  // actions operate on the whole span, so the labels reflect the live count
+  // (e.g. "Insert 3 rows above"). Reuses the toolbar Insert menu's {n}/{u} keys.
+  const ctxBounds = getInsertSelectionBounds();
+  const ctxRows = ctxBounds ? ctxBounds.maxRow - ctxBounds.minRow + 1 : 1;
+  const ctxCols = ctxBounds ? ctxBounds.maxCol - ctxBounds.minCol + 1 : 1;
+  const insertRowLabel = t('ins.rowAbove', { n: ctxRows, u: ctxRows === 1 ? 'row' : 'rows' });
+  const insertColLabel = t('ins.colLeft', { n: ctxCols, u: ctxCols === 1 ? 'column' : 'columns' });
+
   menu.innerHTML = `
     <button class="${itemCls}" id="menu-cut">
       <span class="${iconCls}">content_cut</span>
@@ -4234,11 +4230,11 @@ const showContextMenu = (cellId, x, y) => {
     <div class="${dividerCls}"></div>
     <button class="${itemCls}" id="menu-insert-row">
       <span class="${iconCls}">add</span>
-      <span class="flex-grow">${t('ctx.insertRowAbove')}</span>
+      <span class="flex-grow">${insertRowLabel}</span>
     </button>
     <button class="${itemCls}" id="menu-insert-col">
       <span class="${iconCls}">add</span>
-      <span class="flex-grow">${t('ctx.insertColLeft')}</span>
+      <span class="flex-grow">${insertColLabel}</span>
     </button>
     <div class="relative group">
       <div class="${itemCls}">
@@ -4344,8 +4340,18 @@ const showContextMenu = (cellId, x, y) => {
   document.getElementById('menu-cut').onclick = () => { cutSelectedCells(); menu.remove(); };
   document.getElementById('menu-copy').onclick = () => { copySelectedCells(); menu.remove(); };
   document.getElementById('menu-paste').onclick = () => { pasteSelectedCells(); menu.remove(); };
-  document.getElementById('menu-insert-row').onclick = () => { insertRowAbove(cellId); menu.remove(); };
-  document.getElementById('menu-insert-col').onclick = () => { insertColumnLeft(cellId); menu.remove(); };
+  document.getElementById('menu-insert-row').onclick = () => {
+    // Insert as many rows as the selection spans, above the topmost selected row.
+    const at = ctxBounds ? ctxBounds.minRow : (parseCellCoord(cellId) || {}).row;
+    if (at) for (let i = 0; i < ctxRows; i++) performStructuralInsert('row', at);
+    menu.remove();
+  };
+  document.getElementById('menu-insert-col').onclick = () => {
+    // Insert as many columns as the selection spans, left of the leftmost column.
+    const at = ctxBounds ? ctxBounds.minCol : (parseCellCoord(cellId) || {}).colIndex;
+    if (at != null) for (let i = 0; i < ctxCols; i++) performStructuralInsert('col', at);
+    menu.remove();
+  };
   document.getElementById('menu-delete-row').onclick = () => { deleteRow(cellId); menu.remove(); };
   document.getElementById('menu-delete-col').onclick = () => { deleteColumn(cellId); menu.remove(); };
   // "Insert Cell" flyout — same behaviour as the toolbar Insert > Cells submenu.
