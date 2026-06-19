@@ -1,0 +1,8 @@
+/*
+ * Tailwind entry stylesheet, shared by all three per-page builds (editor, drive,
+ * login). The CLI processes the @tailwind directives below into a static stylesheet
+ * (public/styles-*.css). Page-specific custom CSS stays inline in each HTML page.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
