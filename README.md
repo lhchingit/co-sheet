@@ -149,6 +149,8 @@ cp .env.example .env
 | `PORT`               | HTTP port (default `3000`).                                                  |
 | `BASE_URL`           | Public base URL; required in production for OAuth callbacks.                 |
 | `DATABASE_URL`       | PostgreSQL connection URI.                                                   |
+| `REDIS_URL`          | Redis connection URI (or comma-separated seed nodes). Enables a Redis-backed session store and the realtime pub/sub bus for multi-replica deployments. Unset → single-instance in-memory mode. |
+| `REDIS_CLUSTER`      | Set `true` when `REDIS_URL` points at a cluster-mode Redis (slot-aware client). |
 | `GOOGLE_CLIENT_ID`   | Google OAuth 2.0 client ID (OIDC).                                           |
 | `GOOGLE_CLIENT_SECRET`| Google OAuth 2.0 client secret.                                            |
 | `OIDC_ISSUER`        | External OIDC provider issuer URL (enables "Sign in with Local OIDC").       |
@@ -234,6 +236,16 @@ npm run typecheck
 
 ## API Overview
 
+Health / probes (public, unauthenticated — registered before the session middleware):
+
+| Method & Path   | Probe type | Description                                                                 |
+|-----------------|------------|-----------------------------------------------------------------------------|
+| `GET /livez`    | Liveness   | Always `200`. Checks no dependencies, so a transient DB/Redis outage never triggers a restart loop. |
+| `GET /startupz` | Startup    | `200` once startup completes (schema, state load, bus init, listening); `503 {"status":"starting"}` until then. |
+| `GET /readyz`   | Readiness  | `200` only when startup is done **and** Postgres (`SELECT 1`) plus Redis (when configured) are reachable; otherwise `503` with a per-check breakdown. |
+
+`/readyz` returns a per-dependency breakdown, e.g. `{"status":"ok","checks":{"startup":"ok","db":"ok","redis":"ok"}}`; a failing check carries an `error: <message>` string. All three also answer `HEAD`.
+
 Auth & session:
 
 | Method & Path                  | Description                                  |
@@ -290,14 +302,34 @@ Kubernetes manifests are provided under `k8s/`:
 
 - `00-namespace.yaml`, `10-secrets.yaml`, `20-postgres.yaml`, `30-app.yaml`, `40-ingress.yaml`
 
-> **Single replica only.** The app keeps sessions (in-memory `MemoryStore`) and all live
-> collaboration state in process. Running more than one replica would split sessions and break
-> cross-user sync. The Deployment is pinned to `replicas: 1` with a `Recreate` strategy.
-> Scaling out would first require a shared session store (e.g. Redis/Postgres) and a WebSocket
-> pub/sub layer.
+> **Single replica by default.** Out of the box the app keeps sessions (in-memory
+> `MemoryStore`) and fans out live collaboration state from within a single process, so the
+> bundled Deployment is pinned to `replicas: 1` with a `Recreate` strategy — running more than
+> one replica in this mode would split sessions and break cross-user sync.
+>
+> **Scaling out** is supported once you provide Redis: set `REDIS_URL` (and `REDIS_CLUSTER=true`
+> for a cluster-mode Redis) to back sessions with `connect-redis` and relay realtime edits over
+> a Redis pub/sub bus, so multiple replicas stay in sync. With Redis configured the readiness
+> probe (`/readyz`) also verifies Redis connectivity.
 
 Before applying, replace the placeholder values in `k8s/10-secrets.yaml` (`CHANGE_ME`) and the
 image reference in `k8s/30-app.yaml`.
+
+The app exposes `GET /livez`, `GET /startupz`, and `GET /readyz` (see [API Overview](#api-overview))
+for the corresponding probes. A typical wiring:
+
+```yaml
+startupProbe:
+  httpGet: { path: /startupz, port: 3000 }
+  failureThreshold: 30
+  periodSeconds: 2
+livenessProbe:
+  httpGet: { path: /livez, port: 3000 }
+  periodSeconds: 10
+readinessProbe:
+  httpGet: { path: /readyz, port: 3000 }
+  periodSeconds: 10
+```
 
 ---
 
