@@ -14,7 +14,24 @@ RUN npm ci --omit=dev
 
 
 ###############################################################################
-# Stage 2 — runtime image.
+# Stage 2 — build the Tailwind CSS with the (dev-only) Tailwind CLI so the image
+# always ships freshly compiled stylesheets, independent of the committed copies.
+###############################################################################
+FROM node:24-alpine AS assets
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Only the inputs the Tailwind content scan needs.
+COPY tailwind ./tailwind
+COPY private ./private
+COPY public ./public
+RUN npm run build:css
+
+
+###############################################################################
+# Stage 3 — runtime image.
 ###############################################################################
 FROM node:24-alpine AS runtime
 WORKDIR /app
@@ -29,6 +46,10 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy the application source. .dockerignore keeps secrets, mockups and
 # local persistence files out of the image.
 COPY . .
+
+# Overwrite the committed stylesheets with the freshly compiled ones so the running
+# image never serves a stale build.
+COPY --from=assets /app/public/styles-editor.css /app/public/styles-drive.css /app/public/styles-login.css ./public/
 
 # Run as the unprivileged user that ships with the node image.
 USER node

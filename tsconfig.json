@@ -12,8 +12,5 @@
     "types": []
   },
   "include": ["public/**/*.js"],
-  // Third-party vendored bundle (minified Tailwind CDN build) — not our code and
-  // not annotated, so keep it out of the type check. (Repeats node_modules from
-  // the base because a child `exclude` replaces rather than merges it.)
-  "exclude": ["node_modules", "public/vendor/**"]
+  "exclude": ["node_modules"]
 }

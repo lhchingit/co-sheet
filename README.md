@@ -47,12 +47,15 @@ alternate) and styled with a Material Design 3 light theme.
 | Real-time    | `ws` WebSocket server (shares the HTTP server via upgrade)         |
 | Auth         | Passport + `passport-openidconnect`; `express-session`            |
 | Database     | PostgreSQL (`pg`)                                                  |
-| Frontend     | Vanilla JS + HTML, Tailwind-style utility classes, Material Symbols|
+| Frontend     | Vanilla JS + HTML, Tailwind CSS (precompiled), Material Symbols    |
 | Tests        | Node's built-in test runner over a Testcontainers PostgreSQL      |
 | Type-checking| TypeScript over opt-in JS files (`// @ts-check`; no migration)     |
 
-No build step — the frontend is served as static files. TypeScript is used only to
-type-check the existing JavaScript (`npm run typecheck`); the code is not compiled.
+The JavaScript and HTML are served as static files (TypeScript only type-checks them —
+`npm run typecheck` — it never compiles them). The one build artifact is the Tailwind
+CSS: `npm run build:css` precompiles `public/styles-{editor,drive,login}.css` from the
+configs in `tailwind/`. The generated files are committed (so `npm start` needs no
+build), and the Docker image rebuilds them so production is never stale.
 
 ---
 

@@ -10,47 +10,12 @@
      i18n initialization fails, so it is never stuck blank. -->
 <style id="i18n-fouc-guard">html:not(.i18n-ready) body{visibility:hidden}</style>
 <script>setTimeout(function(){document.documentElement.classList.add('i18n-ready');},1500);</script>
-<!-- Tailwind is vendored locally (public/vendor/tailwind.js) instead of loaded
-     from cdn.tailwindcss.com, which is blocked in some environments. This is the
-     exact CDN bundle built with the forms + container-queries plugins. -->
-<script src="/vendor/tailwind.js"></script>
+<!-- Tailwind is precompiled to a static stylesheet by the Tailwind CLI (the theme
+     lives in tailwind/drive.config.cjs; run `npm run build:css`). This replaces the
+     runtime CDN/JIT build, which printed a production warning and compiled in-browser. -->
+<link rel="stylesheet" href="/styles-drive.css"/>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
-<script>
-    // A compact subset of the editor's Material Design 3 light palette so the file
-    // manager shares the spreadsheet UI's look and feel.
-    tailwind.config = {
-        darkMode: "class",
-        theme: {
-            extend: {
-                colors: {
-                    "primary": "#0b57d0",
-                    "on-primary": "#ffffff",
-                    "primary-container": "#dae2ff",
-                    "on-primary-container": "#001a41",
-                    "surface": "#f7f9ff",
-                    "surface-bright": "#f7f9ff",
-                    "surface-container-lowest": "#ffffff",
-                    "surface-container-low": "#f1f4fa",
-                    "surface-container": "#ebeef4",
-                    "surface-container-high": "#e5e8ee",
-                    "surface-container-highest": "#dfe3e8",
-                    "on-surface": "#181c20",
-                    "on-surface-variant": "#424654",
-                    "outline": "#737785",
-                    "outline-variant": "#c3c6d6",
-                    "secondary-container": "#d8e2ff",
-                    "on-secondary-container": "#001a41",
-                    "error": "#ba1a1a",
-                    "on-error": "#ffffff"
-                },
-                fontFamily: {
-                    sans: ['Roboto', 'sans-serif']
-                }
-            }
-        }
-    };
-</script>
 <style>
     body { font-family: 'Roboto', sans-serif; }
     .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
