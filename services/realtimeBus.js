@@ -70,6 +70,7 @@ export async function createRedisClient(config) {
  * @property {(msg: object) => void} publish
  * @property {(handler: (msg: object) => void) => void} onMessage
  * @property {(key: string, ttlMs: number) => Promise<boolean>} acquireLock
+ * @property {() => Promise<boolean>} ping
  * @property {() => Promise<void>} close
  */
 
@@ -167,6 +168,26 @@ export function createRealtimeBus({ redisUrl, cluster = false, logger = console 
     }
   }
 
+  /**
+   * Health check for readiness probes. In local mode (no REDIS_URL) Redis is not
+   * used, so there is nothing to fail — resolves true. When connected, issues a
+   * PING and resolves true only if the server answers.
+   * @returns {Promise<boolean>}
+   */
+  async function ping() {
+    if (!config) return true; // local mode: Redis not required
+    if (!enabled || !pub) return false; // configured but not yet/no longer connected
+    try {
+      const res = await pub.ping();
+      // node-redis returns 'PONG'; cluster clients may return an array of replies.
+      if (Array.isArray(res)) return res.every((r) => String(r).toUpperCase() === 'PONG');
+      return String(res).toUpperCase() === 'PONG';
+    } catch (e) {
+      logger.error('[realtime] ping failed:', /** @type {Error} */ (e).message);
+      return false;
+    }
+  }
+
   /** Tear down the Redis connections (used by tests/shutdown). */
   async function close() {
     try { if (sub) await sub.quit(); } catch { /* already closed */ }
@@ -181,6 +202,7 @@ export function createRealtimeBus({ redisUrl, cluster = false, logger = console 
     publish,
     onMessage,
     acquireLock,
+    ping,
     close,
   };
 }
