@@ -20,7 +20,10 @@
 
   // ----- module state -----
   let files = [];        // [{ id, name, created_at, created_by }]
-  let selectedId = null; // currently selected file id (single-select)
+  let selectedIds = new Set(); // currently selected file ids (multi-select, Drive-like)
+  let selectionAnchorId = null; // last individually-clicked card (anchor for Shift+click ranges)
+  let justDragged = false; // true between a marquee drag's end and the next mousedown, so the
+                           // trailing click neither re-selects a card nor clears the dragged result
   let menuTargetId = null; // file id the overflow menu currently acts on
   let currentRole = 'user'; // the signed-in user's role ('user'|'admin'|'superadmin')
   let adminUsers = [];   // cached user list for the permissions view (re-rendered on lang change)
@@ -145,16 +148,24 @@
   // ---------------------------------------------------------------------------
   // Selection / action bar
   // ---------------------------------------------------------------------------
+  // The single file an action targets when exactly one is selected.
+  const firstSelectedId = () => selectedIds.values().next().value || null;
+
   const updateSelectionUI = () => {
-    if (selectedId) {
+    const count = selectedIds.size;
+    if (count > 0) {
       appBar.classList.add('hidden');
       selectionBar.classList.remove('hidden');
       selectionBar.classList.add('flex');
-      $('sel-count').textContent = t('drive.selected', { n: 1 });
-      // Rename / delete are only available on files the user may modify.
-      const canModify = !!(fileById(selectedId) || {}).canModify;
-      setActionEnabled($('sel-delete'), canModify);
-      setActionEnabled($('sel-rename'), canModify);
+      $('sel-count').textContent = t('drive.selected', { n: count });
+      const selected = [...selectedIds].map(fileById).filter(Boolean);
+      const allModifiable = selected.length > 0 && selected.every((f) => f.canModify);
+      const single = count === 1;
+      // Open / copy-link / rename act on a single file; delete can act on many.
+      setActionEnabled($('sel-open'), single);
+      setActionEnabled($('sel-link'), single);
+      setActionEnabled($('sel-rename'), single && allModifiable);
+      setActionEnabled($('sel-delete'), allModifiable);
     } else {
       selectionBar.classList.add('hidden');
       selectionBar.classList.remove('flex');
@@ -162,7 +173,7 @@
     }
     // Reflect selection styling on cards.
     grid.querySelectorAll('.file-card').forEach((card) => {
-      const on = card.getAttribute('data-id') === selectedId;
+      const on = selectedIds.has(card.getAttribute('data-id'));
       card.classList.toggle('ring-2', on);
       card.classList.toggle('ring-primary', on);
       card.classList.toggle('border-primary', on);
@@ -170,8 +181,29 @@
     });
   };
 
-  const selectFile = (id) => { selectedId = id; updateSelectionUI(); };
-  const clearSelection = () => { selectedId = null; updateSelectionUI(); };
+  // Replace the selection with a single file (plain click).
+  const selectOnly = (id) => {
+    selectedIds = new Set(id ? [id] : []);
+    selectionAnchorId = id || null;
+    updateSelectionUI();
+  };
+  // Toggle one file in/out of the selection (Ctrl/Cmd+click).
+  const toggleSelection = (id) => {
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+    selectionAnchorId = id;
+    updateSelectionUI();
+  };
+  // Select the contiguous range between the anchor and id, in visible order (Shift+click).
+  const selectRange = (toId) => {
+    const visible = files.filter(viewFilter);
+    const i = visible.findIndex((f) => f.id === selectionAnchorId);
+    const j = visible.findIndex((f) => f.id === toId);
+    if (i === -1 || j === -1) { selectOnly(toId); return; }
+    const [lo, hi] = i <= j ? [i, j] : [j, i];
+    selectedIds = new Set(visible.slice(lo, hi + 1).map((f) => f.id));
+    updateSelectionUI();
+  };
+  const clearSelection = () => { selectedIds.clear(); selectionAnchorId = null; updateSelectionUI(); };
 
   // ---------------------------------------------------------------------------
   // Rendering
@@ -367,7 +399,32 @@
           const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
           if (res.status === 403) { toast(t('drive.noPermission')); return; }
           if (!res.ok) throw new Error('delete failed');
-          if (selectedId === id) clearSelection();
+          if (selectedIds.has(id)) clearSelection();
+          await loadFiles();
+        } catch (e) {
+          toast(t('drive.loadError'));
+        }
+      }
+    });
+  };
+
+  // Delete every modifiable file in a selection (multi-select action bar).
+  const deleteFiles = (ids) => {
+    const targets = ids.map(fileById).filter((f) => f && f.canModify);
+    if (!targets.length) return;
+    if (targets.length === 1) { deleteFile(targets[0].id); return; }
+    openModal({
+      title: t('drive.delete'),
+      desc: t('drive.confirmDeleteMany', { n: targets.length }),
+      okLabel: t('drive.delete'),
+      showCancel: true,
+      onOk: async () => {
+        closeModal();
+        try {
+          const results = await Promise.all(targets.map((f) =>
+            fetch(`/api/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' })));
+          if (results.some((r) => r.status === 403)) toast(t('drive.noPermission'));
+          clearSelection();
           await loadFiles();
         } catch (e) {
           toast(t('drive.loadError'));
@@ -595,7 +652,7 @@
       if (check) check.classList.toggle('hidden', /** @type {HTMLElement} */ (opt).dataset.lang !== lang);
     });
     // Re-apply dynamic (non-data-i18n) strings.
-    if (selectedId) $('sel-count').textContent = t('drive.selected', { n: 1 });
+    if (selectedIds.size) $('sel-count').textContent = t('drive.selected', { n: selectedIds.size });
     // The permissions table is rendered dynamically (role labels, etc.); re-render
     // it on language change while it is open.
     if (!$('admin-view').classList.contains('hidden')) renderUsers();
@@ -611,11 +668,99 @@
   };
 
   // ---------------------------------------------------------------------------
+  // Marquee (drag-to-select a box of files, like Google Drive)
+  // ---------------------------------------------------------------------------
+  // Dragging a box anywhere inside the files view (including across cards) draws a
+  // rubber-band rectangle and selects every card it intersects. Holding
+  // Ctrl/Cmd/Shift adds to the existing selection instead of replacing it. A press
+  // that doesn't move past the threshold is treated as a normal click, not a drag.
+  const wireMarquee = () => {
+    const DRAG_THRESHOLD = 5; // px of movement before a drag (vs. a click) begins
+    // Chrome / interactive zones that keep their own behaviour and must not start a marquee.
+    const NO_DRAG = '#app-bar, #selection-bar, #side-nav, #admin-view, #modal-overlay, #card-menu, #lang-switch-menu, #user-menu, button, a, input, select, textarea';
+    let startX = 0, startY = 0;
+    let active = false;   // a potential drag is in progress (mouse is down)
+    let dragging = false; // movement passed the threshold; the box is showing
+    let additive = false; // modifier held — union with the pre-drag selection
+    let baseSelection = null; // snapshot of the selection when the drag started
+    let box = null;       // the rubber-band element
+
+    const ensureBox = () => {
+      if (box) return;
+      box = document.createElement('div');
+      // Neutral translucent rectangle, matching the reference design.
+      box.style.cssText = 'position:fixed;z-index:30;pointer-events:none;border:1px solid rgba(60,64,67,0.5);background:rgba(60,64,67,0.16);border-radius:2px;';
+      document.body.appendChild(box);
+    };
+
+    const onMouseMove = (e) => {
+      if (!active) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!dragging && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+      dragging = true;
+      ensureBox();
+      const left = Math.min(startX, e.clientX);
+      const top = Math.min(startY, e.clientY);
+      const w = Math.abs(dx);
+      const h = Math.abs(dy);
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.style.width = `${w}px`;
+      box.style.height = `${h}px`;
+      const next = additive ? new Set(baseSelection) : new Set();
+      grid.querySelectorAll('.file-card').forEach((card) => {
+        const r = card.getBoundingClientRect();
+        const hit = !(r.right < left || r.left > left + w || r.bottom < top || r.top > top + h);
+        if (hit) next.add(card.getAttribute('data-id'));
+      });
+      selectedIds = next;
+      updateSelectionUI();
+      e.preventDefault();
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      if (box) { box.remove(); box = null; }
+      // A real drag fires a trailing click; flag it so that click neither
+      // re-selects the card under the cursor nor clears the dragged result. The
+      // flag is cleared on the next mousedown. (A plain click — no drag — leaves
+      // the flag false and falls through to the normal click handlers.)
+      if (dragging) justDragged = true;
+      active = false;
+      dragging = false;
+    };
+
+    document.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // left button only
+      justDragged = false; // fresh interaction
+      // Only while the files view is showing (not the permissions view).
+      if ($('files-view').classList.contains('hidden')) return;
+      const target = /** @type {Element} */ (e.target);
+      // The page chrome and interactive controls keep their own behaviour; anywhere
+      // else — blank space around the grid and card bodies alike — begins a drag.
+      if (target.closest(NO_DRAG)) return;
+      active = true;
+      dragging = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      additive = e.ctrlKey || e.metaKey || e.shiftKey;
+      baseSelection = new Set(selectedIds);
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      e.preventDefault(); // suppress native text selection while dragging
+    });
+  };
+
+  // ---------------------------------------------------------------------------
   // Wiring
   // ---------------------------------------------------------------------------
   const wireEvents = () => {
     // Card interactions (event-delegated).
     grid.addEventListener('click', (e) => {
+      // Ignore the click that trails a marquee drag (the drag already set the selection).
+      if (justDragged) return;
       const target = /** @type {Element} */ (e.target);
       const menuBtn = target.closest('.card-menu-btn');
       const card = target.closest('.file-card');
@@ -627,7 +772,11 @@
         openCardMenu(menuBtn, id);
         return;
       }
-      selectFile(id);
+      // Ctrl/Cmd+click toggles one file; Shift+click extends a range from the
+      // anchor; a plain click selects just this file (Google Drive behaviour).
+      if (e.ctrlKey || e.metaKey) toggleSelection(id);
+      else if (e.shiftKey && selectionAnchorId) selectRange(id);
+      else selectOnly(id);
     });
     grid.addEventListener('dblclick', (e) => {
       const target = /** @type {Element} */ (e.target);
@@ -652,22 +801,30 @@
       if (!$('lang-switch-menu').contains(target) && !target.closest('#lang-switch-btn')) {
         $('lang-switch-menu').classList.add('hidden');
       }
+      // Clicking anywhere outside a card / the action bar / a menu / the modal
+      // clears the selection (Drive-like). A modifier means additive intent, so
+      // it's preserved; the click that trails a marquee drag is skipped (the flag
+      // is reset on the next mousedown).
+      if (selectedIds.size && !justDragged && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+        !target.closest('.file-card, #selection-bar, #card-menu, #modal-overlay, #lang-switch-menu, #user-menu')) {
+        clearSelection();
+      }
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeCardMenu();
         $('lang-switch-menu').classList.add('hidden');
         if (!$('modal-overlay').classList.contains('hidden')) closeModal();
-        else if (selectedId) clearSelection();
+        else if (selectedIds.size) clearSelection();
       }
     });
 
     // Selection action bar.
     $('sel-clear').addEventListener('click', clearSelection);
-    $('sel-open').addEventListener('click', () => runAction('open', selectedId));
-    $('sel-link').addEventListener('click', () => runAction('link', selectedId));
-    $('sel-rename').addEventListener('click', () => runAction('rename', selectedId));
-    $('sel-delete').addEventListener('click', () => runAction('delete', selectedId));
+    $('sel-open').addEventListener('click', () => runAction('open', firstSelectedId()));
+    $('sel-link').addEventListener('click', () => runAction('link', firstSelectedId()));
+    $('sel-rename').addEventListener('click', () => runAction('rename', firstSelectedId()));
+    $('sel-delete').addEventListener('click', () => deleteFiles([...selectedIds]));
 
     // Left-rail navigation (Home / Shared with me / Starred).
     if (navHome) navHome.addEventListener('click', () => setView('home'));
@@ -726,6 +883,9 @@
     // Reposition the open card menu on scroll/resize to keep it anchored sensibly.
     window.addEventListener('resize', closeCardMenu);
     window.addEventListener('scroll', closeCardMenu, true);
+
+    // Drag-to-select a box of files (Drive-like).
+    wireMarquee();
   };
 
   const loadProfile = () => {

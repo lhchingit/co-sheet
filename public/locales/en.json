@@ -315,6 +315,7 @@
   "drive.untitled": "Untitled spreadsheet",
   "drive.promptName": "File name:",
   "drive.confirmDelete": "Delete \"{name}\"? This cannot be undone.",
+  "drive.confirmDeleteMany": "Delete {n} files? This cannot be undone.",
   "drive.promptRename": "Enter a new name for \"{name}\":",
   "drive.createdBy": "Owner: {name}",
   "drive.sharedSample": "Shared sample",
