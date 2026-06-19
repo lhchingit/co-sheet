@@ -280,12 +280,12 @@ test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async
 });
 
 test('Login page hides the Mock OIDC button in production by default', async (t) => {
-  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: '' });
+  const html = await fetchLoginPage({ NODE_ENV: 'production', USE_FILE_STORE: '1', MOCK_OIDC_ENABLED: '' });
   assert.ok(!html.includes('Sign in with Mock OIDC'));
 });
 
 test('Login page shows the Mock OIDC button in production when explicitly enabled', async (t) => {
-  const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: 'true' });
+  const html = await fetchLoginPage({ NODE_ENV: 'production', USE_FILE_STORE: '1', MOCK_OIDC_ENABLED: 'true' });
   assert.ok(html.includes('Sign in with Mock OIDC'));
 });
 

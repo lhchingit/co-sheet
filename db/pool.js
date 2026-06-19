@@ -24,9 +24,20 @@ export const STORE_PATH = process.env.STORE_PATH || path.join(__dirname, '..', '
 /** @type {{ query(text: string, params?: any[]): Promise<{ rows: any[], rowCount?: number }>, end(): Promise<void> }} */
 let pool;
 
-if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test') {
-  // Ensure NODE_ENV is set to 'test' so other modules/tests know we are in test mode.
-  process.env.NODE_ENV = 'test';
+// Use the file-backed mock store for the implicit test triggers, or when it is
+// explicitly requested via USE_FILE_STORE=1. The explicit flag lets tests boot the
+// server in another mode (e.g. NODE_ENV=production, to exercise production-only UI
+// behavior) without needing a real PostgreSQL server in CI.
+if (
+  process.env.NODE_ENV === 'test' ||
+  process.env.npm_lifecycle_event === 'test' ||
+  process.env.USE_FILE_STORE === '1'
+) {
+  // Mark test mode so other modules/tests know we are not hitting a real DB, but do not
+  // clobber an explicit NODE_ENV=production (set when a test wants production behavior).
+  if (process.env.NODE_ENV !== 'production') {
+    process.env.NODE_ENV = 'test';
+  }
   pool = {
     // Intercept query calls to read/write from/to the local file specified by STORE_PATH,
     // so that integration tests can run without a real PostgreSQL server.
