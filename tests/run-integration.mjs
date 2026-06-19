@@ -1,5 +1,6 @@
 // @ts-check
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { RedisContainer } from '@testcontainers/redis';
 import { spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -7,10 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * @file tests/run-integration.mjs
- * @description Integration-test entrypoint. Boots a single throwaway PostgreSQL
- * server via Testcontainers, exposes it as DATABASE_URL, then runs the Node test
- * runner against it. Each test carves out its own database on this server (see
- * tests/helpers/db.js), so the suite exercises real SQL end-to-end with no mock.
+ * @description Integration-test entrypoint. Boots throwaway PostgreSQL and Redis
+ * servers via Testcontainers, exposes them as DATABASE_URL / REDIS_URL, then runs
+ * the Node test runner against them. Each test carves out its own database on the
+ * PostgreSQL server (see tests/helpers/db.js), so the suite exercises real SQL
+ * end-to-end with no mock. With Redis present, the cross-instance realtime fan-out
+ * tests (tests/realtime_multi_instance.test.js) run instead of skipping.
  *
  * Usage:
  *   node tests/run-integration.mjs [node --test flags] [test files]
@@ -22,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POSTGRES_IMAGE = process.env.TEST_POSTGRES_IMAGE || 'postgres:16-alpine';
+const REDIS_IMAGE = process.env.TEST_REDIS_IMAGE || 'redis:7-alpine';
 
 async function main() {
   const passthrough = process.argv.slice(2);
@@ -36,15 +40,20 @@ async function main() {
       .map((f) => path.join('tests', f));
   }
 
-  console.log(`[run-integration] starting ${POSTGRES_IMAGE} container...`);
-  const container = await new PostgreSqlContainer(POSTGRES_IMAGE).start();
-  const baseUri = container.getConnectionUri();
+  console.log(`[run-integration] starting ${POSTGRES_IMAGE} and ${REDIS_IMAGE} containers...`);
+  const [pgContainer, redisContainer] = await Promise.all([
+    new PostgreSqlContainer(POSTGRES_IMAGE).start(),
+    new RedisContainer(REDIS_IMAGE).start(),
+  ]);
+  const baseUri = pgContainer.getConnectionUri();
   process.env.DATABASE_URL = baseUri;
   // A stable admin URL the helper uses to create/drop per-test databases. Kept
   // separate from DATABASE_URL so in-process tests can freely reassign DATABASE_URL
   // without breaking database provisioning.
   process.env.TEST_PG_ADMIN_URL = baseUri;
-  console.log('[run-integration] container ready; launching test runner.');
+  // Exposing REDIS_URL flips the cross-instance realtime tests from skipped to live.
+  process.env.REDIS_URL = redisContainer.getConnectionUrl();
+  console.log('[run-integration] containers ready; launching test runner.');
 
   const args = ['--test', ...flags, ...testFiles];
   const child = spawn(process.execPath, args, { stdio: 'inherit', env: process.env });
@@ -53,8 +62,8 @@ async function main() {
     child.on('exit', (c, signal) => resolve(c == null ? (signal ? 1 : 0) : c));
   });
 
-  console.log('[run-integration] stopping container...');
-  await container.stop();
+  console.log('[run-integration] stopping containers...');
+  await Promise.all([pgContainer.stop(), redisContainer.stop()]);
   process.exit(code);
 }
 

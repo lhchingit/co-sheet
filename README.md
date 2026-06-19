@@ -183,11 +183,13 @@ mock sign-in) to reach your drive.
 ## Testing
 
 The suite uses Node's built-in test runner and spawns real server processes against a **real
-PostgreSQL** database. `npm test` runs `tests/run-integration.mjs`, which starts one throwaway
-PostgreSQL container via [Testcontainers](https://testcontainers.com/), exposes it as
-`DATABASE_URL`, then runs `node --test`. Each test carves out its own isolated database on that
-server (see `tests/helpers/db.js`), so there is no shared, mutable store. **Docker must be
-running**; no other setup is needed.
+PostgreSQL** database and a **real Redis**. `npm test` runs `tests/run-integration.mjs`, which
+starts throwaway PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com/),
+exposes them as `DATABASE_URL` / `REDIS_URL`, then runs `node --test`. Each test carves out its own
+isolated database on the PostgreSQL server (see `tests/helpers/db.js`), so there is no shared,
+mutable store. Because `REDIS_URL` is provided, the cross-instance realtime fan-out tests
+(`tests/realtime_multi_instance.test.js`) run rather than skip. **Docker must be running**; no
+other setup is needed.
 
 ```bash
 npm test
