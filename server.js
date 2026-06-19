@@ -361,6 +361,72 @@ app.use(express.json());
 // Middleware to parse urlencoded bodies, typical of form submissions.
 app.use(express.urlencoded({ extended: true }));
 
+// ---------------------------------------------------------------------------
+// Health / probe endpoints for Kubernetes (and other orchestrators).
+//
+// Registered before the session/auth middleware so they are public, cheap, and
+// never allocate a session. Three distinct probes with different semantics:
+//
+//   GET /livez     Liveness  — the process is up and the event loop responsive.
+//                  Always 200. A failure here means the container is wedged and
+//                  should be restarted; it deliberately checks no dependencies
+//                  so a transient DB/Redis outage never triggers a kill loop.
+//
+//   GET /startupz  Startup   — initialization (DB schema, state load, bus init)
+//                  has finished. 200 once ready, else 503. Point the startup
+//                  probe here so liveness/readiness don't run until boot is done.
+//
+//   GET /readyz    Readiness — this instance can serve traffic: startup is done
+//                  AND its backing dependencies (Postgres, and Redis when
+//                  configured) are reachable. 200 when all checks pass, else 503
+//                  with a per-check breakdown so a failing instance is pulled
+//                  from the load balancer without being restarted.
+//
+// All three respond to HEAD as well (Express maps HEAD to the GET handler), so
+// `httpGet` probes work whether or not they send a body.
+// ---------------------------------------------------------------------------
+
+// Flipped true once the startup sequence in `ready` completes (see below).
+let startupComplete = false;
+
+app.get('/livez', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+app.get('/startupz', (req, res) => {
+  if (startupComplete) {
+    res.status(200).json({ status: 'ok' });
+  } else {
+    res.status(503).json({ status: 'starting' });
+  }
+});
+
+app.get('/readyz', async (req, res) => {
+  const checks = { startup: startupComplete ? 'ok' : 'starting', db: 'ok', redis: 'ok' };
+  let healthy = startupComplete;
+
+  // Postgres: a trivial round-trip proves the pool can reach the database.
+  try {
+    await pool.query('SELECT 1');
+  } catch (e) {
+    checks.db = `error: ${e && e.message ? e.message : 'query failed'}`;
+    healthy = false;
+  }
+
+  // Redis: no-op (always ok) in single-instance mode; a real PING when configured.
+  try {
+    if (!(await bus.ping())) {
+      checks.redis = 'error: ping failed';
+      healthy = false;
+    }
+  } catch (e) {
+    checks.redis = `error: ${e && e.message ? e.message : 'ping failed'}`;
+    healthy = false;
+  }
+
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'error', checks });
+});
+
 // Shared session store, queried both by the HTTP session middleware and during
 // the WebSocket upgrade. With multiple app instances the store MUST be shared, or
 // a socket whose login landed on instance A can't be authenticated on instance B.
@@ -2132,6 +2198,9 @@ const ready = (async () => {
     });
     console.log(`Server running on port ${PORT}`);
     registerStrategies();
+    // Startup is fully done: schema provisioned, state loaded, bus connected,
+    // server listening, strategies registered. Probes can now report ready.
+    startupComplete = true;
     return server;
   } catch (err) {
     console.error('Database initialization or server startup failed:', err);
