@@ -255,8 +255,6 @@
   "ctx.insertLink": "Insert link",
   "ctx.editHistory": "Show edit history",
   "ctx.clear": "Clear contents",
-  "ctx.insertRowAbove": "Insert 1 row above",
-  "ctx.insertColLeft": "Insert 1 column left",
   "ctx.insertCell": "Insert cell",
   "ctx.pasteSpecial": "Paste special",
   "ctx.deleteRow": "Delete row",

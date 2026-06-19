@@ -255,8 +255,6 @@
   "ctx.insertLink": "插入連結",
   "ctx.editHistory": "顯示編輯記錄",
   "ctx.clear": "清除內容",
-  "ctx.insertRowAbove": "向上插入 1 列",
-  "ctx.insertColLeft": "向左插入 1 欄",
   "ctx.insertCell": "插入儲存格",
   "ctx.pasteSpecial": "選擇性貼上",
   "ctx.deleteRow": "刪除列",
