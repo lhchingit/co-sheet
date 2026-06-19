@@ -9,8 +9,10 @@ process.env.NODE_ENV = 'test';
  * is delivered to a client connected to instance B — the behavior that makes
  * horizontal scaling correct.
  *
- * A running Redis is required, so the whole suite is skipped unless REDIS_URL is
- * set. Run it locally with, e.g. (after `docker compose up -d redis`):
+ * A running Redis is required. The integration runner (tests/run-integration.mjs)
+ * starts one via Testcontainers and exports REDIS_URL, so these run by default with
+ * `npm test`. If you invoke `node --test` directly the suite skips itself unless
+ * REDIS_URL is set, e.g. (after `docker compose up -d redis`):
  *
  *   REDIS_URL=redis://localhost:6379 node --test tests/realtime_multi_instance.test.js
  */
