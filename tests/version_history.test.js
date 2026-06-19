@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 import http from 'http';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
+import { createTestDb } from './helpers/db.js';
 
 
 /**
@@ -62,51 +63,26 @@ function makeRequest(url, method, body = null, headers = {}) {
   });
 }
 
-test('Database Mock - workbook_versions creation and queries', async (t) => {
+test('Database - workbook_versions insert and query round-trip', async (t) => {
   // --- Arrange ---
-  // Define custom environment settings for the test run.
-  const STORE_PATH = path.resolve('store.versions.test.json');
-  const VERSIONS_PATH = STORE_PATH + '.versions.json';
-
-  // Clean up any pre-existing test files to ensure a clean state.
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  if (fs.existsSync(VERSIONS_PATH)) {
-    fs.unlinkSync(VERSIONS_PATH);
-  }
-
-  // Set environment variables to run in test mode on a random port.
-  process.env.NODE_ENV = 'test';
-  process.env.PORT = '0';
-  process.env.STORE_PATH = STORE_PATH;
-
-  // Dynamically import server components after setting env variables, then wait for
-  // the server to finish starting so it can be closed deterministically in `finally`
-  // (otherwise the listening socket leaks and keeps the test process alive).
-  const serverModule = await import('../server.js');
-  await serverModule.ready;
-  const pool = serverModule.pool;
+  // Provision an isolated database and exercise the workbook_versions table with the
+  // exact SQL shape the app's data layer (db/versions.js) uses.
+  const db = await createTestDb('versions-roundtrip');
 
   try {
     // --- Act ---
-    // Perform an insertion query into workbook_versions.
     const testState = { sheets: { Sheet1: {} } };
-    const insertQuery = `
-      INSERT INTO workbook_versions (state, created_by)
-      VALUES ($1, $2)
-      RETURNING id, state, created_at, created_by
-    `;
-    const insertParams = [JSON.stringify(testState), 'test_user'];
-    const insertResult = await pool.query(insertQuery, insertParams);
-
-    // Perform a select query to retrieve versions.
-    const selectQuery = `
-      SELECT id, state, created_at, created_by
-      FROM workbook_versions
-      ORDER BY created_at DESC
-    `;
-    const selectResult = await pool.query(selectQuery);
+    const insertResult = await db.query(
+      `INSERT INTO workbook_versions (state, created_by)
+       VALUES ($1, $2)
+       RETURNING id, state, created_at, created_by`,
+      [JSON.stringify(testState), 'test_user']
+    );
+    const selectResult = await db.query(
+      `SELECT id, state, created_at, created_by
+       FROM workbook_versions
+       ORDER BY created_at DESC`
+    );
 
     // --- Assert ---
     // Assert insertion result structure and content.
@@ -123,30 +99,8 @@ test('Database Mock - workbook_versions creation and queries', async (t) => {
     assert.strictEqual(selectedRow.id, 1, 'Selected version ID should be 1');
     assert.strictEqual(selectedRow.created_by, 'test_user', 'Selected created by should match input');
     assert.deepStrictEqual(selectedRow.state, testState, 'Selected state should match input');
-
-    // Assert that the versions file was created on disk.
-    assert.ok(fs.existsSync(VERSIONS_PATH), 'Versions JSON file should exist on disk');
-    const diskContent = JSON.parse(fs.readFileSync(VERSIONS_PATH, 'utf8'));
-    assert.strictEqual(diskContent.length, 1, 'Versions file should contain exactly one version');
-    assert.strictEqual(diskContent[0].id, 1, 'Version in file should have ID 1');
-
   } finally {
-    // --- Cleanup ---
-    // Shut down the server to free up the port and clean the event loop.
-    const serverInstance = serverModule.server;
-    if (serverInstance && typeof serverInstance.close === 'function') {
-      await new Promise((resolve) => serverInstance.close((err) => {
-        if (err) console.error('[Test] Error closing server:', err);
-        resolve();
-      }));
-    }
-    // Clean up created files.
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
-    if (fs.existsSync(VERSIONS_PATH)) {
-      fs.unlinkSync(VERSIONS_PATH);
-    }
+    await db.cleanup();
   }
 });
 
@@ -154,68 +108,32 @@ test('Version History API Endpoints - retrieve and restore', async (t) => {
   // --- Arrange ---
   // Define environment variables and port for the spawned test server.
   const PORT = '31270';
-  const STORE_PATH = path.resolve('store.versions.api.test.json');
-  const VERSIONS_PATH = STORE_PATH + '.versions.json';
+  const db = await createTestDb('versions-api');
 
-  // Clean up any pre-existing test files.
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  if (fs.existsSync(VERSIONS_PATH)) {
-    fs.unlinkSync(VERSIONS_PATH);
-  }
-
-  // Populate initial state file and version history file so that the server starts with data.
+  // Seed the active workbook plus two existing version snapshots directly in the DB
+  // (seedVersion assigns ids 1 then 2 on the fresh sequence).
   const initialWorkbookState = {
-    sheets: {
-      Sheet1: {
-        A1: { formula: '', value: 'Current State', style: {} }
-      }
-    },
+    sheets: { Sheet1: { A1: { formula: '', value: 'Current State', style: {} } } },
     sheetOrder: ['Sheet1'],
     sheetColors: {},
     hiddenSheets: []
   };
+  const version1State = {
+    sheets: { Sheet1: { A1: { formula: '', value: 'Version 1 State', style: {} } } },
+    sheetOrder: ['Sheet1'], sheetColors: {}, hiddenSheets: []
+  };
+  const version2State = {
+    sheets: { Sheet1: { A1: { formula: '', value: 'Version 2 State', style: {} } } },
+    sheetOrder: ['Sheet1'], sheetColors: {}, hiddenSheets: []
+  };
 
-  const initialVersions = [
-    {
-      id: 1,
-      state: {
-        sheets: {
-          Sheet1: {
-            A1: { formula: '', value: 'Version 1 State', style: {} }
-          }
-        },
-        sheetOrder: ['Sheet1'],
-        sheetColors: {},
-        hiddenSheets: []
-      },
-      created_at: new Date(Date.now() - 60000).toISOString(),
-      created_by: 'admin'
-    },
-    {
-      id: 2,
-      state: {
-        sheets: {
-          Sheet1: {
-            A1: { formula: '', value: 'Version 2 State', style: {} }
-          }
-        },
-        sheetOrder: ['Sheet1'],
-        sheetColors: {},
-        hiddenSheets: []
-      },
-      created_at: new Date().toISOString(),
-      created_by: 'user1'
-    }
-  ];
-
-  fs.writeFileSync(STORE_PATH, JSON.stringify(initialWorkbookState), 'utf8');
-  fs.writeFileSync(VERSIONS_PATH, JSON.stringify(initialVersions), 'utf8');
+  await db.seedWorkbookState('default', initialWorkbookState);
+  await db.seedVersion(version1State, 'admin'); // id 1
+  await db.seedVersion(version2State, 'user1'); // id 2
 
   // Spawn the server process.
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT, NODE_ENV: 'test', STORE_PATH }
+    env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
   // Wait 1.5 seconds for the Express server to boot up and start listening.
@@ -298,12 +216,12 @@ test('Version History API Endpoints - retrieve and restore', async (t) => {
     assert.strictEqual(restoreRes.statusCode, 200, 'POST /api/versions/1/restore should succeed');
     assert.strictEqual(restoreRes.data.success, true, 'Restore response should indicate success');
 
-    // Verify active workbook state is overwritten in the file store
-    const updatedStore = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    // Verify active workbook state is overwritten in the database
+    const updatedStore = await db.getWorkbookState('default');
     assert.strictEqual(updatedStore.sheets.Sheet1.A1.value, 'Version 1 State', 'Active workbook state should be updated to version 1');
 
     // Verify a new history entry (ID 3) was saved, indicating restoration
-    const updatedVersions = JSON.parse(fs.readFileSync(VERSIONS_PATH, 'utf8'));
+    const updatedVersions = await db.listVersions();
     assert.strictEqual(updatedVersions.length, 3, 'A new history version should have been created');
     const newVersion = updatedVersions[2];
     assert.strictEqual(newVersion.id, 3, 'New version ID should be 3');
@@ -323,50 +241,24 @@ test('Version History API Endpoints - retrieve and restore', async (t) => {
     child.kill();
     // Wait a short moment for the process to exit.
     await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Clean up created files.
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
-    if (fs.existsSync(VERSIONS_PATH)) {
-      fs.unlinkSync(VERSIONS_PATH);
-    }
+    await db.cleanup();
   }
 });
 
 test('Backend Autosave Engine - periodic version snapshots on cell edit', async (t) => {
   // --- Arrange ---
-  // Define custom environment settings, paths, and port for the spawned test server.
+  // Define custom environment settings and port for the spawned test server.
   const PORT = '31275';
-  const STORE_PATH = path.resolve('store.autosave.test.json');
-  const VERSIONS_PATH = STORE_PATH + '.versions.json';
-
-  // Clean up any pre-existing test files to ensure a clean state.
-  if (fs.existsSync(STORE_PATH)) {
-    fs.unlinkSync(STORE_PATH);
-  }
-  if (fs.existsSync(VERSIONS_PATH)) {
-    fs.unlinkSync(VERSIONS_PATH);
-  }
-
-  // Populate initial state file so that the server starts with clean workbook data.
-  const initialWorkbookState = {
-    sheets: {
-      Sheet1: {}
-    },
-    sheetOrder: ['Sheet1'],
-    sheetColors: {},
-    hiddenSheets: []
-  };
-  fs.writeFileSync(STORE_PATH, JSON.stringify(initialWorkbookState), 'utf8');
+  const db = await createTestDb('autosave');
 
   // Spawn the server process with short autosave limits for fast integration testing.
+  // The fresh database is already seeded with a clean, empty default workbook.
   const child = spawn('node', ['server.js'], {
     env: {
       ...process.env,
       PORT,
       NODE_ENV: 'test',
-      STORE_PATH,
+      DATABASE_URL: db.url,
       AUTOSAVE_CHECK_INTERVAL: '50',
       AUTOSAVE_INACTIVITY_LIMIT: '50',
       AUTOSAVE_ACTIVE_LIMIT: '300000' // High active limit so we only trigger on inactivity
@@ -445,14 +337,7 @@ test('Backend Autosave Engine - periodic version snapshots on cell edit', async 
     child.kill();
     // Wait a short moment for the process to exit completely.
     await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Clean up created files.
-    if (fs.existsSync(STORE_PATH)) {
-      fs.unlinkSync(STORE_PATH);
-    }
-    if (fs.existsSync(VERSIONS_PATH)) {
-      fs.unlinkSync(VERSIONS_PATH);
-    }
+    await db.cleanup();
   }
 });
 

@@ -46,9 +46,9 @@ alternate) and styled with a Material Design 3 light theme.
 | Server       | Express 4                                                          |
 | Real-time    | `ws` WebSocket server (shares the HTTP server via upgrade)         |
 | Auth         | Passport + `passport-openidconnect`; `express-session`            |
-| Database     | PostgreSQL (`pg`); JSON-sidecar mock in test mode                  |
+| Database     | PostgreSQL (`pg`)                                                  |
 | Frontend     | Vanilla JS + HTML, Tailwind-style utility classes, Material Symbols|
-| Tests        | Node's built-in test runner (`node --test`)                       |
+| Tests        | Node's built-in test runner over a Testcontainers PostgreSQL      |
 | Type-checking| TypeScript over opt-in JS files (`// @ts-check`; no migration)     |
 
 No build step — the frontend is served as static files. TypeScript is used only to
@@ -62,8 +62,8 @@ type-check the existing JavaScript (`npm run typecheck`); the code is not compil
 co-sheet-1/
 ├── server.js              # App composition: Express wiring, OIDC, route handlers, WebSocket server
 ├── db/                    # Data-access layer — all SQL lives here, behind per-table repositories
-│   ├── pool.js            # Connection pool (real pg) / file-backed test mock; STORE_PATH
-│   ├── schema.js          # initDatabase: table DDL + default-workbook seed
+│   ├── pool.js            # Connection pool (real pg) via DATABASE_URL
+│   ├── schema.js          # applySchema (table DDL) + initDatabase (DDL + default-workbook seed)
 │   ├── users.js           # users (permissions directory)
 │   ├── files.js           # files registry (drive)
 │   ├── shares.js          # file_shares (view/edit grants)
@@ -102,7 +102,7 @@ business logic backs both transports:
 
 ```
 HTTP routes  ─┐
-              ├─►  services/  ─►  db/  ─►  PostgreSQL (or the test mock)
+              ├─►  services/  ─►  db/  ─►  PostgreSQL
 WebSocket    ─┘   (logic)        (SQL)
 ```
 
@@ -114,8 +114,8 @@ WebSocket    ─┘   (logic)        (SQL)
   cannot drift. Persistence, broadcasting, and access control are orchestrated by
   the caller, which differs by transport.
 - **Data access (`db/`)** — one repository module per table; all SQL is confined
-  here. The connection layer swaps in a file-backed mock under `NODE_ENV=test`, so
-  the suite runs without PostgreSQL.
+  here. The connection layer is a real `pg` pool driven by `DATABASE_URL`; the test
+  suite points it at a throwaway PostgreSQL started via Testcontainers.
 - **Middleware** — authentication (`ensureAuthenticated` / `ensureAdmin`) and
   per-file authorization (`requireFileAccess`, which delegates to `canViewFile` /
   `canModifyFile`) gate routes before the handler runs. WebSocket connections
@@ -129,6 +129,7 @@ WebSocket    ─┘   (logic)        (SQL)
 
 - Node.js 22+ (uses the built-in test runner and ES modules; the Docker image runs Node 24)
 - PostgreSQL (for production / non-test runs)
+- Docker (only to run the test suite — Testcontainers starts a throwaway PostgreSQL)
 
 ### Install
 
@@ -178,17 +179,28 @@ mock sign-in) to reach your drive.
 
 ## Testing
 
-The suite uses Node's built-in test runner and spawns real server processes against an
-in-memory / JSON-sidecar mock database (`NODE_ENV=test`), so **no PostgreSQL is required** to
-run tests.
+The suite uses Node's built-in test runner and spawns real server processes against a **real
+PostgreSQL** database. `npm test` runs `tests/run-integration.mjs`, which starts one throwaway
+PostgreSQL container via [Testcontainers](https://testcontainers.com/), exposes it as
+`DATABASE_URL`, then runs `node --test`. Each test carves out its own isolated database on that
+server (see `tests/helpers/db.js`), so there is no shared, mutable store. **Docker must be
+running**; no other setup is needed.
 
 ```bash
 npm test
 ```
 
-> **Important:** Run the suite as a **single** `node --test` invocation. The integration tests
-> bind fixed ports; launching multiple `node --test` runs concurrently double-spawns servers on
-> the same ports and hangs.
+You can target individual files (still inside the container runner), and forward `node --test`
+flags (anything starting with `-`):
+
+```bash
+node tests/run-integration.mjs tests/files.test.js
+node tests/run-integration.mjs --test-only tests/store.test.js
+```
+
+> **Important:** Run the suite through `tests/run-integration.mjs` (a **single** `node --test`
+> invocation). The integration tests bind fixed ports; launching multiple `node --test` runs
+> concurrently double-spawns servers on the same ports and hangs.
 
 Coverage spans authentication & OIDC, the REST API, the WebSocket channel, the formula engine,
 clipboard/edit-menu behaviors, version history, permissions/RBAC, and file access control &
