@@ -6189,6 +6189,104 @@ if (menuFileBtn && menuFileDropdown) {
     });
   }
 
+  // --- Download ▸ Microsoft Excel (.xlsx): export every sheet to a real .xlsx
+  // and download it named after the workbook (the file name shown top-left).
+  // Other formats in the submenu are greyed-out and unwired. ---
+
+  // Map a cell's internal style object onto the flat descriptor the xlsx writer
+  // understands (fonts, fill, font color, alignment, borders). Returns null when
+  // the cell has no styling worth exporting. Note: `style.color` is the cell's
+  // background fill and `style.textColor` is the font color in this app's model.
+  const normalizeStyleForExport = (style) => {
+    if (!style) return null;
+    const out = {};
+    if (style.bold) out.bold = true;
+    if (style.italic) out.italic = true;
+    if (style.underline) out.underline = true;
+    if (style.strikethrough) out.strike = true;
+    if (style.fontFamily) out.fontName = style.fontFamily;
+    if (style.fontSize) out.fontSize = style.fontSize;
+    if (style.textColor) out.fontColor = style.textColor;
+    if (style.color) out.bgColor = style.color;
+    if (style.align) out.hAlign = style.align;
+    if (style.verticalAlign) out.vAlign = style.verticalAlign;
+    if (style.textWrap === 'wrap') out.wrap = true;
+    // Borders: cellBorderSide normalises the legacy boolean `border` and the
+    // structured `borders` map to a per-side { color, style } spec.
+    const borders = {};
+    let hasBorder = false;
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const spec = cellBorderSide(style, side);
+      if (spec) { borders[side] = { color: spec.color, style: spec.style }; hasBorder = true; }
+    }
+    if (hasBorder) out.borders = borders;
+    return Object.keys(out).length ? out : null;
+  };
+
+  const collectWorkbookForExport = () => {
+    const prevActive = activeSheetName;
+    const out = [];
+    try {
+      for (const name of sheetOrder) {
+        const sheetCells = localSheets[name] || {};
+        // Evaluate formulas in the context of their own sheet (the formula
+        // engine resolves references through the active sheet's cells).
+        activeSheetName = name;
+        const cells = [];
+        for (const cellId of Object.keys(sheetCells)) {
+          if (!/^[A-Z]+\d+$/.test(cellId)) continue;
+          const { col, row } = parseCoordinates(cellId); // 0-based
+          if (row < 0 || col < 0) continue;
+          const cellData = sheetCells[cellId];
+          const value = getCellValue(cellId);
+          const style = normalizeStyleForExport(cellData && cellData.style);
+          const hasVal = !(value === '' || value === null || value === undefined);
+          // Keep styled-but-empty cells so fills/borders still export.
+          if (!hasVal && !style) continue;
+          cells.push({ row, col, value, style });
+        }
+        out.push({ name, cells });
+      }
+    } finally {
+      activeSheetName = prevActive;
+    }
+    return out;
+  };
+  // The Download flyout is position:fixed so it isn't clipped by the File
+  // menu's vertical scroll container. Place it just right of its trigger row on
+  // hover (flipping to the left / clamping vertically near viewport edges).
+  const dlGroup = document.getElementById('file-download-group');
+  const dlFlyout = document.getElementById('file-download-flyout');
+  if (dlGroup && dlFlyout) {
+    const positionDownloadFlyout = () => {
+      const trigger = dlGroup.querySelector(':scope > button');
+      if (!trigger) return;
+      const r = trigger.getBoundingClientRect();
+      const fw = dlFlyout.offsetWidth || 288;   // w-72
+      const fh = dlFlyout.offsetHeight || 220;
+      let left = r.right - 1;
+      if (left + fw > window.innerWidth - 4) left = r.left - fw + 1;
+      let top = r.top;
+      if (top + fh > window.innerHeight - 4) top = window.innerHeight - fh - 4;
+      dlFlyout.style.left = `${Math.max(4, left)}px`;
+      dlFlyout.style.top = `${Math.max(4, top)}px`;
+    };
+    dlGroup.addEventListener('mouseenter', positionDownloadFlyout);
+  }
+
+  const fileDownloadXlsxBtn = document.getElementById('file-download-xlsx');
+  if (fileDownloadXlsxBtn) fileDownloadXlsxBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeFileMenu();
+    const exporter = window.CoSheet && window.CoSheet.xlsxExport;
+    if (!exporter) return;
+    try {
+      exporter.downloadXlsx(collectWorkbookForExport(), currentFileNameValue());
+    } catch (err) {
+      alert(t('drive.loadError'));
+    }
+  });
+
   // Escape closes whichever File-menu dialog is open.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;

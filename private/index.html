@@ -656,9 +656,42 @@
        <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">mail</span><span data-i18n="file.email">Email</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
        </div>
-       <!-- Download (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
-         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">download</span><span data-i18n="file.download">Download</span></span><span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       <!-- Download submenu (flyout): Microsoft Excel (.xlsx) is wired to the
+            client-side xlsx exporter; the other formats are greyed-out. -->
+       <div id="file-download-group" class="relative group">
+         <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
+           <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">download</span><span data-i18n="file.download">Download</span></span>
+           <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+         </button>
+         <!-- Fixed-positioned so it escapes the File menu's vertical scroll
+              container (which would otherwise clip it and add an h-scrollbar);
+              JS positions it to the right of the trigger on hover. -->
+         <div id="file-download-flyout" class="hidden group-hover:block fixed bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-72 z-50">
+           <!-- Microsoft Excel (.xlsx): downloads the workbook as a real .xlsx -->
+           <button id="file-download-xlsx" class="flex items-center w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
+             <span data-i18n="file.downloadXlsx">Microsoft Excel (.xlsx)</span>
+           </button>
+           <!-- OpenDocument (.ods) (unsupported – greyed out) -->
+           <div class="flex items-center w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+             <span data-i18n="file.downloadOds">OpenDocument (.ods)</span>
+           </div>
+           <!-- PDF (.pdf) (unsupported – greyed out) -->
+           <div class="flex items-center w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+             <span data-i18n="file.downloadPdf">PDF (.pdf)</span>
+           </div>
+           <!-- Web Page (.html) (unsupported – greyed out) -->
+           <div class="flex items-center w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+             <span data-i18n="file.downloadHtml">Web Page (.html)</span>
+           </div>
+           <!-- Comma-separated values (.csv) (unsupported – greyed out) -->
+           <div class="flex items-center w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+             <span data-i18n="file.downloadCsv">Comma-separated values (.csv)</span>
+           </div>
+           <!-- Tab-separated values (.tsv) (unsupported – greyed out) -->
+           <div class="flex items-center w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+             <span data-i18n="file.downloadTsv">Tab-separated values (.tsv)</span>
+           </div>
+         </div>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
        <!-- Rename: starts inline editing of the file name -->
@@ -1758,6 +1791,7 @@
 <script src="/formula-engine.js" defer></script>
 <script src="/i18n.js" defer></script>
 <script src="/sheet-functions.js" defer></script>
+<script src="/xlsx-export.js" defer></script>
 <script src="/user-menu.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
