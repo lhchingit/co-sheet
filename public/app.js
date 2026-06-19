@@ -669,22 +669,96 @@ const clearRangeSelection = () => {
   document.querySelectorAll('.grid-header.header-selected').forEach(el => el.classList.remove('header-selected'));
 };
 
+// ─── Merged cells ────────────────────────────────────────────────────────────
+// A merge is stored on its top-left "anchor" cell as style.merge = { rows, cols }
+// (with rows*cols > 1). The cells it covers carry no marker of their own; they're
+// derived from the anchors. Because the merge lives in the cell style, it rides
+// the existing cell-edit broadcast and workbook-state persistence with no new
+// message type — collaborators and reloads see merges for free.
+
+/** True when a style object carries a real (multi-cell) merge. */
+const styleHasMerge = (style) => !!(style && style.merge && (style.merge.rows * style.merge.cols) > 1);
+
+/** All merge anchors on the active sheet: [{ anchorId, r, c, rows, cols }]. */
+const getActiveSheetMerges = () => {
+  const out = [];
+  const cells = localSheets[activeSheetName];
+  if (!cells) return out;
+  for (const id of Object.keys(cells)) {
+    const cell = cells[id];
+    if (cell && styleHasMerge(cell.style)) {
+      const co = parseCellCoord(id);
+      if (co) out.push({ anchorId: id, r: co.row, c: co.colIndex, rows: cell.style.merge.rows, cols: cell.style.merge.cols });
+    }
+  }
+  return out;
+};
+
 /**
- * Helper to get all cell IDs within the currently selected range.
+ * Builds the coverage maps used by the renderer: each covered cell id → its
+ * anchor id, and each anchor id → its { rows, cols } span.
+ */
+const getMergeCoverage = () => {
+  const anchorSpan = new Map();  // anchorId -> { rows, cols }
+  const coveredTo = new Map();   // coveredCellId -> anchorId
+  const merges = getActiveSheetMerges();
+  for (const m of merges) {
+    anchorSpan.set(m.anchorId, { rows: m.rows, cols: m.cols });
+    for (let dr = 0; dr < m.rows; dr++) {
+      for (let dc = 0; dc < m.cols; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        coveredTo.set(`${getColLetter(m.c + dc)}${m.r + dr}`, m.anchorId);
+      }
+    }
+  }
+  return { anchorSpan, coveredTo, hasMerges: merges.length > 0 };
+};
+
+/**
+ * Grows a rectangle so it fully contains every merge it touches, repeating until
+ * stable (one merge can push the bounds out far enough to pull in another).
+ * @returns {{minRow:number,maxRow:number,minCol:number,maxCol:number}}
+ */
+const expandRangeForMerges = (minRow, maxRow, minCol, maxCol) => {
+  const merges = getActiveSheetMerges();
+  if (!merges.length) return { minRow, maxRow, minCol, maxCol };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const m of merges) {
+      const top = m.r, bottom = m.r + m.rows - 1;
+      const left = m.c, right = m.c + m.cols - 1;
+      // Skip merges that don't overlap the current rectangle.
+      if (top > maxRow || bottom < minRow || left > maxCol || right < minCol) continue;
+      if (top < minRow) { minRow = top; changed = true; }
+      if (bottom > maxRow) { maxRow = bottom; changed = true; }
+      if (left < minCol) { minCol = left; changed = true; }
+      if (right > maxCol) { maxCol = right; changed = true; }
+    }
+  }
+  return { minRow, maxRow, minCol, maxCol };
+};
+
+/**
+ * Helper to get all cell IDs within the currently selected range. The raw range
+ * is expanded to fully include any merged cells it touches, so an operation on a
+ * selection that clips a merge still covers the whole merged block.
  * @returns {string[]} List of cell IDs.
  */
 const getSelectedCellIds = () => {
-  if (!selectionStartCellId) return activeCellId ? [activeCellId] : [];
-  const endId = selectionEndCellId || selectionStartCellId;
-  const start = parseCellCoord(selectionStartCellId);
+  const baseId = selectionStartCellId || activeCellId;
+  if (!baseId) return [];
+  const endId = selectionEndCellId || selectionStartCellId || baseId;
+  const start = parseCellCoord(baseId);
   const end = parseCellCoord(endId);
   if (!start || !end) return activeCellId ? [activeCellId] : [];
-  
-  const minCol = Math.min(start.colIndex, end.colIndex);
-  const maxCol = Math.max(start.colIndex, end.colIndex);
-  const minRow = Math.min(start.row, end.row);
-  const maxRow = Math.max(start.row, end.row);
-  
+
+  let minCol = Math.min(start.colIndex, end.colIndex);
+  let maxCol = Math.max(start.colIndex, end.colIndex);
+  let minRow = Math.min(start.row, end.row);
+  let maxRow = Math.max(start.row, end.row);
+  ({ minRow, maxRow, minCol, maxCol } = expandRangeForMerges(minRow, maxRow, minCol, maxCol));
+
   const cellIds = [];
   for (let c = minCol; c <= maxCol; c++) {
     const colLetter = getColLetter(c);
@@ -709,10 +783,14 @@ const updateRangeSelectionUI = () => {
   const endCoord = parseCellCoord(endId);
   if (!startCoord || !endCoord) return;
 
-  const minColIndex = Math.min(startCoord.colIndex, endCoord.colIndex);
-  const maxColIndex = Math.max(startCoord.colIndex, endCoord.colIndex);
-  const minRow = Math.min(startCoord.row, endCoord.row);
-  const maxRow = Math.max(startCoord.row, endCoord.row);
+  let minColIndex = Math.min(startCoord.colIndex, endCoord.colIndex);
+  let maxColIndex = Math.max(startCoord.colIndex, endCoord.colIndex);
+  let minRow = Math.min(startCoord.row, endCoord.row);
+  let maxRow = Math.max(startCoord.row, endCoord.row);
+  // Snap the visible selection out to whole merged blocks it touches, so the
+  // highlight and overlay frame a merge as one unit.
+  ({ minRow, maxRow, minCol: minColIndex, maxCol: maxColIndex } =
+    expandRangeForMerges(minRow, maxRow, minColIndex, maxColIndex));
   // True when the selection spans more than one cell. Used both for the Name Box
   // label and to decide whether the anchor cell also takes the range fill below.
   const isRange = minColIndex !== maxColIndex || minRow !== maxRow;
@@ -786,17 +864,25 @@ const updateRangeSelectionUI = () => {
   let top = minRow * 21;
   let height = (maxRow - minRow + 1) * 21;
 
-  // Measure actual DOM elements if present in the browser environment
+  // Measure from the top-left cell (always visible — after merge expansion the
+  // top-left corner of the range is a normal cell or a merge anchor, never a
+  // hidden covered cell). The size is summed from the column widths and the row
+  // header heights rather than read off the bottom-right cell, because that cell
+  // may be a display:none merge-covered cell with no layout box.
   const minColLetter = getColLetter(minColIndex);
-  const maxColLetter = getColLetter(maxColIndex);
   const topLeftEl = document.querySelector(`[data-cell-id="${minColLetter}${minRow}"]`);
-  const bottomRightEl = document.querySelector(`[data-cell-id="${maxColLetter}${maxRow}"]`);
-
-  if (topLeftEl && bottomRightEl && typeof topLeftEl.offsetLeft === 'number' && typeof bottomRightEl.offsetLeft === 'number') {
+  if (topLeftEl && typeof topLeftEl.offsetLeft === 'number') {
     left = topLeftEl.offsetLeft;
     top = topLeftEl.offsetTop;
-    width = (bottomRightEl.offsetLeft + bottomRightEl.offsetWidth) - left;
-    height = (bottomRightEl.offsetTop + bottomRightEl.offsetHeight) - top;
+    let w = 0;
+    for (let c = minColIndex; c <= maxColIndex; c++) w += getColWidth(getColLetter(c));
+    width = w;
+    let h = 0;
+    for (let r = minRow; r <= maxRow; r++) {
+      const rh = document.querySelector(`[data-row-id="${r}"]`);
+      h += (rh && typeof rh.offsetHeight === 'number' && rh.offsetHeight) ? rh.offsetHeight : 21;
+    }
+    height = h;
   }
 
   // Position the overlay exactly on the range bounds. With box-sizing:border-box
@@ -1346,16 +1432,19 @@ const performUndo = () => {
   if (action.type === 'multi') {
     const redoChanges = [];
     let touchesBorders = false;
+    let touchesMerge = false;
     action.changes.forEach(change => {
       const currentState = localCells[change.cellId] ? JSON.parse(JSON.stringify(localCells[change.cellId])) : { formula: '', value: '', style: {} };
       redoChanges.push({ cellId: change.cellId, before: change.before, after: currentState });
       if (styleHasBorders(currentState.style) || styleHasBorders(change.before.style)) touchesBorders = true;
+      if (styleHasMerge(currentState.style) || styleHasMerge(change.before.style)) touchesMerge = true;
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.before));
       syncCellState(change.cellId);
     });
     // Border edges are drawn neighbour-aware; a full re-render avoids the
-    // doubled inner-border artifact that per-cell restore order can leave.
-    if (touchesBorders) renderSpreadsheetGrid();
+    // doubled inner-border artifact that per-cell restore order can leave. A
+    // merge change moves grid tracks, which only a full rebuild reflects.
+    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
     redoStack.push({ type: 'multi', changes: redoChanges });
   } else {
     const cellId = action.cellId;
@@ -1382,14 +1471,16 @@ const performRedo = () => {
   if (action.type === 'multi') {
     const undoChanges = [];
     let touchesBorders = false;
+    let touchesMerge = false;
     action.changes.forEach(change => {
       const currentState = localCells[change.cellId] ? JSON.parse(JSON.stringify(localCells[change.cellId])) : { formula: '', value: '', style: {} };
       undoChanges.push({ cellId: change.cellId, before: currentState, after: change.after });
       if (styleHasBorders(currentState.style) || styleHasBorders(change.after.style)) touchesBorders = true;
+      if (styleHasMerge(currentState.style) || styleHasMerge(change.after.style)) touchesMerge = true;
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.after));
       syncCellState(change.cellId);
     });
-    if (touchesBorders) renderSpreadsheetGrid();
+    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
     undoStack.push({ type: 'multi', changes: undoChanges });
   } else {
     const cellId = action.cellId;
@@ -1636,8 +1727,23 @@ const renderSpreadsheetGrid = () => {
   const gridRoot = document.getElementById('grid-root');
   if (!gridRoot) return;
 
+  // Merge coverage for this render. When the active sheet has merged cells we
+  // switch the grid from auto-flow to explicit line placement so anchors can
+  // span multiple tracks and their covered cells can be hidden without throwing
+  // off the placement of everything after them. The common (no-merge) case keeps
+  // pure auto-flow and is untouched. Skipped in history mode, whose collapsed
+  // "unedited" bars break the 1-row-per-track mapping merges rely on.
+  const mergeCoverage = isHistoryMode
+    ? { anchorSpan: new Map(), coveredTo: new Map(), hasMerges: false }
+    : getMergeCoverage();
+  const { anchorSpan, coveredTo, hasMerges } = mergeCoverage;
+
   // Preserve the sticky top-left corner header
   gridRoot.innerHTML = '<div class="grid-header sticky top-0 left-0 z-30"></div>';
+  if (hasMerges) {
+    const corner = gridRoot.firstElementChild;
+    if (corner) { corner.style.gridColumn = '1'; corner.style.gridRow = '1'; }
+  }
 
   // Render Column Headers A-Z
   for (let c = 0; c < 26; c++) {
@@ -1645,6 +1751,8 @@ const renderSpreadsheetGrid = () => {
     const colHeader = document.createElement('div');
     colHeader.className = 'grid-header sticky top-0 z-20 cursor-pointer';
     colHeader.innerText = colLetter;
+    // With explicit placement on, pin each header to its column/header track.
+    if (hasMerges) { colHeader.style.gridColumn = `${c + 2}`; colHeader.style.gridRow = '1'; }
     // Store column identifier for selection highlighting
     colHeader.setAttribute('data-col-id', colLetter);
     // Clicking a column header selects the entire column: the cells fill with
@@ -1748,6 +1856,8 @@ const renderSpreadsheetGrid = () => {
     rowHeader.innerText = r;
     // Store row identifier for selection highlighting
     rowHeader.setAttribute('data-row-id', r);
+    // With explicit placement on, pin the row header to the gutter / its row track.
+    if (hasMerges) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
 
     // Drag handle on the row's bottom boundary (mirrors the column handle).
     if (!isHistoryMode) {
@@ -1862,6 +1972,22 @@ const renderSpreadsheetGrid = () => {
         handleCellInlineEdit(cellId, cellEl);
       });
 
+      // Merge placement: anchors span their block; covered cells are hidden so
+      // the anchor shows through. Everything else gets pinned to its own track so
+      // the spans don't shift it (see mergeCoverage note above).
+      if (hasMerges) {
+        if (coveredTo.has(cellId)) {
+          cellEl.style.display = 'none';
+        } else if (anchorSpan.has(cellId)) {
+          const sp = anchorSpan.get(cellId);
+          cellEl.style.gridColumn = `${c + 2} / span ${sp.cols}`;
+          cellEl.style.gridRow = `${r + 1} / span ${sp.rows}`;
+        } else {
+          cellEl.style.gridColumn = `${c + 2}`;
+          cellEl.style.gridRow = `${r + 1}`;
+        }
+      }
+
       gridRoot.appendChild(cellEl);
     }
   }
@@ -1880,6 +2006,9 @@ const renderSpreadsheetGrid = () => {
   // Only data-bearing cells can overflow, so iterate those rather than all cells.
   if (!isHistoryMode) {
     Object.keys(localCells).forEach(id => {
+      // Merged anchors already span their block, and covered cells are hidden —
+      // neither should spill across neighbours.
+      if (hasMerges && (anchorSpan.has(id) || coveredTo.has(id))) return;
       updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
     });
   }
@@ -2923,6 +3052,99 @@ const setCellTextWrap = (cellId, mode) => {
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
+};
+
+// ─── Merge / unmerge operations ──────────────────────────────────────────────
+
+/**
+ * Shared writer for merge/unmerge. Runs `mutate(id, cell)` for each id, diffs the
+ * result for undo, broadcasts each changed cell on the existing cell-edit channel,
+ * records a single multi history action, and rebuilds the grid (merges move grid
+ * tracks, so a per-cell DOM update isn't enough). No-op if nothing changed.
+ * @returns {boolean} whether anything changed.
+ */
+const commitMergeMutation = (ids, mutate) => {
+  const historyChanges = [];
+  ids.forEach(id => {
+    const before = localCells[id] ? JSON.parse(JSON.stringify(localCells[id])) : { formula: '', value: '', style: {} };
+    const cell = localCells[id] ? localCells[id] : { formula: '', value: '', style: {} };
+    if (!cell.style) cell.style = {};
+    mutate(id, cell);
+    const after = JSON.parse(JSON.stringify(cell));
+    if (JSON.stringify(before) === JSON.stringify(after)) return; // unchanged
+    localCells[id] = cell;
+    historyChanges.push({ cellId: id, before, after });
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'cell-edit',
+        payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
+      }));
+    }
+  });
+  if (!historyChanges.length) return false;
+  recordHistoryAction({ type: 'multi', changes: historyChanges });
+  recalculateSheet();
+  renderSpreadsheetGrid();
+  return true;
+};
+
+/**
+ * Merges the current selection. `mode` controls the shape:
+ *   'all'        — one block spanning the whole selection.
+ *   'vertical'   — one block per column (each column merged top-to-bottom).
+ *   'horizontal' — one block per row (each row merged left-to-right).
+ * Only the top-left cell of each block keeps its content; the cells it covers are
+ * cleared, matching Google Sheets. Undoable and broadcast to collaborators.
+ */
+const mergeSelectedCells = (mode) => {
+  if (!canEditWorkbook || isHistoryMode) return;
+  const ids = getSelectedCellIds();
+  const coords = ids.map(parseCellCoord).filter(Boolean);
+  if (coords.length < 2) return;
+  const minRow = Math.min(...coords.map(c => c.row));
+  const maxRow = Math.max(...coords.map(c => c.row));
+  const minCol = Math.min(...coords.map(c => c.colIndex));
+  const maxCol = Math.max(...coords.map(c => c.colIndex));
+
+  // anchorId -> { rows, cols } for the block(s) this mode creates.
+  const anchors = new Map();
+  if (mode === 'vertical') {
+    if (maxRow - minRow < 1) return;
+    for (let c = minCol; c <= maxCol; c++) {
+      anchors.set(`${getColLetter(c)}${minRow}`, { rows: maxRow - minRow + 1, cols: 1 });
+    }
+  } else if (mode === 'horizontal') {
+    if (maxCol - minCol < 1) return;
+    for (let r = minRow; r <= maxRow; r++) {
+      anchors.set(`${getColLetter(minCol)}${r}`, { rows: 1, cols: maxCol - minCol + 1 });
+    }
+  } else { // 'all'
+    anchors.set(`${getColLetter(minCol)}${minRow}`, { rows: maxRow - minRow + 1, cols: maxCol - minCol + 1 });
+  }
+
+  commitMergeMutation(ids, (id, cell) => {
+    const span = anchors.get(id);
+    if (span && span.rows * span.cols > 1) {
+      cell.style.merge = { rows: span.rows, cols: span.cols };
+    } else {
+      // Drop any pre-existing merge marker. Cells that aren't a block anchor are
+      // covered by one, so clear their content (only the top-left value is kept).
+      if (cell.style.merge) delete cell.style.merge;
+      if (!span) { cell.formula = ''; cell.value = ''; }
+    }
+  });
+};
+
+/** Removes any merges intersecting the selection (re-splits them into cells). */
+const unmergeSelectedCells = () => {
+  if (!canEditWorkbook || isHistoryMode) return;
+  const ids = getSelectedCellIds();
+  if (!ids.length) return;
+  const hasAny = ids.some(id => styleHasMerge(localCells[id] && localCells[id].style));
+  if (!hasAny) return;
+  commitMergeMutation(ids, (id, cell) => {
+    if (cell.style && cell.style.merge) delete cell.style.merge;
+  });
 };
 
 /**
@@ -6524,7 +6746,12 @@ if (menuFormatBtn && menuFormatDropdown) {
     e.stopPropagation();
     const willOpen = menuFormatDropdown.classList.contains('hidden');
     closeAllMenus();
-    if (willOpen) menuFormatDropdown.classList.remove('hidden');
+    if (willOpen) {
+      menuFormatDropdown.classList.remove('hidden');
+      // Refresh the Merge-cells entry's enabled/greyed state for the current
+      // selection each time the menu opens.
+      updateMergeMenuState();
+    }
   });
 
   // Fill the Number submenu's example previews from the SAME formatter the grid
@@ -6577,7 +6804,80 @@ if (menuFormatBtn && menuFormatDropdown) {
   wireFmt('fmt-wrap-overflow', () => act((id) => setCellTextWrap(id, 'overflow')));
   wireFmt('fmt-wrap-wrap',     () => act((id) => setCellTextWrap(id, 'wrap')));
   wireFmt('fmt-wrap-clip',     () => act((id) => setCellTextWrap(id, 'clip')));
+
+  // Merge cells. Disabled entries carry pointer-events-none (see setMenuEnabled),
+  // so these clicks only fire when the option is actually available; the merge
+  // helpers re-validate the selection anyway.
+  wireFmt('fmt-merge-all',          () => { mergeSelectedCells('all');        closeFormatMenu(); });
+  wireFmt('fmt-merge-vertically',   () => { mergeSelectedCells('vertical');   closeFormatMenu(); });
+  wireFmt('fmt-merge-horizontally', () => { mergeSelectedCells('horizontal'); closeFormatMenu(); });
+  wireFmt('fmt-merge-unmerge',      () => { unmergeSelectedCells();           closeFormatMenu(); });
 }
+
+/** Greys out (and click-disables) a menu entry when `on` is false. */
+const setMenuEnabled = (el, on) => {
+  if (!el || !el.classList) return;
+  el.classList.toggle('opacity-50', !on);
+  el.classList.toggle('pointer-events-none', !on);
+  el.classList.toggle('cursor-default', !on);
+};
+
+/**
+ * Updates the Format ▸ Merge cells submenu for the current selection:
+ *   • the whole group is greyed (which also suppresses the hover flyout) unless
+ *     2+ cells are selected;
+ *   • "Merge all" needs 2+ cells; "Merge vertically" needs 2+ rows; "Merge
+ *     horizontally" needs 2+ columns; "Unmerge" needs the selection to already
+ *     contain a merged cell.
+ */
+const updateMergeMenuState = () => {
+  const group = document.getElementById('fmt-merge-group');
+  if (!group) return;
+  const coords = getSelectedCellIds().map(parseCellCoord).filter(Boolean);
+  let rows = 0, cols = 0;
+  if (coords.length) {
+    const rs = coords.map(c => c.row), cs = coords.map(c => c.colIndex);
+    rows = Math.max(...rs) - Math.min(...rs) + 1;
+    cols = Math.max(...cs) - Math.min(...cs) + 1;
+  }
+  const multi = coords.length >= 2;
+  const hasMerge = coords.some(c => styleHasMerge((localCells[`${getColLetter(c.colIndex)}${c.row}`] || {}).style));
+  const canEdit = canEditWorkbook && !isHistoryMode;
+
+  setMenuEnabled(group, canEdit && multi);
+  setMenuEnabled(document.getElementById('fmt-merge-all'),          canEdit && multi);
+  setMenuEnabled(document.getElementById('fmt-merge-vertically'),   canEdit && rows >= 2);
+  setMenuEnabled(document.getElementById('fmt-merge-horizontally'), canEdit && cols >= 2);
+  setMenuEnabled(document.getElementById('fmt-merge-unmerge'),      canEdit && hasMerge);
+};
+
+/**
+ * Shows the generic message dialog (#message-modal) with the given title/body.
+ * Used for the "can't filter a range with merged cells" error. The OK/close
+ * buttons and backdrop click are wired once below.
+ */
+const showMessageDialog = (title, body) => {
+  const modal = document.getElementById('message-modal');
+  if (!modal || !modal.classList) return;
+  const titleEl = document.getElementById('message-modal-title');
+  const bodyEl = document.getElementById('message-modal-body');
+  if (titleEl) titleEl.textContent = title;
+  if (bodyEl) bodyEl.textContent = body;
+  modal.classList.remove('hidden');
+};
+
+// Wire the message dialog's dismiss controls once.
+(() => {
+  const modal = document.getElementById('message-modal');
+  if (!modal) return;
+  const hide = () => modal.classList.add('hidden');
+  const ok = document.getElementById('message-modal-ok');
+  const close = document.getElementById('message-modal-close');
+  if (ok) ok.addEventListener('click', hide);
+  if (close) close.addEventListener('click', hide);
+  // Backdrop click (but not clicks inside the dialog card) dismisses.
+  modal.addEventListener('click', (e) => { if (e.target === modal) hide(); });
+})();
 
 // Data menu: only "Sort sheet" is wired. Its flyout offers ascending/descending
 // sorts keyed on the column of the active cell; the two labels (and the bolded
@@ -6850,6 +7150,13 @@ function loadSheetFilters() {
 // re-render so the funnel/scope tint appear.
 function createSheetFilter(colIndex) {
   if (isHistoryMode) return;
+  // A value filter hides whole rows; merged cells span rows/columns, so the two
+  // can't coexist. Match Google Sheets: refuse and explain via an error dialog.
+  if (getActiveSheetMerges().length) {
+    closeFilterMenu();
+    showMessageDialog(t('merge.filterError.title'), t('merge.filterError.body'));
+    return;
+  }
   sheetFilters[activeSheetName] = { colIndex, hidden: new Set() };
   saveSheetFilters();
   closeFilterMenu();
