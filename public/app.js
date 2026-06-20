@@ -7768,9 +7768,17 @@ function initGridScrollbars() {
   if (!vthumb || !hthumb) return;
   const vcap = document.getElementById('grid-vscroll-cap'); // dummy column header
   const hcap = document.getElementById('grid-hscroll-cap'); // dummy row header
+  const cornerEl = document.getElementById('grid-scroll-corner'); // shared far corner
+  const vup = document.getElementById('grid-vscroll-up');
+  const vdown = document.getElementById('grid-vscroll-down');
+  const hleft = document.getElementById('grid-hscroll-left');
+  const hright = document.getElementById('grid-hscroll-right');
 
   const BAR = 14;        // bar thickness, px — matches the CSS width/height
   const MIN_THUMB = 24;  // smallest thumb length, px
+  const ARROW = 20;       // stepper-arrow length along its scroll axis (cross axis = BAR)
+  const ARROWS = ARROW * 2; // space the two stepper arrows take at the bar's end
+  const STEP = DEFAULT_ROW_HEIGHT * 3; // px scrolled per arrow click / repeat tick
 
   // Cached track/thumb/scrollable metrics from the last full layout(), used by
   // position() so scrolling doesn't re-measure the header on every event.
@@ -7818,12 +7826,14 @@ function initGridScrollbars() {
     // otherwise a lone bar runs the full span. (BAR matches the CSS thickness.)
     const vCorner = hVisible ? BAR : 0;
     const hCorner = vVisible ? BAR : 0;
-    vbar.style.bottom = `${vCorner}px`;
-    hbar.style.right = `${hCorner}px`;
+    // The stepper arrows always sit between the thumb track and the corner, so
+    // the track ends ARROWS px earlier than the corner reservation.
+    vbar.style.bottom = `${vCorner + ARROWS}px`;
+    hbar.style.right = `${hCorner + ARROWS}px`;
 
     // Track length from the viewport span (not the bar's own box, so a hidden
     // display:none bar still measures correctly when content reappears).
-    const vTrack = viewport.clientHeight - hh - vCorner;
+    const vTrack = viewport.clientHeight - hh - vCorner - ARROWS;
     const vShown = vVisible && vTrack > MIN_THUMB;
     if (vShown) {
       const thumb = Math.max(MIN_THUMB, vTrack * (viewport.clientHeight / viewport.scrollHeight));
@@ -7835,7 +7845,7 @@ function initGridScrollbars() {
       vbar.classList.add('hidden');
     }
 
-    const hTrack = viewport.clientWidth - gw - hCorner;
+    const hTrack = viewport.clientWidth - gw - hCorner - ARROWS;
     const hShown = hVisible && hTrack > MIN_THUMB;
     if (hShown) {
       const thumb = Math.max(MIN_THUMB, hTrack * (viewport.clientWidth / viewport.scrollWidth));
@@ -7859,6 +7869,25 @@ function initGridScrollbars() {
       hcap.style.width = `${gw}px`;
       hcap.style.height = `${BAR}px`;
       hcap.classList.toggle('hidden', !hShown);
+    }
+    // The shared corner is only reserved (and only makes sense) when both bars
+    // are present; otherwise the lone bar runs the full span to the edge.
+    if (cornerEl) cornerEl.classList.toggle('hidden', !(vShown && hShown));
+
+    // Stepper arrows occupy the bar's end, just inside the corner reservation:
+    // down sits at the corner edge, up stacks above it; right at the corner
+    // edge, left to its inside. Shown only alongside their bar.
+    if (vup && vdown) {
+      vdown.style.bottom = `${vCorner}px`;
+      vup.style.bottom = `${vCorner + ARROW}px`;
+      vup.classList.toggle('hidden', !vShown);
+      vdown.classList.toggle('hidden', !vShown);
+    }
+    if (hleft && hright) {
+      hright.style.right = `${hCorner}px`;
+      hleft.style.right = `${hCorner + ARROW}px`;
+      hleft.classList.toggle('hidden', !hShown);
+      hright.classList.toggle('hidden', !hShown);
     }
 
     position();
@@ -7909,6 +7938,33 @@ function initGridScrollbars() {
   hthumb.addEventListener('pointerdown', (e) => startDrag(e, false));
   vbar.addEventListener('pointerdown', (e) => pageScroll(e, true));
   hbar.addEventListener('pointerdown', (e) => pageScroll(e, false));
+
+  // Wire a stepper arrow: nudge once on press, then auto-repeat while held
+  // (after a short delay), like a native scrollbar arrow. `step()` performs one
+  // increment; 'scroll' on the viewport repositions the thumbs.
+  function bindArrow(btn, step) {
+    if (!btn) return;
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      step();
+      let repeat = null;
+      const delay = setTimeout(() => { repeat = setInterval(step, 40); }, 300);
+      const onUp = () => {
+        clearTimeout(delay);
+        if (repeat) clearInterval(repeat);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+      };
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+  }
+  bindArrow(vup, () => { viewport.scrollTop -= STEP; });
+  bindArrow(vdown, () => { viewport.scrollTop += STEP; });
+  bindArrow(hleft, () => { viewport.scrollLeft -= STEP; });
+  bindArrow(hright, () => { viewport.scrollLeft += STEP; });
   viewport.addEventListener('scroll', position, { passive: true });
   window.addEventListener('resize', layout);
   if (typeof ResizeObserver === 'function') {
