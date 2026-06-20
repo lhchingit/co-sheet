@@ -8,6 +8,10 @@
  */
 module.exports = {
   content: ["./private/index.html","./public/**/*.js"],
+  // The menu-bar opener's active state (app.js) toggles this utility on at
+  // runtime, so it never appears as a bare class in scanned markup (only the
+  // `hover:` variant does). Safelist it so the bare rule is always compiled.
+  safelist: ["bg-surface-container-high"],
   darkMode: 'class',
   theme: {
     extend: {

@@ -5423,6 +5423,15 @@ if (zoomInputEl) {
 
 // Close alignment, vertical alignment, and zoom dropdown menus when clicking anywhere else on the page
 window.addEventListener('click', (e) => {
+  // Dismiss File menu dropdown if clicking outside
+  const menuFileDropdownEl = document.getElementById('menu-file-dropdown');
+  const menuFileBtnEl = document.getElementById('menu-file-btn');
+  if (menuFileDropdownEl && !menuFileDropdownEl.classList.contains('hidden')) {
+    if (menuFileBtnEl && !menuFileBtnEl.contains(e.target) && !menuFileDropdownEl.contains(e.target)) {
+      menuFileDropdownEl.classList.add('hidden');
+    }
+  }
+
   // Dismiss Edit menu dropdown if clicking outside
   const menuEditDropdown = document.getElementById('menu-edit-dropdown');
   const menuEditBtn = document.getElementById('menu-edit-btn');
@@ -6894,6 +6903,34 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
       // Switch only when a different menu is already open.
       if (anyOpen() && !o.isOpen()) el.click();
     });
+  });
+})();
+
+// ---------------------------------------------------------------------------
+// Menu-bar opener highlight. While a menu-bar dropdown is open its opener
+// button keeps the same gray as its hover state so it reads as "active" (like
+// Google Sheets). A MutationObserver watches each dropdown's `hidden` class so
+// the highlight stays in sync no matter how the menu is opened or dismissed —
+// click toggle, closeAllMenus(), outside-click, hover-switch, or Escape.
+// ---------------------------------------------------------------------------
+(() => {
+  if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return;
+  const ACTIVE = 'bg-surface-container-high';
+  const pairs = [
+    ['menu-file-btn', 'menu-file-dropdown'],
+    ['menu-edit-btn', 'menu-edit-dropdown'],
+    ['menu-view-btn', 'menu-view-dropdown'],
+    ['menu-insert-btn', 'menu-insert-dropdown'],
+    ['menu-format-btn', 'menu-format-dropdown'],
+    ['menu-data-btn', 'menu-data-dropdown'],
+  ];
+  pairs.forEach(([btnId, dropdownId]) => {
+    const btn = document.getElementById(btnId);
+    const dropdown = document.getElementById(dropdownId);
+    if (!btn || !dropdown) return;
+    const sync = () => btn.classList.toggle(ACTIVE, !dropdown.classList.contains('hidden'));
+    new MutationObserver(sync).observe(dropdown, { attributes: true, attributeFilter: ['class'] });
+    sync();
   });
 })();
 
