@@ -94,7 +94,6 @@ co-sheet-1/
 │   ├── index.html         # Spreadsheet editor page (/sheet)
 │   └── drive.html         # Drive + admin permissions page (/)
 ├── tests/                 # Integration & unit tests (node --test)
-├── k8s/                   # Kubernetes manifests (namespace, secrets, postgres, app, ingress)
 └── docs/                  # Design specs and implementation plans
 ```
 
@@ -248,105 +247,6 @@ npm run typecheck
   edit it.
 - A legacy **`default`** workbook is a shared document that remains open to every authenticated
   user (exempt from ownership/quota restrictions) for backward compatibility.
-
----
-
-## API Overview
-
-Health / probes (public, unauthenticated — registered before the session middleware):
-
-| Method & Path   | Probe type | Description                                                                 |
-|-----------------|------------|-----------------------------------------------------------------------------|
-| `GET /livez`    | Liveness   | Always `200`. Checks no dependencies, so a transient DB/Redis outage never triggers a restart loop. |
-| `GET /startupz` | Startup    | `200` once startup completes (schema, state load, bus init, listening); `503 {"status":"starting"}` until then. |
-| `GET /readyz`   | Readiness  | `200` only when startup is done **and** Postgres (`SELECT 1`) plus Redis (when configured) are reachable; otherwise `503` with a per-check breakdown. |
-
-`/readyz` returns a per-dependency breakdown, e.g. `{"status":"ok","checks":{"startup":"ok","db":"ok","redis":"ok"}}`; a failing check carries an `error: <message>` string. All three also answer `HEAD`.
-
-Auth & session:
-
-| Method & Path                  | Description                                  |
-|--------------------------------|----------------------------------------------|
-| `GET /login`                   | Sign-in page (unauthenticated).              |
-| `GET /auth/google`             | Start Google OAuth (or mock) sign-in.        |
-| `GET /auth/google/callback`    | OAuth callback.                              |
-| `GET /logout`                  | End session and clear cookies.               |
-| `GET /api/me`                  | Current user `{username,email,picture,role}`.|
-
-Users / permissions (admin-gated):
-
-| Method & Path            | Description                              |
-|--------------------------|------------------------------------------|
-| `GET /api/users`         | List users with roles (admin only).      |
-| `PATCH /api/users/:id`   | Change a user's role (admin only).       |
-| `GET /api/users/search`  | Search the directory for sharing.        |
-
-Files, cells, sharing & versions:
-
-| Method & Path                     | Description                                |
-|-----------------------------------|--------------------------------------------|
-| `GET /api/files`                  | List visible files (owned + shared + ...). |
-| `POST /api/files`                 | Create a file (quota-checked).             |
-| `PATCH /api/files/:id`            | Rename (owner/admin only).                 |
-| `DELETE /api/files/:id`           | Delete (owner/admin only).                 |
-| `GET/POST /api/files/:id/shares`  | List / grant view-only shares.             |
-| `GET/POST /api/cells`             | Read / write cells (write is access-gated).|
-| `GET /api/versions`               | List version snapshots.                    |
-| `GET /api/versions/:id`           | Fetch a snapshot.                          |
-| `POST /api/versions/:id/restore`  | Restore a snapshot.                        |
-
-Real-time editing happens over a **WebSocket** connection (HTTP upgrade on the same server);
-on connect, the server computes the user's `canEdit` flag and silently drops state-changing
-messages from users without edit rights.
-
-A mock **OIDC provider** is also served under `/oidc/*` (discovery, JWKS, authorize, token,
-userinfo) for local development and tests.
-
----
-
-## Deployment
-
-### Google Cloud Run (recommended)
-
-A scripted deployment to **Cloud Run + Cloud SQL** is included: `deploy.sh` and
-`cloudbuild.yaml` build the image and deploy it pinned to a single instance. See
-[`DEPLOY.md`](DEPLOY.md) for the full walkthrough (prerequisites, Cloud SQL setup,
-secrets, and OAuth configuration).
-
-### Kubernetes
-
-Kubernetes manifests are provided under `k8s/`:
-
-- `00-namespace.yaml`, `10-secrets.yaml`, `20-postgres.yaml`, `30-app.yaml`, `40-ingress.yaml`
-
-> **Single replica by default.** Out of the box the app keeps sessions (in-memory
-> `MemoryStore`) and fans out live collaboration state from within a single process, so the
-> bundled Deployment is pinned to `replicas: 1` with a `Recreate` strategy — running more than
-> one replica in this mode would split sessions and break cross-user sync.
->
-> **Scaling out** is supported once you provide Redis: set `REDIS_URL` (and `REDIS_CLUSTER=true`
-> for a cluster-mode Redis) to back sessions with `connect-redis` and relay realtime edits over
-> a Redis pub/sub bus, so multiple replicas stay in sync. With Redis configured the readiness
-> probe (`/readyz`) also verifies Redis connectivity.
-
-Before applying, replace the placeholder values in `k8s/10-secrets.yaml` (`CHANGE_ME`) and the
-image reference in `k8s/30-app.yaml`.
-
-The app exposes `GET /livez`, `GET /startupz`, and `GET /readyz` (see [API Overview](#api-overview))
-for the corresponding probes. A typical wiring:
-
-```yaml
-startupProbe:
-  httpGet: { path: /startupz, port: 3000 }
-  failureThreshold: 30
-  periodSeconds: 2
-livenessProbe:
-  httpGet: { path: /livez, port: 3000 }
-  periodSeconds: 10
-readinessProbe:
-  httpGet: { path: /readyz, port: 3000 }
-  periodSeconds: 10
-```
 
 ---
 
