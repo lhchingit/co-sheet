@@ -258,6 +258,25 @@ test('OIDC edge cases: protocol restriction, invalid token, and invalid code val
 });
 
 /**
+ * Fetch a URL, retrying on connection errors until it responds or the timeout
+ * elapses. A freshly spawned server may not be listening yet (a fixed sleep
+ * races against a loaded CI runner's startup), so poll instead of guessing.
+ */
+async function fetchWithRetry(url, options, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr;
+  while (Date.now() < deadline) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastErr = err; // connection refused while the server boots; retry
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * Boots the server with the given extra env vars, fetches /login, and returns the
  * page HTML. Always kills the child process afterwards.
  */
@@ -265,9 +284,8 @@ async function fetchLoginPage(extraEnv) {
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: '31236', ...extraEnv }
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
   try {
-    const res = await fetch('http://localhost:31236/login');
+    const res = await fetchWithRetry('http://localhost:31236/login');
     return await res.text();
   } finally {
     child.kill();
