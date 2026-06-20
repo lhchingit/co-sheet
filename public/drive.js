@@ -267,7 +267,7 @@
 
     visible.forEach((f) => {
       const card = document.createElement('div');
-      card.className = 'file-card group relative rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden cursor-pointer hover:shadow-md transition-all';
+      card.className = 'file-card group relative rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden cursor-default hover:shadow-md transition-all';
       card.setAttribute('data-id', f.id);
       card.innerHTML = `
         <div class="flex items-center gap-2 px-3 py-2.5">
@@ -647,9 +647,12 @@
     // The label shows the current language (consistent with the sheet editor);
     // the dropdown marks it with a check.
     $('lang-switch-label').textContent = LANG_LABELS[lang];
+    // Toggle the check glyph's text content (not a `hidden` class): the Material
+    // Symbols stylesheet sets `display:inline-block` on these spans, overriding
+    // `.hidden` and leaving the checkmark showing on both options.
     document.querySelectorAll('#lang-switch-menu .lang-option').forEach((opt) => {
       const check = opt.querySelector('.lang-check');
-      if (check) check.classList.toggle('hidden', /** @type {HTMLElement} */ (opt).dataset.lang !== lang);
+      if (check) check.textContent = /** @type {HTMLElement} */ (opt).dataset.lang === lang ? 'check' : '';
     });
     // Re-apply dynamic (non-data-i18n) strings.
     if (selectedIds.size) $('sel-count').textContent = t('drive.selected', { n: selectedIds.size });

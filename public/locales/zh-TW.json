@@ -185,6 +185,8 @@
   "tip.undo": "復原 (Ctrl+Z)",
   "tip.redo": "取消復原 (Ctrl+Y)",
   "tip.formatPercent": "格式設為百分比",
+  "tip.decreaseDecimal": "減少小數位數",
+  "tip.increaseDecimal": "增加小數位數",
   "tip.selectFont": "選擇字型",
   "tip.decreaseFont": "字型變小 (Ctrl+Shift+,)",
   "tip.fontSize": "字型大小",

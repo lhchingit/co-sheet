@@ -1528,11 +1528,16 @@ const getCellValue = (coord, depth = 0) => {
  * @returns {string} The value formatted for display.
  */
 const formatCellDisplay = (rawValue, style) => {
-  if (!style || !style.numberFormat) return rawValue;
+  // Nothing to do without either a named format or an explicit decimal count.
+  if (!style || (!style.numberFormat && style.decimalPlaces == null)) return rawValue;
   // Only numeric values are reformatted; text/blank pass through untouched.
   const str = String(rawValue).trim();
   if (str === '' || isNaN(str) || !isFinite(Number(str))) return rawValue;
-  const out = formatNumberByType(Number(str), style.numberFormat);
+  const num = Number(str);
+  // No named format, but the user pinned a decimal count: show a plain number
+  // with that many fraction digits (no grouping), mirroring "general" format.
+  if (!style.numberFormat) return num.toFixed(style.decimalPlaces);
+  const out = formatNumberByType(num, style.numberFormat, style.decimalPlaces);
   return out === null ? rawValue : out;
 };
 
@@ -1546,20 +1551,31 @@ const formatCellDisplay = (rawValue, style) => {
  * @param {string} fmt - Format key (number, percent, scientific, currency, …).
  * @returns {string|null} The formatted string, or null if `fmt` is unsupported.
  */
-const formatNumberByType = (num, fmt) => {
+const formatNumberByType = (num, fmt, decimals) => {
   const grouped = (n, dec) => n.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const abs = Math.abs(num);
+  // An explicit `decimals` (set via the increase/decrease-decimal toolbar
+  // buttons) overrides each format's default fraction-digit count.
+  const d = (def) => (decimals == null ? def : decimals);
   switch (fmt) {
-    case 'percent':         return `${(num * 100).toFixed(2)}%`;
-    case 'number':          return grouped(num, 2);
-    case 'scientific':      return num.toExponential(2).replace(/e([+-])(\d+)/i, (m, s, d) => `E${s}${d.padStart(2, '0')}`);
-    case 'currency':        return `${num < 0 ? '-' : ''}NT$${grouped(abs, 2)}`;
-    case 'currencyRounded': return `${num < 0 ? '-' : ''}NT$${grouped(abs, 0)}`;
-    case 'accounting':      return num < 0 ? `(NT$${grouped(abs, 2)})` : `NT$${grouped(abs, 2)}`;
-    case 'financial':       return num < 0 ? `(${grouped(abs, 2)})` : grouped(abs, 2);
+    case 'percent':         return `${(num * 100).toFixed(d(2))}%`;
+    case 'number':          return grouped(num, d(2));
+    case 'scientific':      return num.toExponential(d(2)).replace(/e([+-])(\d+)/i, (m, s, dd) => `E${s}${dd.padStart(2, '0')}`);
+    case 'currency':        return `${num < 0 ? '-' : ''}NT$${grouped(abs, d(2))}`;
+    case 'currencyRounded': return `${num < 0 ? '-' : ''}NT$${grouped(abs, d(0))}`;
+    case 'accounting':      return num < 0 ? `(NT$${grouped(abs, d(2))})` : `NT$${grouped(abs, d(2))}`;
+    case 'financial':       return num < 0 ? `(${grouped(abs, d(2))})` : grouped(abs, d(2));
     default:                return null;
   }
 };
+
+/**
+ * The number of decimal places a format shows by default (before any explicit
+ * override via the increase/decrease-decimal buttons).
+ * @param {string} fmt - Format key, or null/undefined for "no named format".
+ * @returns {number} The default fraction-digit count.
+ */
+const defaultDecimalsForFormat = (fmt) => (fmt === 'currencyRounded' ? 0 : 2);
 
 /**
  * Determines whether a cell's evaluated value is a plain number (integer or
@@ -2556,6 +2572,14 @@ const saveCellUpdate = (cellId, text) => {
   if (text.startsWith('=')) {
     cell.formula = text;
     cell.value = evaluateFormula(text, 0, cellId);
+    // A formula whose referenced cells carry an explicit decimal-place count
+    // inherits that styling, so e.g. a SUM matches the cells it adds up. An
+    // explicit setting already on this cell is left untouched.
+    if (!cell.style) cell.style = {};
+    if (cell.style.decimalPlaces == null) {
+      const inherited = inheritFormulaDecimals(text);
+      if (inherited != null) cell.style.decimalPlaces = inherited;
+    }
   } else {
     cell.formula = '';
     cell.value = text;
@@ -3306,6 +3330,8 @@ const setCellNumberFormat = (cellId, numberFormat) => {
     // Skip cells that already carry this format so re-pressing has no effect.
     if (cell.style.numberFormat === numberFormat) return;
     cell.style.numberFormat = numberFormat;
+    // A new format resets any pinned decimal count back to that format's default.
+    delete cell.style.decimalPlaces;
     localCells[id] = cell;
     historyChanges.push({ cellId: id, before, after: JSON.parse(JSON.stringify(cell)) });
 
@@ -3317,6 +3343,134 @@ const setCellNumberFormat = (cellId, numberFormat) => {
     }
     updateGridDOMCell(id, getCellValue(id), cell.style);
   });
+
+  if (historyChanges.length) {
+    recordHistoryAction({ type: 'multi', changes: historyChanges });
+  }
+  recalculateSheet();
+  if (activeCellId) {
+    updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
+  }
+};
+
+/**
+ * Resolves the decimal-place count currently shown for a cell: an explicit
+ * `decimalPlaces` override wins; otherwise it falls back to the named format's
+ * default, or — with no format at all — the decimals present in the value.
+ * @param {object} style - The cell's style object.
+ * @param {string} value - The cell's evaluated value.
+ * @returns {number} The effective decimal-place count.
+ */
+const effectiveDecimals = (style, value) => {
+  if (style && style.decimalPlaces != null) return style.decimalPlaces;
+  if (style && style.numberFormat) return defaultDecimalsForFormat(style.numberFormat);
+  const s = String(value);
+  const dot = s.indexOf('.');
+  return dot === -1 ? 0 : (s.length - dot - 1);
+};
+
+/** True if the cell currently holds a formula (its display is a computed result). */
+const cellHasFormula = (id) =>
+  !!(localCells[id] && localCells[id].formula && String(localCells[id].formula).startsWith('='));
+
+/** True if `cellId` falls inside the rectangular range startId..endId. */
+const cellInRange = (cellId, startId, endId) => {
+  const c = parseCellCoord(cellId);
+  const s = parseCellCoord(startId);
+  const e = parseCellCoord(endId);
+  if (!c || !s || !e) return false;
+  const minCol = Math.min(s.colIndex, e.colIndex);
+  const maxCol = Math.max(s.colIndex, e.colIndex);
+  const minRow = Math.min(s.row, e.row);
+  const maxRow = Math.max(s.row, e.row);
+  return c.colIndex >= minCol && c.colIndex <= maxCol && c.row >= minRow && c.row <= maxRow;
+};
+
+/** True if `formula` references `cellId` within any of its cell/range references. */
+const formulaReferencesCell = (formula, cellId) =>
+  parseFormulaRefs(formula).some(({ startId, endId }) => cellInRange(cellId, startId, endId));
+
+/**
+ * Finds the decimal-place count a newly-entered formula should inherit: if any
+ * data cell the formula references carries an explicit `decimalPlaces`, the
+ * formula's result adopts the same styling (e.g. a SUM matches its operands).
+ * @param {string} formula - The formula being applied (must start with '=').
+ * @returns {number|null} The decimal count to inherit, or null if none.
+ */
+const inheritFormulaDecimals = (formula) => {
+  const refs = parseFormulaRefs(formula);
+  if (!refs.length) return null;
+  let best = null;
+  for (const id of Object.keys(localCells)) {
+    const c = localCells[id];
+    if (!c || !c.style || c.style.decimalPlaces == null || cellHasFormula(id)) continue;
+    if (refs.some(({ startId, endId }) => cellInRange(id, startId, endId))) best = c.style.decimalPlaces;
+  }
+  return best;
+};
+
+/**
+ * Increases or decreases the number of decimal places shown for the selected
+ * numeric cell(s). The stored value is untouched — only its display changes.
+ * Non-numeric cells are skipped, and the count is clamped to [0, 20]. A formula
+ * cell whose referenced range includes an adjusted cell is kept in sync, so e.g.
+ * a SUM matches the decimal styling of the cells it adds up.
+ * @param {string} cellId - Selected cell ID.
+ * @param {number} delta - +1 to add a decimal place, -1 to remove one.
+ */
+const adjustCellDecimals = (cellId, delta) => {
+  const selectedIds = getSelectedCellIds();
+  const cellIds = selectedIds.includes(cellId) ? selectedIds : [cellId];
+  const historyChanges = [];
+  // The cells actually changed and their new decimal count, used to sync any
+  // formula cells that reference them.
+  const adjustedTargets = [];
+
+  // Applies `dp` decimals to one cell, recording history + syncing peers/DOM.
+  const applyDecimals = (id, dp) => {
+    const before = localCells[id] ? JSON.parse(JSON.stringify(localCells[id])) : { formula: '', value: '', style: {} };
+    const cell = localCells[id] || { formula: '', value: '', style: {} };
+    if (!cell.style) cell.style = {};
+    if (cell.style.decimalPlaces === dp) return;
+    cell.style.decimalPlaces = dp;
+    localCells[id] = cell;
+    historyChanges.push({ cellId: id, before, after: JSON.parse(JSON.stringify(cell)) });
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'cell-edit',
+        payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
+      }));
+    }
+    updateGridDOMCell(id, getCellValue(id), cell.style);
+  };
+
+  cellIds.forEach(id => {
+    // Only numeric cells can carry a decimal-place setting.
+    const value = getCellValue(id);
+    if (!isNumericValue(value)) return;
+    const cell = localCells[id] || { formula: '', value: '', style: {} };
+    const current = effectiveDecimals(cell.style || {}, value);
+    const next = Math.max(0, Math.min(20, current + delta));
+    if (next === current) return;          // already at the clamp limit — no change
+    applyDecimals(id, next);
+    adjustedTargets.push({ id, next });
+  });
+
+  // Sync formula cells that reference any adjusted cell: only a formula whose
+  // range actually includes the adjusted cell follows along — other formula
+  // cells are left untouched.
+  if (adjustedTargets.length) {
+    Object.keys(localCells).forEach(fid => {
+      if (cellIds.includes(fid) || !cellHasFormula(fid)) return;
+      if (!isNumericValue(getCellValue(fid))) return;
+      const formula = localCells[fid].formula;
+      let dp = null;
+      for (const tgt of adjustedTargets) {
+        if (formulaReferencesCell(formula, tgt.id)) dp = tgt.next;
+      }
+      if (dp != null) applyDecimals(fid, dp);
+    });
+  }
 
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
@@ -5261,6 +5415,20 @@ if (toolbarFormatPercentBtn) {
     if (activeCellId) {
       setCellNumberFormat(activeCellId, 'percent');
     }
+  });
+}
+
+// Hook up the decrease / increase decimal-places toolbar buttons
+const toolbarDecimalDecreaseBtn = document.getElementById('toolbar-decimal-decrease');
+if (toolbarDecimalDecreaseBtn) {
+  toolbarDecimalDecreaseBtn.addEventListener('click', () => {
+    if (activeCellId) adjustCellDecimals(activeCellId, -1);
+  });
+}
+const toolbarDecimalIncreaseBtn = document.getElementById('toolbar-decimal-increase');
+if (toolbarDecimalIncreaseBtn) {
+  toolbarDecimalIncreaseBtn.addEventListener('click', () => {
+    if (activeCellId) adjustCellDecimals(activeCellId, 1);
   });
 }
 
@@ -8022,9 +8190,13 @@ const LANG_LABELS = { zh: '中文', en: 'English' };
 const applyLanguageSelection = (lang) => {
   if (!LANG_LABELS[lang]) lang = 'zh';
   if (langSwitchLabel) langSwitchLabel.textContent = LANG_LABELS[lang];
+  // Show the check glyph only on the selected language. We toggle the icon's
+  // text content (not a `hidden` class) because the Material Symbols stylesheet
+  // sets `display:inline-block` on these spans, which would override `.hidden`
+  // and leave the checkmark visible on both options.
   document.querySelectorAll('#lang-switch-menu .lang-option').forEach((opt) => {
     const check = opt.querySelector('.lang-check');
-    if (check) check.classList.toggle('hidden', opt.dataset.lang !== lang);
+    if (check) check.textContent = opt.dataset.lang === lang ? 'check' : '';
   });
   translatePage(lang);
   try { localStorage.setItem('app-language', lang); } catch (err) {}
