@@ -6349,6 +6349,12 @@ document.addEventListener('keydown', (e) => {
       toggleFormat(activeCellId, 'underline');
       return;
     }
+    // Ctrl+K opens the insert/edit-link dialog for the active cell.
+    if (e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (activeCellId) openLinkDialog(activeCellId);
+      return;
+    }
     // Ctrl+Shift+. increases font size; Ctrl+Shift+, decreases it
     if (e.shiftKey && e.code === 'Period') {
       e.preventDefault();
@@ -7285,6 +7291,10 @@ if (menuInsertBtn && menuInsertDropdown) {
   wireInsert('ins-row-below', () => doInsertRows('below'));
   wireInsert('ins-col-left',  () => doInsertCols('left'));
   wireInsert('ins-col-right', () => doInsertCols('right'));
+  // Sheet: add a new sheet (same as the footer "+" button).
+  wireInsert('ins-sheet', () => { addSheet(); closeInsertMenu(); });
+  // Link: open the insert/edit-link dialog for the active cell.
+  wireInsert('ins-link', () => { closeInsertMenu(); if (activeCellId) openLinkDialog(activeCellId); });
 }
 
 // Format menu: number formats, text styles, alignment, text wrapping and font

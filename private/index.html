@@ -800,7 +800,7 @@
 <!-- Insert menu item with dropdown options -->
    <div class="relative inline-block">
      <button id="menu-insert-btn" class="text-on-surface-variant dark:text-outline hover:bg-surface-container-high px-3 py-1 rounded-lg text-label-lg font-label-lg" data-i18n="nav.insert">Insert</button>
-     <div id="menu-insert-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-56 z-50">
+     <div id="menu-insert-dropdown" class="hidden absolute left-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-64 z-50">
        <!-- Cells submenu (flyout) -->
        <div class="relative group">
          <button class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
@@ -845,6 +845,70 @@
              <span class="material-symbols-outlined text-[18px]">add_column_right</span><span id="ins-col-right-label"></span>
            </button>
          </div>
+       </div>
+       <!-- Sheet: adds a new sheet (mirrors the footer "+" button) -->
+       <button id="ins-sheet" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">tab</span><span data-i18n="ins.sheet">Sheet</span></span>
+         <span class="text-xs text-outline">Shift+F11</span>
+       </button>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Generate table / Pre-built table (unsupported - greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">table</span><span data-i18n="ins.generateTable">Generate table</span>
+       </div>
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">table_view</span><span data-i18n="ins.prebuiltTable">Pre-built table</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Chart / Pivot / Image / Drawing (unsupported - greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">bar_chart</span><span data-i18n="ins.chart">Chart</span>
+       </div>
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">pivot_table_chart</span><span data-i18n="ins.pivotTable">Pivot table</span>
+       </div>
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">image</span><span data-i18n="ins.image">Image</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">draw</span><span data-i18n="ins.drawing">Drawing</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Function (unsupported - greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">functions</span><span data-i18n="ins.function">Function</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <!-- Link: opens the insert/edit-link dialog for the active cell -->
+       <button id="ins-link" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">link</span><span data-i18n="ins.link">Link</span></span>
+         <span class="text-xs text-outline">Ctrl+K</span>
+       </button>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Checkbox / Dropdown / Emoji / Smart chips (unsupported - greyed out) -->
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">check_box</span><span data-i18n="ins.checkbox">Checkbox</span>
+       </div>
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">arrow_drop_down_circle</span><span data-i18n="ins.dropdown">Dropdown</span>
+       </div>
+       <div class="flex items-center gap-3 w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="material-symbols-outlined text-[18px]">mood</span><span data-i18n="ins.emoji">Emoji</span>
+       </div>
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">smart_button</span><span data-i18n="ins.smartChips">Smart chips</span></span>
+         <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+       </div>
+       <div class="border-t border-outline-variant my-1"></div>
+       <!-- Comment / Note (unsupported - greyed out) -->
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">add_comment</span><span data-i18n="ins.comment">Comment</span></span>
+         <span class="text-xs">Ctrl+Alt+M</span>
+       </div>
+       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+         <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">sticky_note_2</span><span data-i18n="ins.note">Note</span></span>
+         <span class="text-xs">Shift+F2</span>
        </div>
      </div>
    </div>
