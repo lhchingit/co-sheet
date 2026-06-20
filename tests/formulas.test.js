@@ -2350,9 +2350,9 @@ test('Edit Menu & Search Replace - Find, Replace, and Replace All modify values 
       set: (val) => { selectionEndCellId = val; },
       configurable: true
     });
-    globalThis.findNextMatch = findNextMatch;
-    globalThis.replaceCurrentMatch = replaceCurrentMatch;
-    globalThis.replaceAllMatches = replaceAllMatches;
+    globalThis.findNextMatch = window.CoSheet.findReplace.findNext;
+    globalThis.replaceCurrentMatch = window.CoSheet.findReplace.replaceCurrent;
+    globalThis.replaceAllMatches = window.CoSheet.findReplace.replaceAll;
     globalThis.performUndo = performUndo;
   `;
   vm.runInContext(code + exportSuffix, vmContext);

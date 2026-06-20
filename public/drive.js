@@ -120,14 +120,10 @@
     }
 
     const linkRow = $('modal-link-row');
-    if (opts.linkValue != null) {
-      /** @type {HTMLInputElement} */ ($('modal-link')).value = opts.linkValue;
-      linkRow.classList.remove('hidden');
-      linkRow.classList.add('flex');
-    } else {
-      linkRow.classList.add('hidden');
-      linkRow.classList.remove('flex');
-    }
+    const showLink = opts.linkValue != null;
+    if (showLink) /** @type {HTMLInputElement} */ ($('modal-link')).value = opts.linkValue;
+    linkRow.classList.toggle('hidden', !showLink);
+    linkRow.classList.toggle('flex', showLink);
 
     const okBtn = $('modal-ok');
     okBtn.textContent = opts.okLabel || t('dialog.confirm');
