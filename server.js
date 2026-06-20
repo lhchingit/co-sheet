@@ -38,6 +38,15 @@ import * as dimensionService from './services/dimensionService.js';
 import { shouldSkipOidcTls } from './services/oidcTls.js';
 import { isExternalOidcUserinfoSkipped } from './services/oidcProfile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtimeBus.js';
+import { logger, component } from './services/logger.js';
+
+// Per-subsystem child loggers. Each tags its lines with a `component` field so
+// logs can be filtered by area; the default `logger` covers the REST handlers.
+const sessionLog = component('session');
+const oidcLog = component('oidc');
+const wsLog = component('ws');
+const autosaveLog = component('autosave');
+const realtimeLog = component('realtime');
 
 // Calculate the directory name of the current ES module to handle relative path resolution.
 const __filename = fileURLToPath(import.meta.url);
@@ -440,10 +449,10 @@ if (redisConfig) {
   // A cluster-aware client when REDIS_CLUSTER is set, else a single-node client.
   // connect-redis works with either.
   const sessionRedisClient = await createRedisClient(redisConfig);
-  sessionRedisClient.on('error', (e) => console.error('[session] redis error:', e.message));
+  sessionRedisClient.on('error', (e) => sessionLog.error({ err: e }, 'redis error'));
   await sessionRedisClient.connect();
   sessionStore = new RedisStore({ client: sessionRedisClient, prefix: 'cosheet:sess:' });
-  console.log(`[session] using Redis-backed session store (${redisConfig.cluster ? 'cluster' : 'single'})`);
+  sessionLog.info(`using Redis-backed session store (${redisConfig.cluster ? 'cluster' : 'single'})`);
 } else {
   sessionStore = new session.MemoryStore();
 }
@@ -495,7 +504,7 @@ const isExternalOidcConfigured = () => Boolean(
  */
 const buildOidcAgent = () => {
   if (!shouldSkipOidcTls()) return undefined;
-  console.warn('[OIDC] OIDC_TLS_VERIFY is disabled — skipping TLS certificate ' +
+  oidcLog.warn('OIDC_TLS_VERIFY is disabled — skipping TLS certificate ' +
     'verification for the external (Local OIDC) provider. Use only for a trusted ' +
     'self-signed server on a trusted network.');
   return new https.Agent({ rejectUnauthorized: false });
@@ -637,7 +646,7 @@ const ensureAdmin = async (req, res, next) => {
       return next();
     }
   } catch (e) {
-    console.error('Role check failed:', e.message);
+    logger.error({ err: e }, 'Role check failed');
   }
   return res.status(403).json({ error: 'forbidden', message: 'Admin privileges required' });
 };
@@ -879,7 +888,7 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
     const html = template.split('{{FILE_NAME}}').join(escapeHtml(name));
     res.type('html').send(html);
   } catch (err) {
-    console.error('Error serving editor:', err.message);
+    logger.error({ err: err }, 'Error serving editor');
     res.sendFile(path.join(__dirname, 'private', 'index.html'));
   }
 });
@@ -1106,7 +1115,7 @@ app.get('/api/me', ensureAuthenticated, async (req, res) => {
   try {
     role = await upsertUser(req.user);
   } catch (e) {
-    console.error('Failed to record login:', e.message);
+    logger.error({ err: e }, 'Failed to record login');
     try { role = await getUserRole(req.user); } catch (e2) { /* default 'user' */ }
   }
   res.json({
@@ -1147,7 +1156,7 @@ app.get('/api/users', ensureAdmin, async (req, res) => {
     });
     res.json({ role: req.userRole, users });
   } catch (err) {
-    console.error('Error listing users:', err.message);
+    logger.error({ err: err }, 'Error listing users');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to list users' });
   }
 });
@@ -1179,7 +1188,7 @@ app.patch('/api/users/:id', ensureAdmin, async (req, res) => {
     await usersRepo.updateUserRole(id, role);
     res.json({ success: true, id, role });
   } catch (err) {
-    console.error('Error updating user role:', err.message);
+    logger.error({ err: err }, 'Error updating user role');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to update role' });
   }
 });
@@ -1267,7 +1276,7 @@ const loadState = async (key = 'default') => {
       return setupCellsProxy(state);
     }
   } catch (e) {
-    console.error('Error loading state from PostgreSQL, returning default:', e.message);
+    logger.error({ err: e }, 'Error loading state from PostgreSQL, returning default');
   }
   
   // Return fresh state if absent or query fails.
@@ -1329,7 +1338,7 @@ const saveState = async () => {
   try {
     await workbookRepo.updateDefaultWorkbookState(JSON.stringify(sheetState));
   } catch (err) {
-    console.error('Failed to save state to PostgreSQL:', err.message);
+    logger.error({ err: err }, 'Failed to save state to PostgreSQL');
   } finally {
     isSaving = false;
     if (pendingSave) {
@@ -1377,7 +1386,7 @@ const requireFileAccess = ({ level, param = 'id', allowDefault = true, forbidden
       return res.status(403).json({ error: 'forbidden', message: forbiddenMessage });
     }
   } catch (err) {
-    console.error('Error checking file access:', err.message);
+    logger.error({ err: err }, 'Error checking file access');
     return res.status(500).json({ error: 'internal_server_error', message: 'Failed to check file access' });
   }
   req.fileId = fileId;
@@ -1409,7 +1418,7 @@ const saveWorkbook = async (fileId, state) => {
   try {
     await workbookRepo.updateWorkbookState(JSON.stringify(state), fileId);
   } catch (err) {
-    console.error(`Failed to save workbook ${fileId}:`, err.message);
+    logger.error({ err: err }, `Failed to save workbook ${fileId}`);
   }
 };
 
@@ -1475,7 +1484,7 @@ app.get('/api/files', ensureAuthenticated, async (req, res) => {
       };
     }));
   } catch (err) {
-    console.error('Error listing files:', err.message);
+    logger.error({ err: err }, 'Error listing files');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to list files' });
   }
 });
@@ -1532,7 +1541,7 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     res.json({ id, name, url: `${baseUrl}/sheet?file=${id}` });
   } catch (err) {
-    console.error('Error creating file:', err.message);
+    logger.error({ err: err }, 'Error creating file');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to create file' });
   }
 });
@@ -1619,14 +1628,14 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
         }
       } catch (e) {
         // Non-fatal: the copy itself succeeded even if share-copying failed.
-        console.error('Error copying file shares:', e.message);
+        logger.error({ err: e }, 'Error copying file shares');
       }
     }
 
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     res.json({ id, name, url: `${baseUrl}/sheet?file=${id}` });
   } catch (err) {
-    console.error('Error copying file:', err.message);
+    logger.error({ err: err }, 'Error copying file');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to copy file' });
   }
 });
@@ -1659,7 +1668,7 @@ app.get('/api/files/:id/details', ensureAuthenticated,
       updatedAt
     });
   } catch (err) {
-    console.error('Error reading file details:', err.message);
+    logger.error({ err: err }, 'Error reading file details');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to read file details' });
   }
 });
@@ -1683,7 +1692,7 @@ app.patch('/api/files/:id', ensureAuthenticated,
     }
     res.json({ success: true, id, name });
   } catch (err) {
-    console.error('Error renaming file:', err.message);
+    logger.error({ err: err }, 'Error renaming file');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to rename file' });
   }
 });
@@ -1705,7 +1714,7 @@ app.delete('/api/files/:id', ensureAuthenticated,
     workbooks.delete(id);
     res.json({ success: true });
   } catch (err) {
-    console.error('Error deleting file:', err.message);
+    logger.error({ err: err }, 'Error deleting file');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to delete file' });
   }
 });
@@ -1741,7 +1750,7 @@ app.get('/api/users/search', ensureAuthenticated, async (req, res) => {
       .map((u) => ({ id: u.id, username: u.username, email: u.email }));
     res.json(matches);
   } catch (err) {
-    console.error('Error searching users:', err.message);
+    logger.error({ err: err }, 'Error searching users');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to search users' });
   }
 });
@@ -1767,7 +1776,7 @@ app.get('/api/files/:id/shares', ensureAuthenticated,
     }
     res.json(users);
   } catch (err) {
-    console.error('Error listing shares:', err.message);
+    logger.error({ err: err }, 'Error listing shares');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to list shares' });
   }
 });
@@ -1801,7 +1810,7 @@ app.post('/api/files/:id/shares', ensureAuthenticated,
     }
     res.json({ success: true, added, role });
   } catch (err) {
-    console.error('Error sharing file:', err.message);
+    logger.error({ err: err }, 'Error sharing file');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to share file' });
   }
 });
@@ -1827,7 +1836,7 @@ app.patch('/api/files/:id/shares/:userId', ensureAuthenticated,
     }
     res.json({ success: true, role });
   } catch (err) {
-    console.error('Error updating share:', err.message);
+    logger.error({ err: err }, 'Error updating share');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to update share' });
   }
 });
@@ -1845,7 +1854,7 @@ app.delete('/api/files/:id/shares/:userId', ensureAuthenticated,
     await sharesRepo.deleteShare(id, userId);
     res.json({ success: true });
   } catch (err) {
-    console.error('Error removing share:', err.message);
+    logger.error({ err: err }, 'Error removing share');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to remove share' });
   }
 });
@@ -1868,7 +1877,7 @@ app.patch('/api/files/:id/access', ensureAuthenticated,
     await filesRepo.updateFileLinkAccess(id, linkAccess);
     res.json({ success: true, linkAccess });
   } catch (err) {
-    console.error('Error updating file access:', err.message);
+    logger.error({ err: err }, 'Error updating file access');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to update access' });
   }
 });
@@ -1896,7 +1905,7 @@ app.put('/api/files/:id/star', ensureAuthenticated,
     }
     res.json({ success: true, starred });
   } catch (err) {
-    console.error('Error updating star:', err.message);
+    logger.error({ err: err }, 'Error updating star');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to update star' });
   }
 });
@@ -1967,7 +1976,7 @@ app.get('/api/versions', ensureAuthenticated, async (req, res) => {
     }));
     res.json(versions);
   } catch (err) {
-    console.error('Error fetching version history list:', err.message);
+    logger.error({ err: err }, 'Error fetching version history list');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to retrieve versions list' });
   }
 });
@@ -1994,7 +2003,7 @@ app.get('/api/versions/:id', ensureAuthenticated, async (req, res) => {
     }
     res.json(parsedState);
   } catch (err) {
-    console.error('Error retrieving version snapshot:', err.message);
+    logger.error({ err: err }, 'Error retrieving version snapshot');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to retrieve version state' });
   }
 });
@@ -2078,7 +2087,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error('Error restoring version:', err.message);
+    logger.error({ err: err }, 'Error restoring version');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to restore version' });
   }
 });
@@ -2196,14 +2205,14 @@ const ready = (async () => {
       server.once('listening', resolve);
       server.once('error', reject);
     });
-    console.log(`Server running on port ${PORT}`);
+    logger.info(`Server running on port ${PORT}`);
     registerStrategies();
     // Startup is fully done: schema provisioned, state loaded, bus connected,
     // server listening, strategies registered. Probes can now report ready.
     startupComplete = true;
     return server;
   } catch (err) {
-    console.error('Database initialization or server startup failed:', err);
+    logger.error({ err }, 'Database initialization or server startup failed');
     process.exit(1);
   }
 })();
@@ -2260,14 +2269,14 @@ const autosaveInterval = setInterval(async () => {
         // Create a new version snapshot in workbook_versions database table.
         await versionsRepo.insertVersion(JSON.stringify(sheetState), editorsString);
         
-        console.log(`[Autosave] Created version snapshot. Editors: ${editorsString}`);
+        autosaveLog.info(`Created version snapshot. Editors: ${editorsString}`);
 
         // Reset tracking variables upon successful snapshot creation.
         pendingChanges = false;
         currentEditors.clear();
         lastVersionTime = now;
       } catch (err) {
-        console.error('[Autosave] Error creating version snapshot:', err);
+        autosaveLog.error({ err }, 'Error creating version snapshot');
       }
     }
   }
@@ -2482,7 +2491,7 @@ const handleBusMessage = (msg) => {
       }
     }
   } catch (e) {
-    console.error('[realtime] error handling bus message:', e.message);
+    realtimeLog.error({ err: e }, 'error handling bus message');
   }
 };
 
@@ -2523,7 +2532,7 @@ wss.on('connection', async (ws, req) => {
   // state-changing messages are ignored. Computed once at connect time.
   const canEdit = await canModifyFile(sessionUser, fileId);
 
-  console.log(`[WS Server] Connected: ${username} (${wsId}) on file ${fileId} (canEdit=${canEdit})`);
+  wsLog.info(`Connected: ${username} (${wsId}) on file ${fileId} (canEdit=${canEdit})`);
 
   // Assign a custom cursor color dynamically using modulo on user count.
   const color = userColors[activeUsers.size % userColors.length];
@@ -2574,7 +2583,7 @@ wss.on('connection', async (ws, req) => {
 
   // Handle incoming WebSocket message events.
   ws.on('message', (message) => {
-    console.log(`[WS Server] Message from ${username} (${wsId}): ${message}`);
+    wsLog.debug(`Message from ${username} (${wsId}): ${message}`);
     try {
       const { type, payload } = JSON.parse(message);
 
@@ -2629,13 +2638,13 @@ wss.on('connection', async (ws, req) => {
         bus.publish({ kind: 'op', fileId, type, payload });
       }
     } catch (e) {
-      console.error('WebSocket message parsing error:', e.message);
+      wsLog.error({ err: e }, 'WebSocket message parsing error');
     }
   });
 
   // Handle connection termination / socket closure.
   ws.on('close', () => {
-    console.log(`[WS Server] Closed: ${username} (${wsId})`);
+    wsLog.info(`Closed: ${username} (${wsId})`);
     // Remove user entry from active users registry.
     activeUsers.delete(wsId);
 
