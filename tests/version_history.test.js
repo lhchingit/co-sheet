@@ -531,11 +531,13 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
   };
 
   const vmContext = vm.createContext(sandbox);
-  // Add suffix to expose key functions for testing
+  // Add suffix to expose key functions for testing. The version-history logic
+  // now lives in version-history.js (window.CoSheet.history); app.js keeps the
+  // isHistoryMode mirror the grid renderer reads, updated via syncState.
   const suffix = `
-    globalThis.toggleHistoryMode = toggleHistoryMode;
-    globalThis.selectVersion = selectVersion;
-    globalThis.restoreVersion = restoreVersion;
+    globalThis.toggleHistoryMode = window.CoSheet.history.toggle;
+    globalThis.selectVersion = window.CoSheet.history.select;
+    globalThis.restoreVersion = window.CoSheet.history.restore;
     globalThis.get_isHistoryMode = () => isHistoryMode;
   `;
   vm.runInContext(code + suffix, vmContext);

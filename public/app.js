@@ -256,10 +256,12 @@ const undoStack = [];
 const redoStack = [];
 
 // Version History state variables
+// History preview view-state. The version-history.js controller owns the
+// versions list and drives these via syncState(); the grid renderer reads them
+// here for diff highlighting. See window.CoSheet.history.init() near the bottom.
 let isHistoryMode = false;
 let selectedVersionState = null;
 let previousVersionState = null;
-let versionsList = []; // Array of retrieved versions
 
 
 
@@ -1020,295 +1022,8 @@ const pasteSelectedCells = () => {
   }
 };
 
-/**
- * Helper to check if a cell matches the search string based on options.
- * @param {string} cellId - The cell coordinate.
- * @param {string} sheetName - The sheet containing the cell.
- * @param {string} findStr - The string to find.
- * @param {boolean} matchCase - Case sensitivity flag.
- * @param {boolean} matchEntire - Exact match flag.
- * @param {boolean} useRegex - Regular expression flag.
- * @param {boolean} searchFormulas - Search inside formulas flag.
- * @param {boolean} searchLinks - Search inside hyperlinks flag.
- * @returns {boolean} True if matching.
- */
-const matchesCell = (cellId, sheetName, findStr, matchCase, matchEntire, useRegex, searchFormulas, searchLinks) => {
-  const sheetCells = localSheets[sheetName];
-  if (!sheetCells) return false;
-  const cell = sheetCells[cellId];
-  if (!cell) return false;
-
-  const textsToCheck = [];
-  // Check cellular raw value
-  if (cell.value !== undefined && cell.value !== null) {
-    textsToCheck.push(cell.value.toString());
-  }
-  // Check formula if option enabled
-  if (searchFormulas && cell.formula) {
-    textsToCheck.push(cell.formula.toString());
-  }
-  // Check hyperlink style if option enabled
-  if (searchLinks && cell.style && cell.style.link) {
-    textsToCheck.push(cell.style.link.toString());
-  }
-
-  if (textsToCheck.length === 0) return false;
-
-  // Verify if any of the target texts match the search criteria
-  return textsToCheck.some(text => {
-    if (useRegex) {
-      try {
-        const flags = matchCase ? '' : 'i';
-        const regex = new RegExp(matchEntire ? `^${findStr}$` : findStr, flags);
-        return regex.test(text);
-      } catch (e) {
-        // Fallback on invalid regex patterns
-        return false;
-      }
-    } else {
-      let t = text;
-      let f = findStr;
-      if (!matchCase) {
-        t = t.toLowerCase();
-        f = f.toLowerCase();
-      }
-      if (matchEntire) {
-        return t === f;
-      } else {
-        return t.includes(f);
-      }
-    }
-  });
-};
-
-/**
- * Generates cell sequence row-by-row, col-by-col for searching.
- * @returns {string[]} List of cell coordinate IDs.
- */
-const getSortedCellSequence = () => {
-  const sequence = [];
-  // Standard grid dimensions: 1000 rows, 26 columns (A-Z)
-  for (let r = 1; r <= TOTAL_ROWS; r++) {
-    for (let c = 0; c < 26; c++) {
-      const colLetter = getColLetter(c);
-      sequence.push(`${colLetter}${r}`);
-    }
-  }
-  return sequence;
-};
-
-let lastFoundCellId = null;
-let lastFoundSheetName = null;
-
-/**
- * Finds the next matching cell based on Find inputs.
- * @returns {Object|null} Sheet name and cell ID coordinate.
- */
-const findNextMatch = () => {
-  const findStr = document.getElementById('find-input').value;
-  if (!findStr) return null;
-  const matchCase = document.getElementById('find-match-case').checked;
-  const matchEntire = document.getElementById('find-match-entire').checked;
-  const useRegex = document.getElementById('find-use-regex').checked;
-  const searchFormulas = document.getElementById('find-search-formulas').checked;
-  const searchLinks = document.getElementById('find-search-links').checked;
-  const scope = document.getElementById('find-scope-select').value;
-
-  // Determine search sheets scope: current sheet or all sheets
-  let sheets = [];
-  if (scope === '此工作表') {
-    sheets = [activeSheetName];
-  } else {
-    // Traverse sheets starting from the active sheet in order
-    const curIdx = sheetOrder.indexOf(activeSheetName);
-    for (let i = 0; i < sheetOrder.length; i++) {
-      sheets.push(sheetOrder[(curIdx + i) % sheetOrder.length]);
-    }
-  }
-
-  // Create the combined search sequence
-  const cellSeq = getSortedCellSequence();
-  const searchSpace = [];
-  sheets.forEach(sheetName => {
-    cellSeq.forEach(cellId => {
-      searchSpace.push({ sheetName, cellId });
-    });
-  });
-
-  // Start matching from the cell after the currently active selection
-  let startIdx = 0;
-  if (activeCellId) {
-    const spaceIdx = searchSpace.findIndex(item => item.sheetName === activeSheetName && item.cellId === activeCellId);
-    if (spaceIdx !== -1) {
-      startIdx = (spaceIdx + 1) % searchSpace.length;
-    }
-  }
-
-  // Iterate search space looking for first match
-  for (let i = 0; i < searchSpace.length; i++) {
-    const idx = (startIdx + i) % searchSpace.length;
-    const { sheetName, cellId } = searchSpace[idx];
-    if (matchesCell(cellId, sheetName, findStr, matchCase, matchEntire, useRegex, searchFormulas, searchLinks)) {
-      lastFoundCellId = cellId;
-      lastFoundSheetName = sheetName;
-      
-      // Auto-switch sheet and select cell upon finding match
-      if (sheetName !== activeSheetName) {
-        switchSheet(sheetName);
-      }
-      const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
-      if (cellEl) {
-        handleCellSelect(cellId, cellEl);
-        cellEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-      return { sheetName, cellId };
-    }
-  }
-
-  alert('找不到相符的內容');
-  return null;
-};
-
-/**
- * Replaces the find string with replace string in the active cell.
- */
-const replaceCurrentMatch = () => {
-  const findStr = document.getElementById('find-input').value;
-  const replaceStr = document.getElementById('replace-input').value;
-  if (!findStr || !activeCellId) return;
-
-  const matchCase = document.getElementById('find-match-case').checked;
-  const matchEntire = document.getElementById('find-match-entire').checked;
-  const useRegex = document.getElementById('find-use-regex').checked;
-  const searchFormulas = document.getElementById('find-search-formulas').checked;
-  const searchLinks = document.getElementById('find-search-links').checked;
-
-  // Make sure the active cell matches before applying replacement
-  if (matchesCell(activeCellId, activeSheetName, findStr, matchCase, matchEntire, useRegex, searchFormulas, searchLinks)) {
-    const before = localCells[activeCellId] ? JSON.parse(JSON.stringify(localCells[activeCellId])) : { formula: '', value: '', style: {} };
-    const cell = localCells[activeCellId] || { formula: '', value: '', style: {} };
-    
-    let modified = false;
-    // Replace text inside formula first, or fallback to cell value
-    if (cell.formula && cell.formula.includes(findStr)) {
-      cell.formula = cell.formula.replaceAll(findStr, replaceStr);
-      modified = true;
-    } else if (cell.value !== undefined && cell.value !== null) {
-      const valStr = cell.value.toString();
-      if (valStr.includes(findStr)) {
-        cell.value = valStr.replaceAll(findStr, replaceStr);
-        modified = true;
-      }
-    }
-
-    if (modified) {
-      localCells[activeCellId] = cell;
-      // Record undo-redo history
-      recordHistoryAction(activeCellId, before, cell);
-      
-      // Dispatch WebSocket cell update
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: 'cell-edit',
-          payload: { cellId: activeCellId, formula: cell.formula, value: cell.value, style: cell.style }
-        }));
-      }
-      updateGridDOMCell(activeCellId, getCellValue(activeCellId), cell.style);
-      recalculateSheet();
-      const formulaBar = document.getElementById('formula-bar-input');
-      if (formulaBar) {
-        formulaBar.value = cell.formula ? cell.formula : cell.value;
-      }
-    }
-  }
-
-  // Auto-find next match
-  findNextMatch();
-};
-
-/**
- * Replaces all matches in the selected scope sheet(s) with replace string.
- */
-const replaceAllMatches = () => {
-  const findStr = document.getElementById('find-input').value;
-  const replaceStr = document.getElementById('replace-input').value;
-  if (!findStr) return;
-
-  const matchCase = document.getElementById('find-match-case').checked;
-  const matchEntire = document.getElementById('find-match-entire').checked;
-  const useRegex = document.getElementById('find-use-regex').checked;
-  const searchFormulas = document.getElementById('find-search-formulas').checked;
-  const searchLinks = document.getElementById('find-search-links').checked;
-  const scope = document.getElementById('find-scope-select').value;
-
-  let sheets = [];
-  if (scope === '此工作表') {
-    sheets = [activeSheetName];
-  } else {
-    sheets = sheetOrder;
-  }
-
-  const historyChanges = [];
-  let totalReplaced = 0;
-
-  // Scan and replace within all selected sheets
-  sheets.forEach(sheetName => {
-    const sheetCells = localSheets[sheetName];
-    if (!sheetCells) return;
-    
-    Object.keys(sheetCells).forEach(cellId => {
-      if (matchesCell(cellId, sheetName, findStr, matchCase, matchEntire, useRegex, searchFormulas, searchLinks)) {
-        const cell = sheetCells[cellId];
-        const before = JSON.parse(JSON.stringify(cell));
-        let modified = false;
-
-        // Perform replacement in formula or cell value
-        if (cell.formula && cell.formula.includes(findStr)) {
-          cell.formula = cell.formula.replaceAll(findStr, replaceStr);
-          modified = true;
-        } else if (cell.value !== undefined && cell.value !== null) {
-          const valStr = cell.value.toString();
-          if (valStr.includes(findStr)) {
-            cell.value = valStr.replaceAll(findStr, replaceStr);
-            modified = true;
-          }
-        }
-
-        if (modified) {
-          sheetCells[cellId] = cell;
-          totalReplaced++;
-          historyChanges.push({ cellId, before, after: JSON.parse(JSON.stringify(cell)) });
-
-          if (sheetName === activeSheetName) {
-            updateGridDOMCell(cellId, getCellValue(cellId), cell.style);
-          }
-          
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({
-              type: 'cell-edit',
-              payload: { cellId, formula: cell.formula, value: cell.value, style: cell.style, sheetName }
-            }));
-          }
-        }
-      }
-    });
-  });
-
-  if (totalReplaced > 0) {
-    // Record composite undo/redo action
-    recordHistoryAction({ type: 'multi', changes: historyChanges });
-    recalculateSheet();
-    if (activeCellId && localCells[activeCellId]) {
-      const formulaBar = document.getElementById('formula-bar-input');
-      if (formulaBar) {
-        formulaBar.value = localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value;
-      }
-    }
-    alert(`已完成取代！共取代了 ${totalReplaced} 處。`);
-  } else {
-    alert('找不到相符的內容，未進行任何取代。');
-  }
-};
+// Find & Replace lives in find-replace.js (window.CoSheet.findReplace); it is
+// wired to the core via window.CoSheet.app near the bottom of this file.
 
 /**
  * Records a single or composite cell state change to the local undo stack.
@@ -1342,26 +1057,20 @@ const recordHistoryAction = (cellIdOrAction, before, after) => {
 const updateUndoRedoButtonsState = () => {
   const undoBtn = document.getElementById('toolbar-undo');
   const redoBtn = document.getElementById('toolbar-redo');
-  
-  if (undoBtn) {
-    if (undoStack.length > 0) {
-      undoBtn.removeAttribute('disabled');
-      undoBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+
+  const setEnabled = (btn, enabled) => {
+    if (!btn) return;
+    if (enabled) {
+      btn.removeAttribute('disabled');
+      btn.classList.remove('opacity-40', 'cursor-not-allowed');
     } else {
-      undoBtn.setAttribute('disabled', 'true');
-      undoBtn.classList.add('opacity-40', 'cursor-not-allowed');
+      btn.setAttribute('disabled', 'true');
+      btn.classList.add('opacity-40', 'cursor-not-allowed');
     }
-  }
-  
-  if (redoBtn) {
-    if (redoStack.length > 0) {
-      redoBtn.removeAttribute('disabled');
-      redoBtn.classList.remove('opacity-40', 'cursor-not-allowed');
-    } else {
-      redoBtn.setAttribute('disabled', 'true');
-      redoBtn.classList.add('opacity-40', 'cursor-not-allowed');
-    }
-  }
+  };
+
+  setEnabled(undoBtn, undoStack.length > 0);
+  setEnabled(redoBtn, redoStack.length > 0);
 };
 
 /**
@@ -5083,7 +4792,7 @@ const showContextMenu = (cellId, x, y) => {
   const delCellUp = document.getElementById('menu-delete-cell-up');
   if (delCellLeft) delCellLeft.onclick = () => { performCellDelete('left'); menu.remove(); };
   if (delCellUp) delCellUp.onclick = () => { performCellDelete('up'); menu.remove(); };
-  document.getElementById('menu-history').onclick = () => { toggleHistoryMode(true); menu.remove(); };
+  document.getElementById('menu-history').onclick = () => { window.CoSheet.history.toggle(true); menu.remove(); };
   document.getElementById('menu-link').onclick = () => {
     menu.remove();
     openLinkDialog(cellId);
@@ -5124,37 +4833,15 @@ const updateToolbarFormattingStates = (style) => {
   const valignCenterBtn = document.getElementById('toolbar-valign-center');
   const valignBottomBtn = document.getElementById('toolbar-valign-bottom');
 
-  if (toolbarBold) {
-    if (style && style.bold) {
-      toolbarBold.classList.add('bg-surface-variant');
-    } else {
-      toolbarBold.classList.remove('bg-surface-variant');
-    }
-  }
+  // Toggle the "active" highlight on a toolbar button (no-op when absent).
+  const setActive = (btn, active) => {
+    if (btn) btn.classList.toggle('bg-surface-variant', !!active);
+  };
 
-  if (toolbarItalic) {
-    if (style && style.italic) {
-      toolbarItalic.classList.add('bg-surface-variant');
-    } else {
-      toolbarItalic.classList.remove('bg-surface-variant');
-    }
-  }
-
-  if (toolbarStrikethrough) {
-    if (style && style.strikethrough) {
-      toolbarStrikethrough.classList.add('bg-surface-variant');
-    } else {
-      toolbarStrikethrough.classList.remove('bg-surface-variant');
-    }
-  }
-
-  if (toolbarBorder) {
-    if (styleHasBorders(style)) {
-      toolbarBorder.classList.add('bg-surface-variant');
-    } else {
-      toolbarBorder.classList.remove('bg-surface-variant');
-    }
-  }
+  setActive(toolbarBold, style && style.bold);
+  setActive(toolbarItalic, style && style.italic);
+  setActive(toolbarStrikethrough, style && style.strikethrough);
+  setActive(toolbarBorder, styleHasBorders(style));
 
   // Determine the effective alignment: an explicit style wins, otherwise a
   // numeric active cell defaults to right (mirroring the grid rendering),
@@ -5170,27 +4857,9 @@ const updateToolbarFormattingStates = (style) => {
   }
 
   // Update active state highlight classes for each button option
-  if (alignLeftBtn) {
-    if (currentAlign === 'left') {
-      alignLeftBtn.classList.add('bg-surface-variant');
-    } else {
-      alignLeftBtn.classList.remove('bg-surface-variant');
-    }
-  }
-  if (alignCenterBtn) {
-    if (currentAlign === 'center') {
-      alignCenterBtn.classList.add('bg-surface-variant');
-    } else {
-      alignCenterBtn.classList.remove('bg-surface-variant');
-    }
-  }
-  if (alignRightBtn) {
-    if (currentAlign === 'right') {
-      alignRightBtn.classList.add('bg-surface-variant');
-    } else {
-      alignRightBtn.classList.remove('bg-surface-variant');
-    }
-  }
+  setActive(alignLeftBtn, currentAlign === 'left');
+  setActive(alignCenterBtn, currentAlign === 'center');
+  setActive(alignRightBtn, currentAlign === 'right');
 
   // Set the default vertical alignment icon based on style (fallback to vertical_align_bottom)
   const currentValign = style && style.verticalAlign ? style.verticalAlign : 'bottom';
@@ -5199,46 +4868,22 @@ const updateToolbarFormattingStates = (style) => {
   }
 
   // Update active state highlight classes for each vertical alignment option button
-  if (valignTopBtn) {
-    if (currentValign === 'top') {
-      valignTopBtn.classList.add('bg-surface-variant');
-    } else {
-      valignTopBtn.classList.remove('bg-surface-variant');
-    }
-  }
-  if (valignCenterBtn) {
-    if (currentValign === 'center') {
-      valignCenterBtn.classList.add('bg-surface-variant');
-    } else {
-      valignCenterBtn.classList.remove('bg-surface-variant');
-    }
-  }
-  if (valignBottomBtn) {
-    if (currentValign === 'bottom') {
-      valignBottomBtn.classList.add('bg-surface-variant');
-    } else {
-      valignBottomBtn.classList.remove('bg-surface-variant');
-    }
-  }
+  setActive(valignTopBtn, currentValign === 'top');
+  setActive(valignCenterBtn, currentValign === 'center');
+  setActive(valignBottomBtn, currentValign === 'bottom');
 
-  if (toolbarLink) {
-    if (style && style.link) {
-      toolbarLink.classList.add('bg-surface-variant');
-    } else {
-      toolbarLink.classList.remove('bg-surface-variant');
-    }
-  }
+  setActive(toolbarLink, style && style.link);
 
   if (toolbarColorTextInput) {
     const textColor = style && style.textColor ? style.textColor : '#000000';
     toolbarColorTextInput.value = textColor;
-    setToolbarColorSwatch('text', textColor);
+    window.CoSheet.colorPalette.setSwatch('text', textColor);
   }
 
   if (toolbarColorFillInput) {
     const fillColor = style && style.color ? style.color : '#ffffff';
     toolbarColorFillInput.value = fillColor;
-    setToolbarColorSwatch('fill', fillColor);
+    window.CoSheet.colorPalette.setSwatch('fill', fillColor);
   }
 
   // Reflect the active cell's font family in the toolbar label (fallback to Arial)
@@ -5465,9 +5110,9 @@ const toolbarBorderBtn = document.getElementById('toolbar-border');
 if (toolbarBorderBtn) {
   toolbarBorderBtn.addEventListener('click', (e) => {
     if (e) e.stopPropagation();
-    const wasOpen = !!borderMenuEl;
+    const wasOpen = window.CoSheet.borderMenu.isOpen();
     closeAllMenus();
-    if (!wasOpen) openBorderMenu(toolbarBorderBtn);
+    if (!wasOpen) window.CoSheet.borderMenu.open(toolbarBorderBtn);
   });
 }
 
@@ -5485,8 +5130,8 @@ function closeAllMenus() {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
   });
-  if (typeof closeBorderMenu === 'function') closeBorderMenu();
-  if (typeof closeColorPalette === 'function') closeColorPalette();
+  window.CoSheet.borderMenu.close();
+  window.CoSheet.colorPalette.close();
 }
 
 // Toggle toolbar alignment dropdown menu visibility
@@ -6051,391 +5696,12 @@ if (toolbarLinkBtn) {
   });
 }
 
-// Update the colored indicator bar shown under a color toolbar button.
-const setToolbarColorSwatch = (which, hex) => {
-  const swatch = document.getElementById(`toolbar-color-${which}-swatch`);
-  if (swatch && swatch.style) swatch.style.backgroundColor = hex;
-};
+// Color palette popup + toolbar color inputs live in color-palette.js
+// (window.CoSheet.colorPalette); wired via window.CoSheet.app near the bottom.
+// The border menu and sheet-tab menu open it via the "border" / "sheet" types.
 
-// Live-preview a color on the currently selected cell(s) without committing
-// (no socket/history). Lets inline color pickers show the change as it's chosen.
-const previewCellColor = (cssProp, hex) => {
-  const selectedIds = getSelectedCellIds();
-  const ids = selectedIds.length ? selectedIds : (activeCellId ? [activeCellId] : []);
-  ids.forEach(id => {
-    const el = document.querySelector(`[data-cell-id="${id}"]`);
-    if (el) el.style[cssProp] = hex;
-  });
-};
-
-// Hook up toolbar color pickers
-const toolbarColorTextInput = document.getElementById('toolbar-color-text-input');
-if (toolbarColorTextInput) {
-  // Live feedback while the picker is open (immediate, no commit yet).
-  toolbarColorTextInput.addEventListener('input', (e) => {
-    setToolbarColorSwatch('text', e.target.value);
-    if (activeCellId) previewCellColor('color', e.target.value);
-  });
-  // Commit the chosen color (syncs + records history).
-  toolbarColorTextInput.addEventListener('change', (e) => {
-    setToolbarColorSwatch('text', e.target.value);
-    if (activeCellId) {
-      changeCellTextColor(activeCellId, e.target.value);
-    }
-  });
-}
-
-const toolbarColorFillInput = document.getElementById('toolbar-color-fill-input');
-if (toolbarColorFillInput) {
-  toolbarColorFillInput.addEventListener('input', (e) => {
-    setToolbarColorSwatch('fill', e.target.value);
-    if (activeCellId) previewCellColor('backgroundColor', e.target.value);
-  });
-  toolbarColorFillInput.addEventListener('change', (e) => {
-    setToolbarColorSwatch('fill', e.target.value);
-    if (activeCellId) {
-      changeCellColor(activeCellId, e.target.value);
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Google Sheets–style color palette popup (text & fill color).
-// Clicking a toolbar color button opens a standard-color grid. "Reset"/"No fill"
-// restores the default, and "Custom color" delegates to the hidden native
-// <input type="color"> above — so custom colors still flow through the existing
-// preview/commit listeners. Each swatch maps to changeCellTextColor / changeCellColor.
-// ---------------------------------------------------------------------------
-const STANDARD_COLORS = [
-  ['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff'],
-  ['#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff'],
-  ['#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc'],
-  ['#dd7e6b', '#ea9999', '#f9cb9c', '#ffe599', '#b6d7a8', '#a2c4c9', '#a4c2f4', '#9fc5e8', '#b4a7d6', '#d5a6bd'],
-  ['#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0'],
-  ['#a61c00', '#cc0000', '#e69138', '#f1c232', '#6aa84f', '#45818e', '#3c78d8', '#3d85c6', '#674ea7', '#a64d79'],
-  ['#85200c', '#990000', '#b45f06', '#bf9000', '#38761d', '#134f5c', '#1155cc', '#0b5394', '#351c75', '#741b47'],
-  ['#5b0f00', '#660000', '#783f04', '#7f6000', '#274e13', '#0c343d', '#1c4587', '#073763', '#20124d', '#4c1130'],
-];
-
-let colorPaletteOutsideHandler = null;
-let colorPaletteSheetTarget = null; // sheet name when the palette is opened for a tab color
-const onColorPaletteKeydown = (e) => { if (e.key === 'Escape') closeColorPalette(); };
-
-const closeColorPalette = () => {
-  const existing = document.getElementById('color-palette-popup');
-  if (existing) existing.remove();
-  document.removeEventListener('keydown', onColorPaletteKeydown, true);
-  if (colorPaletteOutsideHandler) {
-    document.removeEventListener('click', colorPaletteOutsideHandler, true);
-    colorPaletteOutsideHandler = null;
-  }
-};
-
-// Commit a chosen color: update the toolbar indicator and apply to the selection.
-const applyChosenColor = (type, hex) => {
-  // Border pen color: store it for the next border action and update its swatch.
-  if (type === 'border') {
-    currentBorderColor = hex;
-    const swatch = document.getElementById('border-color-swatch');
-    if (swatch) swatch.style.backgroundColor = hex;
-    return;
-  }
-  // Sheet-tab color: broadcast the change (hex === null clears it).
-  if (type === 'sheet') {
-    if (colorPaletteSheetTarget && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'color-sheet', payload: { sheetName: colorPaletteSheetTarget, color: hex } }));
-    }
-    return;
-  }
-  setToolbarColorSwatch(type, hex);
-  if (!activeCellId) return;
-  if (type === 'text') changeCellTextColor(activeCellId, hex);
-  else changeCellColor(activeCellId, hex);
-};
-
-const openColorPalette = (type, anchorEl, options = {}) => {
-  // Toggle closed if the same button's palette is already open.
-  const existing = document.getElementById('color-palette-popup');
-  const sameType = existing && existing.dataset.type === type;
-  closeColorPalette();
-  if (sameType) return;
-
-  if (type === 'sheet') colorPaletteSheetTarget = options.sheetName || null;
-
-  const popup = document.createElement('div');
-  popup.id = 'color-palette-popup';
-  popup.dataset.type = type;
-  popup.className = 'fixed z-[1000] bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded-lg shadow-lg p-3 select-none text-on-surface dark:text-on-surface-variant';
-
-  // Reset semantics differ per target: fill -> white (no fill), sheet -> null
-  // (clears the tab colour), text/border -> black.
-  let resetLabel = t('color.reset');
-  let resetHex = '#000000';
-  if (type === 'fill') { resetLabel = t('color.noFill'); resetHex = '#ffffff'; }
-  else if (type === 'sheet') { resetLabel = t('sheet.reset'); resetHex = null; }
-
-  let gridHtml = '';
-  STANDARD_COLORS.forEach((row) => {
-    row.forEach((hex) => {
-      gridHtml += `<button type="button" class="w-5 h-5 rounded-sm border border-black/10 hover:ring-2 hover:ring-primary hover:ring-offset-1" style="background-color:${hex}" data-hex="${hex}" title="${hex}"></button>`;
-    });
-  });
-
-  popup.innerHTML = `
-    <button type="button" id="color-reset" class="w-full flex items-center gap-2 px-2 py-1.5 mb-2 rounded hover:bg-surface-variant text-label-md">
-      <span class="material-symbols-outlined text-[18px]">format_color_reset</span>
-      <span>${resetLabel}</span>
-    </button>
-    <div class="text-xs font-medium text-on-surface-variant mb-1.5">${t('color.standard')}</div>
-    <div class="grid grid-cols-10 gap-1">${gridHtml}</div>
-    <div class="text-xs font-medium text-on-surface-variant mt-3 mb-1.5">${t('color.custom')}</div>
-    <button type="button" id="color-custom" class="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-variant text-label-md">
-      <span class="material-symbols-outlined text-[18px]">add</span>
-      <span>${t('color.customColor')}</span>
-    </button>
-  `;
-
-  document.body.appendChild(popup);
-
-  // Position relative to the anchor, clamped to the viewport. 'right' placement
-  // (used by the sheet-tab menu) flies out to the side like a submenu; the
-  // default drops down beneath the anchor button.
-  const r = anchorEl.getBoundingClientRect();
-  const pr = popup.getBoundingClientRect();
-  if (options.placement === 'right') {
-    // Side flyout: align the palette's bottom with the menu item so it grows
-    // upward — the sheet-tab menu sits at the bottom of the screen, so a
-    // downward popup would fall below the fold. Then clamp within the viewport.
-    popup.style.left = `${r.right + 4}px`;
-    let top = r.bottom - pr.height;
-    top = Math.min(top, window.innerHeight - pr.height - 8);
-    top = Math.max(8, top);
-    popup.style.top = `${top}px`;
-    // Flip to the left of the anchor if it would overflow the right edge.
-    if (r.right + 4 + pr.width > window.innerWidth) {
-      popup.style.left = `${Math.max(4, r.left - pr.width - 4)}px`;
-    }
-  } else {
-    popup.style.left = `${r.left}px`;
-    popup.style.top = `${r.bottom + 4}px`;
-    if (r.left + pr.width > window.innerWidth) popup.style.left = `${Math.max(4, window.innerWidth - pr.width - 4)}px`;
-    if (r.bottom + 4 + pr.height > window.innerHeight) popup.style.top = `${Math.max(4, window.innerHeight - pr.height - 4)}px`;
-  }
-
-  popup.querySelector('#color-reset').onclick = () => { applyChosenColor(type, resetHex); closeColorPalette(); };
-  popup.querySelectorAll('[data-hex]').forEach((btn) => {
-    btn.onclick = () => { applyChosenColor(type, btn.dataset.hex); closeColorPalette(); };
-  });
-  popup.querySelector('#color-custom').onclick = () => {
-    closeColorPalette();
-    let input = document.getElementById(`toolbar-color-${type}-input`);
-    // text/fill have a hidden native input in the toolbar; create one on demand
-    // for any other pen type (e.g. border) so custom colors still flow through.
-    if (!input) {
-      input = document.createElement('input');
-      input.type = 'color';
-      input.id = `toolbar-color-${type}-input`;
-      input.style.display = 'none';
-      input.addEventListener('input', (e) => applyChosenColor(type, e.target.value));
-      document.body.appendChild(input);
-    }
-    input.click();
-  };
-
-  // Dismiss on Escape or click outside (deferred so the opening click doesn't close it).
-  document.addEventListener('keydown', onColorPaletteKeydown, true);
-  colorPaletteOutsideHandler = (ev) => {
-    if (!popup.contains(ev.target) && !anchorEl.contains(ev.target)) closeColorPalette();
-  };
-  setTimeout(() => {
-    if (colorPaletteOutsideHandler) document.addEventListener('click', colorPaletteOutsideHandler, true);
-  }, 0);
-};
-
-const toolbarColorTextBtn = document.getElementById('toolbar-color-text');
-if (toolbarColorTextBtn) {
-  toolbarColorTextBtn.addEventListener('click', (e) => {
-    if (e.target.closest('input')) return; // ignore the hidden native input
-    e.preventDefault();
-    const existing = document.getElementById('color-palette-popup');
-    const wasOpenSame = !!existing && existing.dataset.type === 'text';
-    closeAllMenus();
-    if (!wasOpenSame) openColorPalette('text', toolbarColorTextBtn);
-  });
-}
-const toolbarColorFillBtn = document.getElementById('toolbar-color-fill');
-if (toolbarColorFillBtn) {
-  toolbarColorFillBtn.addEventListener('click', (e) => {
-    if (e.target.closest('input')) return;
-    e.preventDefault();
-    const existing = document.getElementById('color-palette-popup');
-    const wasOpenSame = !!existing && existing.dataset.type === 'fill';
-    closeAllMenus();
-    if (!wasOpenSame) openColorPalette('fill', toolbarColorFillBtn);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Border menu (toolbar border button). A grid of border-application modes plus
-// a border-color picker (reuses the color palette, pen type 'border') and a
-// line-style submenu (thin/medium/thick/dashed/dotted/double). The chosen color
-// + style are applied by applyBordersToSelection() when a mode button is clicked.
-// ---------------------------------------------------------------------------
-const BORDER_MENU_MODES = [
-  { mode: 'all',        icon: 'border_all',        key: 'border.all' },
-  { mode: 'inner',      icon: 'border_inner',      key: 'border.inner' },
-  { mode: 'horizontal', icon: 'border_horizontal', key: 'border.horizontal' },
-  { mode: 'vertical',   icon: 'border_vertical',   key: 'border.vertical' },
-  { mode: 'outer',      icon: 'border_outer',      key: 'border.outer' },
-  { mode: 'left',       icon: 'border_left',       key: 'border.left' },
-  { mode: 'top',        icon: 'border_top',        key: 'border.top' },
-  { mode: 'right',      icon: 'border_right',      key: 'border.right' },
-  { mode: 'bottom',     icon: 'border_bottom',     key: 'border.bottom' },
-  { mode: 'clear',      icon: 'border_clear',      key: 'border.clear' },
-];
-const BORDER_STYLE_OPTIONS = [
-  { style: 'thin',   key: 'border.thin' },
-  { style: 'medium', key: 'border.medium' },
-  { style: 'thick',  key: 'border.thick' },
-  { style: 'dashed', key: 'border.dashed' },
-  { style: 'dotted', key: 'border.dotted' },
-  { style: 'double', key: 'border.double' },
-];
-
-let borderMenuEl = null;
-let borderMenuOutsideHandler = null;
-let borderMenuKeydownHandler = null;
-let borderStyleSubmenuEl = null;
-
-const closeBorderStyleSubmenu = () => {
-  if (borderStyleSubmenuEl) { borderStyleSubmenuEl.remove(); borderStyleSubmenuEl = null; }
-};
-
-const closeBorderMenu = () => {
-  closeColorPalette();
-  closeBorderStyleSubmenu();
-  if (borderMenuOutsideHandler) {
-    document.removeEventListener('click', borderMenuOutsideHandler, true);
-    borderMenuOutsideHandler = null;
-  }
-  if (borderMenuKeydownHandler) {
-    document.removeEventListener('keydown', borderMenuKeydownHandler, true);
-    borderMenuKeydownHandler = null;
-  }
-  if (borderMenuEl) { borderMenuEl.remove(); borderMenuEl = null; }
-};
-
-// Clamp a popup to the viewport, anchored under (or above) the given rect.
-const positionPopupUnder = (popup, anchorRect) => {
-  popup.style.left = `${anchorRect.left}px`;
-  popup.style.top = `${anchorRect.bottom + 4}px`;
-  const pr = popup.getBoundingClientRect();
-  if (pr.right > window.innerWidth) popup.style.left = `${Math.max(4, window.innerWidth - pr.width - 4)}px`;
-  if (pr.bottom > window.innerHeight) popup.style.top = `${Math.max(4, anchorRect.top - pr.height - 4)}px`;
-};
-
-const openBorderStyleSubmenu = (anchorEl) => {
-  const existing = borderStyleSubmenuEl;
-  closeBorderStyleSubmenu();
-  if (existing) return; // toggle closed
-
-  const sub = document.createElement('div');
-  borderStyleSubmenuEl = sub;
-  sub.id = 'border-style-submenu';
-  sub.className = 'fixed z-[1001] bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded-lg shadow-lg py-1 select-none text-on-surface dark:text-on-surface-variant';
-
-  let html = '';
-  BORDER_STYLE_OPTIONS.forEach((o) => {
-    const lineCss = BORDER_STYLE_CSS[o.style]('currentColor');
-    const checkVis = o.style === currentBorderStyle ? 'visible' : 'hidden';
-    html += `<button type="button" class="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-variant text-label-md" data-style="${o.style}">
-        <span class="material-symbols-outlined text-[16px]" style="visibility:${checkVis}">check</span>
-        <span class="block w-12" style="border-top:${lineCss}"></span>
-        <span class="flex-1 text-left whitespace-nowrap">${t(o.key)}</span>
-      </button>`;
-  });
-  sub.innerHTML = html;
-  document.body.appendChild(sub);
-  positionPopupUnder(sub, anchorEl.getBoundingClientRect());
-
-  sub.querySelectorAll('[data-style]').forEach((btn) => {
-    btn.onclick = () => {
-      currentBorderStyle = btn.dataset.style;
-      const preview = document.getElementById('border-style-preview');
-      if (preview) preview.style.borderTop = BORDER_STYLE_CSS[currentBorderStyle]('currentColor');
-      closeBorderStyleSubmenu();
-    };
-  });
-};
-
-const openBorderMenu = (anchorEl) => {
-  const existing = borderMenuEl;
-  closeBorderMenu();
-  if (existing) return; // toggle closed when re-clicking the toolbar button
-
-  const menu = document.createElement('div');
-  borderMenuEl = menu;
-  menu.id = 'border-menu-popup';
-  menu.className = 'fixed z-[1000] bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded-lg shadow-lg p-2 select-none text-on-surface dark:text-on-surface-variant';
-
-  const btnCls = 'flex items-center justify-center w-9 h-9 rounded hover:bg-surface-variant cursor-pointer';
-  let gridHtml = '';
-  BORDER_MENU_MODES.forEach((m) => {
-    gridHtml += `<button type="button" class="${btnCls}" data-mode="${m.mode}" title="${t(m.key)}"><span class="material-symbols-outlined text-[20px]">${m.icon}</span></button>`;
-  });
-  const styleLineCss = BORDER_STYLE_CSS[currentBorderStyle]('currentColor');
-
-  menu.innerHTML = `
-    <div class="flex items-stretch gap-2">
-      <div class="grid grid-cols-5 gap-0.5">${gridHtml}</div>
-      <div class="w-px bg-outline-variant self-stretch"></div>
-      <div class="flex flex-col justify-center gap-1">
-        <button type="button" id="border-color-btn" class="flex items-center gap-1 px-2 h-9 rounded hover:bg-surface-variant cursor-pointer" title="${t('border.color')}">
-          <span class="material-symbols-outlined text-[20px]">border_color</span>
-          <span id="border-color-swatch" class="block w-4 h-1 rounded-sm" style="background-color:${currentBorderColor}"></span>
-          <span class="material-symbols-outlined text-[18px] ml-auto">arrow_drop_down</span>
-        </button>
-        <button type="button" id="border-style-btn" class="flex items-center gap-1 px-2 h-9 rounded hover:bg-surface-variant cursor-pointer" title="${t('border.style')}">
-          <span class="material-symbols-outlined text-[20px]">line_weight</span>
-          <span id="border-style-preview" class="block w-6" style="border-top:${styleLineCss}"></span>
-          <span class="material-symbols-outlined text-[18px] ml-auto">arrow_drop_down</span>
-        </button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(menu);
-  positionPopupUnder(menu, anchorEl.getBoundingClientRect());
-
-  menu.querySelectorAll('[data-mode]').forEach((btn) => {
-    btn.onclick = () => { applyBordersToSelection(btn.dataset.mode); closeBorderMenu(); };
-  });
-  menu.querySelector('#border-color-btn').onclick = (e) => {
-    e.stopPropagation();
-    closeBorderStyleSubmenu();
-    openColorPalette('border', menu.querySelector('#border-color-btn'));
-  };
-  menu.querySelector('#border-style-btn').onclick = (e) => {
-    e.stopPropagation();
-    closeColorPalette();
-    openBorderStyleSubmenu(menu.querySelector('#border-style-btn'));
-  };
-
-  borderMenuKeydownHandler = (ev) => { if (ev.key === 'Escape') closeBorderMenu(); };
-  document.addEventListener('keydown', borderMenuKeydownHandler, true);
-  // Close when clicking outside the menu and its child popups (color palette / style submenu).
-  borderMenuOutsideHandler = (ev) => {
-    const palette = document.getElementById('color-palette-popup');
-    if (menu.contains(ev.target)) return;
-    if (anchorEl.contains(ev.target)) return;
-    if (palette && palette.contains(ev.target)) return;
-    if (borderStyleSubmenuEl && borderStyleSubmenuEl.contains(ev.target)) return;
-    closeBorderMenu();
-  };
-  setTimeout(() => {
-    if (borderMenuOutsideHandler) document.addEventListener('click', borderMenuOutsideHandler, true);
-  }, 0);
-};
+// Border menu (toolbar border button) lives in border-menu.js
+// (window.CoSheet.borderMenu); wired via window.CoSheet.app near the bottom.
 
 // Global keyboard listener for direct cell typing (overwrite & inline) and clear actions
 document.addEventListener('keydown', (e) => {
@@ -6817,7 +6083,7 @@ const showSheetContextMenu = (sheetName, x, y) => {
   const openSheetColorPalette = () => {
     const existing = document.getElementById('color-palette-popup');
     if (existing && existing.dataset.type === 'sheet') return; // already open
-    openColorPalette('sheet', colorOpt, { placement: 'right', sheetName });
+    window.CoSheet.colorPalette.open('sheet', colorOpt, { placement: 'right', sheetName });
   };
   colorOpt.addEventListener('mouseenter', openSheetColorPalette);
   colorOpt.addEventListener('click', (e) => { e.stopPropagation(); openSheetColorPalette(); });
@@ -6827,7 +6093,7 @@ const showSheetContextMenu = (sheetName, x, y) => {
   menu.addEventListener('mouseover', (e) => {
     if (colorOpt.contains(e.target)) return;
     const p = document.getElementById('color-palette-popup');
-    if (p && p.dataset.type === 'sheet') closeColorPalette();
+    if (p && p.dataset.type === 'sheet') window.CoSheet.colorPalette.close();
   });
 
   // 5. Hide Option
@@ -6920,7 +6186,7 @@ const showSheetContextMenu = (sheetName, x, y) => {
   // Dismiss menu on click elsewhere
   const dismiss = () => {
     menu.remove();
-    closeColorPalette();
+    window.CoSheet.colorPalette.close();
     document.removeEventListener('click', dismiss);
   };
   // Timeout prevents triggering dismiss on this immediate click event
@@ -8250,7 +7516,7 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
   // Each opener button paired with a predicate reporting whether ITS own menu is
   // currently open.
   const openers = [
-    { btn: 'toolbar-border',         isOpen: () => !!borderMenuEl },
+    { btn: 'toolbar-border',         isOpen: () => window.CoSheet.borderMenu.isOpen() },
     { btn: 'toolbar-align',          isOpen: () => !menuHidden('toolbar-align-menu') },
     { btn: 'toolbar-valign',         isOpen: () => !menuHidden('toolbar-valign-menu') },
     { btn: 'toolbar-zoom-arrow',     isOpen: () => !menuHidden('toolbar-zoom-menu') },
@@ -8458,23 +7724,8 @@ if (findDoneBtn) {
   };
 }
 
-// Bind find next button
-const findBtn = document.getElementById('find-btn');
-if (findBtn) {
-  findBtn.onclick = findNextMatch;
-}
-
-// Bind replace current button
-const replaceBtn = document.getElementById('replace-btn');
-if (replaceBtn) {
-  replaceBtn.onclick = replaceCurrentMatch;
-}
-
-// Bind replace all button
-const replaceAllBtn = document.getElementById('replace-all-btn');
-if (replaceAllBtn) {
-  replaceAllBtn.onclick = replaceAllMatches;
-}
+// The Find / Replace / Replace-all action buttons are wired by find-replace.js
+// (window.CoSheet.findReplace) via its init() below.
 
 /**
  * Share dialog. Only features backed by real server behavior are functional:
@@ -9066,296 +8317,69 @@ if (shareModal) {
   });
 }
 
-/**
- * Localized date formatter for version grouping.
- * @param {string|Date} dateStr - Timestamp.
- * @returns {string} The group header.
- */
-const formatVersionGroup = (dateStr) => {
-  const date = new Date(dateStr);
-  const now = new Date();
-  
-  const dMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const oneDay = 24 * 60 * 60 * 1000;
-  
-  const diffDays = Math.round((nowMidnight - dMidnight) / oneDay);
-  
-  if (diffDays === 0) {
-    return '今天';
-  } else if (diffDays === 1) {
-    return '昨天';
-  } else if (diffDays > 1 && diffDays < 7) {
-    const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-    return weekdays[date.getDay()];
-  } else {
-    return `${date.getMonth() + 1}月${date.getDate()}日`;
-  }
+// ---------------------------------------------------------------------------
+// Version history. The sidebar controller lives in version-history.js
+// (window.CoSheet.history): it owns the versions list and drives the preview.
+// isHistoryMode / selectedVersionState / previousVersionState stay here because
+// the grid renderer reads them for diff highlighting; the module mirrors them
+// back on every change via syncState.
+// ---------------------------------------------------------------------------
+window.CoSheet.history.init({
+  renderGrid: renderSpreadsheetGrid,
+  renderSheetTabs: () => { if (typeof renderSheetTabs === "function") renderSheetTabs(); },
+  syncState: (s) => {
+    isHistoryMode = s.mode;
+    selectedVersionState = s.selected;
+    previousVersionState = s.previous;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Shared core services. A small bag of live state getters and cell mutators
+// that extracted feature modules (find-replace.js, …) consume instead of the
+// module-scoped bindings they used to close over. Getters keep the reassignable
+// state (activeCellId, activeSheetName, sheetOrder, localSheets, socket) live;
+// localCells is a stable proxy passed by reference. Grow this as more domains
+// are extracted.
+// ---------------------------------------------------------------------------
+window.CoSheet.app = {
+  TOTAL_ROWS,
+  get activeCellId() { return activeCellId; },
+  get activeSheetName() { return activeSheetName; },
+  get sheetOrder() { return sheetOrder; },
+  get localSheets() { return localSheets; },
+  localCells,
+  get socket() { return socket; },
+  switchSheet,
+  handleCellSelect,
+  recordHistoryAction,
+  updateGridDOMCell,
+  getCellValue,
+  recalculateSheet,
+  getSelectedCellIds,
+  changeCellTextColor,
+  changeCellColor,
+  closeAllMenus,
+  // Set the border pen color (kept in app.js as the border menu / applyBorders
+  // read it) and reflect it on the menu swatch. Used by the color palette's
+  // 'border' pen type.
+  setBorderColor: (hex) => {
+    currentBorderColor = hex;
+    const swatch = document.getElementById('border-color-swatch');
+    if (swatch) swatch.style.backgroundColor = hex;
+  },
+  // Border pen state (read by applyBordersToSelection's mkSpec) + the line-style
+  // CSS map. The border menu module reads these to render and sets the style.
+  BORDER_STYLE_CSS,
+  get borderColor() { return currentBorderColor; },
+  get borderStyle() { return currentBorderStyle; },
+  setBorderStyle: (style) => { currentBorderStyle = style; },
+  applyBordersToSelection,
 };
 
-/**
- * Localized time formatter for individual version entries.
- * @param {string|Date} dateStr - Timestamp.
- * @returns {string} Formatted localized time string.
- */
-const formatVersionTime = (dateStr) => {
-  const date = new Date(dateStr);
-  const hours = date.getHours();
-  const minutes = date.getMinutes().toString().padStart(2, '0');
-  
-  let period = '';
-  let displayHours = hours;
-  
-  if (hours >= 0 && hours < 5) {
-    period = '凌晨';
-  } else if (hours >= 5 && hours < 8) {
-    period = '清晨';
-  } else if (hours >= 8 && hours < 11) {
-    period = '早上';
-  } else if (hours >= 11 && hours < 13) {
-    period = '中午';
-  } else if (hours >= 13 && hours < 17) {
-    period = '下午';
-    if (hours > 12) displayHours = hours - 12;
-  } else if (hours >= 17 && hours < 19) {
-    period = '傍晚';
-    if (hours > 12) displayHours = hours - 12;
-  } else {
-    period = '晚上';
-    if (hours > 12) displayHours = hours - 12;
-  }
-  
-  if (displayHours === 0) displayHours = 12;
-  
-  return `${date.getMonth() + 1}月${date.getDate()}日，${period}${displayHours}:${minutes}`;
-};
-
-/**
- * Renders the versions list in the right sidebar panel, grouped by date.
- */
-const renderVersionsList = () => {
-  const listContainer = document.getElementById('history-list');
-  if (!listContainer) return;
-  listContainer.innerHTML = '';
-
-  const groups = {};
-  versionsList.forEach((version, index) => {
-    const groupName = formatVersionGroup(version.created_at);
-    if (!groups[groupName]) {
-      groups[groupName] = [];
-    }
-    groups[groupName].push({ version, index });
-  });
-
-  Object.keys(groups).forEach(groupName => {
-    const headerEl = document.createElement('div');
-    headerEl.className = 'px-4 py-2 bg-gray-50 dark:bg-surface-variant text-[11px] font-bold text-gray-500 dark:text-outline uppercase tracking-wider select-none';
-    headerEl.innerText = groupName;
-    listContainer.appendChild(headerEl);
-
-    groups[groupName].forEach(({ version, index }) => {
-      const itemEl = document.createElement('div');
-      
-      const isSelected = selectedVersionState && selectedVersionState.id === version.id;
-      const isActiveVersion = index === 0;
-      
-      itemEl.className = `p-4 border-l-4 cursor-pointer relative transition-colors ${
-        isSelected
-          ? 'bg-blue-50/50 dark:bg-secondary/10 border-primary'
-          : 'hover:bg-gray-50 dark:hover:bg-surface-variant border-transparent'
-      }`;
-
-      const timeStr = formatVersionTime(version.created_at);
-      
-      itemEl.innerHTML = `
-        <div class="flex items-start justify-between">
-          <div class="flex items-center space-x-2">
-            <span class="material-symbols-outlined text-gray-400 text-sm">chevron_right</span>
-            <div class="text-sm ${isSelected ? 'font-semibold text-gray-900 dark:text-inverse-on-surface' : 'text-gray-700 dark:text-outline'}">${timeStr}</div>
-          </div>
-        </div>
-        ${isActiveVersion ? '<div class="ml-6 mt-1 text-xs text-gray-500 dark:text-outline">目前版本</div>' : ''}
-        <div class="ml-6 mt-2 flex items-center space-x-2">
-          <span class="w-2 h-2 rounded-full bg-[#009688]"></span>
-          <span class="text-xs text-gray-600 dark:text-outline">${escapeHtml(version.created_by)}</span>
-        </div>
-      `;
-
-      itemEl.addEventListener('click', () => {
-        selectVersion(version.id);
-      });
-
-      listContainer.appendChild(itemEl);
-    });
-  });
-};
-
-/**
- * Loads details for a selected version from the API, fetches its preceding version to compute diffs,
- * and triggers grid re-rendering.
- * @param {number} versionId - The version ID.
- */
-const selectVersion = async (versionId) => {
-  try {
-    const res = await fetch(`/api/versions/${versionId}`);
-    if (res.status === 401) {
-      window.location.href = '/login';
-      return;
-    }
-    const versionData = await res.json();
-    selectedVersionState = versionData;
-    
-    const index = versionsList.findIndex(v => v.id === versionId);
-    
-    if (index !== -1 && index + 1 < versionsList.length) {
-      const prevVersion = versionsList[index + 1];
-      const prevRes = await fetch(`/api/versions/${prevVersion.id}`);
-      previousVersionState = await prevRes.json();
-    } else {
-      previousVersionState = null;
-    }
-    
-    const selectedVersionInfo = versionsList[index];
-    if (selectedVersionInfo) {
-      const titleDateEl = document.getElementById('history-title-date');
-      if (titleDateEl) {
-        titleDateEl.innerText = formatVersionTime(selectedVersionInfo.created_at);
-      }
-    }
-    
-    const restoreBtn = document.getElementById('history-restore-btn');
-    if (restoreBtn) {
-      if (index === 0) {
-        restoreBtn.classList.add('hidden');
-      } else {
-        restoreBtn.classList.remove('hidden');
-      }
-    }
-    
-    renderVersionsList();
-    renderSpreadsheetGrid();
-  } catch (err) {
-    console.error('Failed to load version details:', err);
-  }
-};
-
-/**
- * Restores the active workbook state to the currently previewed history version.
- */
-const restoreVersion = async () => {
-  if (!selectedVersionState || !selectedVersionState.id) return;
-  try {
-    const res = await fetch(`/api/versions/${selectedVersionState.id}/restore`, {
-      method: 'POST'
-    });
-    if (res.status === 401) {
-      window.location.href = '/login';
-      return;
-    }
-    const data = await res.json();
-    if (data.success) {
-      toggleHistoryMode(false);
-    } else {
-      alert('無法還原此版本');
-    }
-  } catch (err) {
-    console.error('Error during version restoration:', err);
-    alert('還原版本時發生錯誤');
-  }
-};
-
-/**
- * Toggles the application between edit mode and read-only history preview mode.
- * @param {boolean} enabled - True to enable history mode, false to disable.
- */
-const toggleHistoryMode = async (enabled) => {
-  isHistoryMode = enabled;
-
-  const normalHeader = document.querySelector('header');
-  const utilityShelf = document.querySelector('aside:not(#history-sidebar)');
-  const bottomFooter = document.querySelector('footer');
-  const mainContent = document.querySelector('main');
-  
-  const historyTopBar = document.getElementById('history-top-bar');
-  const historySidebar = document.getElementById('history-sidebar');
-
-  if (enabled) {
-    if (normalHeader) normalHeader.classList.add('hidden');
-    if (utilityShelf) utilityShelf.classList.add('hidden');
-    
-    if (historyTopBar) historyTopBar.classList.remove('hidden');
-    if (historySidebar) historySidebar.classList.remove('hidden');
-
-    if (mainContent) {
-      mainContent.classList.remove('mr-[48px]');
-      mainContent.classList.add('mr-[320px]');
-    }
-
-    try {
-      const res = await fetch('/api/versions');
-      if (res.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
-      versionsList = await res.json();
-      
-      if (versionsList.length > 0) {
-        await selectVersion(versionsList[0].id);
-      } else {
-        selectedVersionState = null;
-        previousVersionState = null;
-        renderSpreadsheetGrid();
-      }
-    } catch (err) {
-      console.error('Failed to fetch version history:', err);
-    }
-  } else {
-    if (normalHeader) normalHeader.classList.remove('hidden');
-    if (utilityShelf) utilityShelf.classList.remove('hidden');
-    
-    if (historyTopBar) historyTopBar.classList.add('hidden');
-    if (historySidebar) historySidebar.classList.add('hidden');
-
-    if (mainContent) {
-      mainContent.classList.remove('mr-[320px]');
-      mainContent.classList.add('mr-[48px]');
-    }
-
-    selectedVersionState = null;
-    previousVersionState = null;
-
-    renderSpreadsheetGrid();
-    if (typeof renderSheetTabs === 'function') {
-      renderSheetTabs();
-    }
-  }
-};
-
-// Bind Version History UI interaction event triggers
-const headerHistoryBtn = document.getElementById('header-history-btn');
-if (headerHistoryBtn) {
-  headerHistoryBtn.addEventListener('click', () => toggleHistoryMode(true));
-}
-
-const historyExitBtn = document.getElementById('history-exit-btn');
-if (historyExitBtn) {
-  historyExitBtn.addEventListener('click', () => toggleHistoryMode(false));
-}
-
-const highlightChangesCheckbox = document.getElementById('highlightChanges');
-if (highlightChangesCheckbox) {
-  highlightChangesCheckbox.addEventListener('change', () => renderSpreadsheetGrid());
-}
-
-const showUneditedCheckbox = document.getElementById('showUnedited');
-if (showUneditedCheckbox) {
-  showUneditedCheckbox.addEventListener('change', () => renderSpreadsheetGrid());
-}
-
-const historyRestoreBtn = document.getElementById('history-restore-btn');
-if (historyRestoreBtn) {
-  historyRestoreBtn.onclick = restoreVersion;
-}
+window.CoSheet.findReplace.init(window.CoSheet.app);
+window.CoSheet.colorPalette.init(window.CoSheet.app);
+window.CoSheet.borderMenu.init(window.CoSheet.app);
 
 // ---------------------------------------------------------------------------
 // Synthetic grid scrollbars.

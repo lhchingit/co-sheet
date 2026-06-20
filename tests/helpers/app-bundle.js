@@ -17,6 +17,10 @@ export function readAppBundle() {
     read('sheet-utils.js'),
     read('formula-engine.js'),
     read('i18n.js'),
+    read('version-history.js'),
+    read('find-replace.js'),
+    read('color-palette.js'),
+    read('border-menu.js'),
     read('app.js')
   ].join('\n;\n');
 }
