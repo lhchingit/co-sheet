@@ -21,6 +21,7 @@ export function readAppBundle() {
     read('find-replace.js'),
     read('color-palette.js'),
     read('border-menu.js'),
+    read('sort-filter.js'),
     read('app.js')
   ].join('\n;\n');
 }
