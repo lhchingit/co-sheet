@@ -22,6 +22,7 @@ export function readAppBundle() {
     read('color-palette.js'),
     read('border-menu.js'),
     read('sort-filter.js'),
+    read('fn-autocomplete.js'),
     read('app.js')
   ].join('\n;\n');
 }

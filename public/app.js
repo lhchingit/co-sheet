@@ -2200,17 +2200,16 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   // Route the function autocomplete to this cell while it is being edited, so a
   // formula typed inline gets the same suggestion dropdown as the formula bar.
   // The same adapter drives formula point mode (range picking by drag).
-  fnAcEditor = makeCellEditor(cellEl);
-  activeFormulaEditor = fnAcEditor;
+  activeFormulaEditor = makeCellEditor(cellEl);
   resetFormulaPick();
   // Highlight the references of an existing formula (e.g. double-clicking a SUM
   // cell outlines its range in orange); refreshed on every keystroke below.
   refreshFormulaRefHighlights();
-  cellEl.oninput = () => { onFormulaEditorTyped(); updateFnAutocomplete(); };
+  cellEl.oninput = () => { onFormulaEditorTyped(); window.CoSheet.fnAutocomplete.update(makeCellEditor(cellEl)); };
 
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
-    closeFnAutocomplete();
+    window.CoSheet.fnAutocomplete.close();
     cellEl.oninput = null;
     cellEl.removeAttribute('contenteditable');
     // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4" → ")").
@@ -2224,11 +2223,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   cellEl.onkeydown = (e) => {
     // When the autocomplete is open, let it consume navigation/accept keys
     // first so Enter/Tab pick a suggestion instead of committing the cell.
-    if (isFnAutocompleteOpen()) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); moveFnAutocomplete(1); return; }
-      if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); acceptFnAutocomplete(); return; }
-      if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); closeFnAutocomplete(); return; }
+    if (window.CoSheet.fnAutocomplete.isOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); window.CoSheet.fnAutocomplete.move(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); window.CoSheet.fnAutocomplete.move(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); window.CoSheet.fnAutocomplete.accept(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); window.CoSheet.fnAutocomplete.close(); return; }
     }
     // Esc ends an in-progress range pick (removing the just-picked reference)
     // before it would cancel the whole cell edit.
@@ -2330,11 +2329,11 @@ if (formulaBarInput) {
   formulaBarInput.addEventListener('keydown', (e) => {
     // When the function autocomplete is open, let it consume navigation/accept
     // keys first so Enter/Tab pick a suggestion instead of committing the cell.
-    if (isFnAutocompleteOpen()) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); moveFnAutocomplete(1); return; }
-      if (e.key === 'ArrowUp')   { e.preventDefault(); moveFnAutocomplete(-1); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptFnAutocomplete(); return; }
-      if (e.key === 'Escape')    { e.preventDefault(); closeFnAutocomplete(); return; }
+    if (window.CoSheet.fnAutocomplete.isOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); window.CoSheet.fnAutocomplete.move(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); window.CoSheet.fnAutocomplete.move(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); window.CoSheet.fnAutocomplete.accept(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); window.CoSheet.fnAutocomplete.close(); return; }
     }
     // Esc ends an in-progress range pick (removing the just-picked reference).
     if (e.key === 'Escape' && cancelFormulaPick()) {
@@ -2344,7 +2343,7 @@ if (formulaBarInput) {
     }
     if (e.key === 'Enter' && activeCellId) {
       e.preventDefault(); // Prevent default enter key behavior
-      closeFnAutocomplete();
+      window.CoSheet.fnAutocomplete.close();
       // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4").
       const text = balanceFormulaParens(formulaBarInput.value);
       resetFormulaPick();
@@ -2364,46 +2363,22 @@ if (formulaBarInput) {
   // Recompute suggestions as the user types / moves the caret. These are
   // wrapped in arrows so the (const) handlers are resolved lazily at event
   // time rather than read here during top-level execution (TDZ-safe).
-  formulaBarInput.addEventListener('input', () => { onFormulaEditorTyped(); fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
-  formulaBarInput.addEventListener('click', () => { fnAcEditor = makeInputEditor(formulaBarInput); updateFnAutocomplete(); });
+  formulaBarInput.addEventListener('input', () => { onFormulaEditorTyped(); window.CoSheet.fnAutocomplete.update(makeInputEditor(formulaBarInput)); });
+  formulaBarInput.addEventListener('click', () => { window.CoSheet.fnAutocomplete.update(makeInputEditor(formulaBarInput)); });
   // Close when leaving the field (delayed so a click on a suggestion still
   // registers via its mousedown handler before blur tears the popup down). A
   // point-mode grid click keeps focus (preventDefault), so this only runs on a
   // real exit — clear the pick state and drop the formula-editor context.
   formulaBarInput.addEventListener('blur', () => setTimeout(() => {
-    closeFnAutocomplete();
+    window.CoSheet.fnAutocomplete.close();
     activeFormulaEditor = null;
     resetFormulaPick();
   }, 120));
 }
 
-/* ---------------------------------------------------------------------------
- * Formula-bar function autocomplete
- * ---------------------------------------------------------------------------
- * When the user types "=" followed by letters in the formula bar, a dropdown
- * suggests matching spreadsheet function names (from window.SHEET_FUNCTIONS).
- * Tab/Enter inserts the highlighted function as "NAME(" with the caret placed
- * inside the parentheses; ↑↓ browse; Esc dismisses. This is a typing aid only
- * (see sheet-functions.js) — it does not change what the formula engine can
- * actually evaluate.
- * ------------------------------------------------------------------------- */
-let fnAcEl = null;          // dropdown DOM element (null when closed)
-let fnAcMatches = [];       // current matching function entries
-let fnAcIndex = 0;          // highlighted index within fnAcMatches
-let fnAcTokenStart = -1;    // caret-relative start of the typed function token
-const FN_AC_MAX = 50;       // cap suggestions to keep the list manageable
-
-/**
- * The editor the autocomplete is currently attached to. The dropdown serves two
- * very different inputs — the top formula bar (an <input>) and an inline-editing
- * cell (a contenteditable <div>) — so each is wrapped in a small adapter with a
- * uniform interface (getValue/getCaret/getRect/focus/replaceToken). All the
- * autocomplete logic below talks to this adapter and never to a concrete element.
- * @type {{ el: HTMLElement, getValue: () => string, getCaret: () => number,
- *          getRect: () => DOMRect, focus: () => void,
- *          replaceToken: (start: number, caret: number, insert: string) => void } | null}
- */
-let fnAcEditor = null;
+// Function-name autocomplete state/logic moved to fn-autocomplete.js
+// (window.CoSheet.fnAutocomplete). The editor adapters below are also used by
+// formula point mode (activeFormulaEditor), so they stay here.
 
 /** Adapter for the formula-bar <input> (value / selection / setSelectionRange). */
 function makeInputEditor(input) {
@@ -2635,7 +2610,7 @@ const applyFormulaPick = () => {
   ed.replaceToken(fpInsertStart, fpInsertStart + fpInsertLen, ref);
   fpInsertLen = ref.length;
   fpJustPicked = true;
-  closeFnAutocomplete(); // the picked ref takes precedence over any suggestions
+  window.CoSheet.fnAutocomplete.close(); // the picked ref takes precedence over any suggestions
   renderFormulaRefHighlights(ed.getValue());
 };
 
@@ -2714,138 +2689,8 @@ const onFormulaEditorTyped = () => {
   refreshFormulaRefHighlights();
 };
 
-const isFnAutocompleteOpen = () => fnAcEl !== null;
-
-/**
- * Extracts the function-name token immediately to the left of the caret.
- * Only triggers in formula mode (value starts with "="). Returns null when the
- * caret is not at the end of a letter-led identifier.
- * @returns {{ word: string, start: number } | null}
- */
-const getFnToken = () => {
-  if (!fnAcEditor) return null;
-  const value = fnAcEditor.getValue();
-  if (!value.startsWith('=')) return null;
-  const caret = fnAcEditor.getCaret();
-  // Caret must be a collapsed cursor (no selection) for predictable insertion.
-  if (caret < 0) return null;
-  const left = value.slice(0, caret);
-  const m = left.match(/([A-Za-z][A-Za-z0-9_.]*)$/);
-  if (!m) return null;
-  return { word: m[1], start: caret - m[1].length };
-};
-
-/** Recomputes matches from the current token and shows/hides the dropdown. */
-const updateFnAutocomplete = () => {
-  const catalog = window.SHEET_FUNCTIONS;
-  if (!Array.isArray(catalog) || catalog.length === 0) { closeFnAutocomplete(); return; }
-  const token = getFnToken();
-  if (!token) { closeFnAutocomplete(); return; }
-  const prefix = token.word.toUpperCase();
-  const matches = catalog.filter(fn => fn.n.startsWith(prefix)).slice(0, FN_AC_MAX);
-  if (matches.length === 0) { closeFnAutocomplete(); return; }
-  fnAcMatches = matches;
-  fnAcTokenStart = token.start;
-  fnAcIndex = 0;
-  renderFnAutocomplete();
-};
-
-/** Builds (or rebuilds) the dropdown DOM and positions it under the input. */
-const renderFnAutocomplete = () => {
-  const lang = getLang();
-  if (!fnAcEl) {
-    fnAcEl = document.createElement('div');
-    fnAcEl.id = 'fn-autocomplete';
-    fnAcEl.className = 'fixed z-[1000] bg-surface-container-lowest dark:bg-inverse-surface ' +
-      'border border-outline-variant rounded-lg shadow-lg overflow-hidden select-none ' +
-      'text-on-surface dark:text-on-surface-variant text-label-md';
-    document.body.appendChild(fnAcEl);
-  }
-
-  const rows = fnAcMatches.map((fn, i) => {
-    const active = i === fnAcIndex;
-    const desc = (fn[lang] || fn.en || '').replace(/</g, '&lt;');
-    const descHtml = active && desc
-      ? `<div class="text-xs text-on-surface-variant/80 mt-0.5">${desc}</div>`
-      : '';
-    return `
-      <div class="fn-ac-item px-3 py-1.5 cursor-pointer ${active ? 'bg-surface-variant' : 'hover:bg-surface-variant/60'}" data-idx="${i}">
-        <div class="font-mono-data text-on-surface dark:text-on-surface-variant">${fn.n}</div>
-        ${descHtml}
-      </div>`;
-  }).join('');
-
-  fnAcEl.innerHTML = `
-    <div class="fn-ac-list max-h-72 overflow-y-auto py-1">${rows}</div>
-    <div class="px-3 py-1.5 border-t border-outline-variant text-xs text-on-surface-variant/70">
-      ${t('fn.hint')}
-    </div>`;
-
-  // Insert the highlighted suggestion on click. mousedown (not click) fires
-  // before the input's blur handler, so the popup is still alive.
-  fnAcEl.querySelectorAll('.fn-ac-item').forEach(item => {
-    item.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      fnAcIndex = parseInt(item.dataset.idx, 10) || 0;
-      acceptFnAutocomplete();
-    });
-  });
-
-  positionFnAutocomplete();
-};
-
-/** Positions the dropdown beneath the active editor, clamped to viewport. */
-const positionFnAutocomplete = () => {
-  if (!fnAcEl || !fnAcEditor) return;
-  const rect = fnAcEditor.getRect();
-  const width = Math.min(380, Math.max(220, rect.width));
-  let left = rect.left;
-  if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
-  if (left < 8) left = 8;
-  fnAcEl.style.width = `${width}px`;
-  fnAcEl.style.left = `${left}px`;
-  fnAcEl.style.top = `${rect.bottom + 2}px`;
-};
-
-/** Moves the highlight by delta (wrapping) and re-renders. */
-const moveFnAutocomplete = (delta) => {
-  if (!isFnAutocompleteOpen() || fnAcMatches.length === 0) return;
-  const n = fnAcMatches.length;
-  fnAcIndex = (fnAcIndex + delta + n) % n;
-  renderFnAutocomplete();
-  // Keep the active row visible within the scroll area.
-  const activeRow = fnAcEl.querySelector(`.fn-ac-item[data-idx="${fnAcIndex}"]`);
-  if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
-};
-
-/** Replaces the typed token with "NAME(" and places the caret inside. */
-const acceptFnAutocomplete = () => {
-  if (!isFnAutocompleteOpen() || !fnAcEditor) return;
-  const fn = fnAcMatches[fnAcIndex];
-  if (!fn) { closeFnAutocomplete(); return; }
-  const caret = fnAcEditor.getCaret();
-  if (caret < 0) { closeFnAutocomplete(); return; }
-  fnAcEditor.replaceToken(fnAcTokenStart, caret, `${fn.n}(`);
-  closeFnAutocomplete();
-};
-
-/** Tears down the dropdown and resets state. */
-const closeFnAutocomplete = () => {
-  if (fnAcEl) { fnAcEl.remove(); fnAcEl = null; }
-  fnAcMatches = [];
-  fnAcIndex = 0;
-  fnAcTokenStart = -1;
-};
-
-// Reposition on viewport changes; close on outside interaction.
-window.addEventListener('resize', () => { if (isFnAutocompleteOpen()) positionFnAutocomplete(); });
-document.addEventListener('mousedown', (e) => {
-  if (!isFnAutocompleteOpen()) return;
-  const editorEl = fnAcEditor && fnAcEditor.el;
-  if (fnAcEl.contains(e.target)) return;
-  if (editorEl && (e.target === editorEl || editorEl.contains(e.target))) return;
-  closeFnAutocomplete();
-});
+// Function-name autocomplete lives in fn-autocomplete.js
+// (window.CoSheet.fnAutocomplete); the editor handlers above drive it via update().
 
 /**
  * Renders active cursor border highlights for collaborative remote peers.
