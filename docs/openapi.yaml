@@ -1,0 +1,863 @@
+openapi: 3.0.3
+info:
+  title: Co-Sheet API
+  version: 1.0.0
+  description: >
+    HTTP API for Co-Sheet, a real-time collaborative spreadsheet. Health/probe
+    endpoints are public; everything else requires an authenticated session
+    cookie established via the OIDC (Google / Local OIDC / mock) sign-in flow.
+
+
+    Real-time editing happens over a **WebSocket** connection (an HTTP upgrade on
+    the same server, not described here): on connect the server computes the
+    user's `canEdit` flag and silently drops state-changing messages from users
+    without edit rights. A mock **OIDC provider** is also served under `/oidc/*`
+    (discovery, JWKS, authorize, token, userinfo) for local development and tests.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: Health
+    description: Liveness / startup / readiness probes (public, unauthenticated).
+  - name: Auth
+    description: Authentication and session.
+  - name: Users
+    description: Users and permissions (admin-gated).
+  - name: Files
+    description: Files, cells, sharing, and versions.
+paths:
+  /livez:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: >
+        Always `200`. Checks no dependencies, so a transient DB/Redis outage
+        never triggers a restart loop. Also answers `HEAD`.
+      security: []
+      responses:
+        '200':
+          description: Process is alive.
+  /startupz:
+    get:
+      tags: [Health]
+      summary: Startup probe
+      description: >
+        `200` once startup completes (schema, state load, bus init, listening);
+        `503` until then. Also answers `HEAD`.
+      security: []
+      responses:
+        '200':
+          description: Startup complete.
+        '503':
+          description: Still starting.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: starting
+  /readyz:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: >
+        `200` only when startup is done **and** Postgres (`SELECT 1`) plus Redis
+        (when configured) are reachable; otherwise `503` with a per-check
+        breakdown. A failing check carries an `error: <message>` string. Also
+        answers `HEAD`.
+      security: []
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyStatus'
+              example:
+                status: ok
+                checks: { startup: ok, db: ok, redis: ok }
+        '503':
+          description: Not ready; one or more checks failing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyStatus'
+  /login:
+    get:
+      tags: [Auth]
+      summary: Sign-in page
+      security: []
+      responses:
+        '200':
+          description: HTML sign-in page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /auth/google:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth (or mock) sign-in
+      security: []
+      responses:
+        '302':
+          description: Redirect to the OAuth provider (or mock sign-in page).
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: OAuth callback
+      security: []
+      responses:
+        '302':
+          description: Redirect to the drive on success, or back to login on failure.
+  /logout:
+    get:
+      tags: [Auth]
+      summary: End session and clear cookies
+      responses:
+        '302':
+          description: Redirect to the login page.
+  /api/me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List users with roles
+      description: Admin only.
+      responses:
+        '200':
+          description: Users with their effective roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/users/{id}:
+    patch:
+      tags: [Users]
+      summary: Change a user's role
+      description: >
+        Admin only. The new role must be `user` or `admin` (super admin is
+        env-only). Super admins cannot be modified, and callers cannot change
+        their own role.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [user, admin]
+      responses:
+        '200':
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  id: { type: string }
+                  role: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/users/search:
+    get:
+      tags: [Users]
+      summary: Search the user directory for sharing
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Search term (matches username/email).
+      responses:
+        '200':
+          description: Matching users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/files:
+    get:
+      tags: [Files]
+      summary: List visible files
+      description: Files the user owns, has been shared, plus any open-access files.
+      responses:
+        '200':
+          description: Visible files.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/File'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Files]
+      summary: Create a file
+      description: Quota-checked — a regular user may own at most one file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: File created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/files/{id}:
+    patch:
+      tags: [Files]
+      summary: Rename a file
+      description: Owner/admin only.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: File renamed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Files]
+      summary: Delete a file
+      description: Owner/admin only.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/files/{id}/shares:
+    get:
+      tags: [Files]
+      summary: List view-only shares for a file
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Users the file is shared with.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Files]
+      summary: Share a file with one or more users
+      description: >
+        Shares a file with existing users. New shares default to `editor`; pass
+        `role: viewer` for view-only. Unknown ids and the owner/sharer are
+        skipped. Requires edit permission on the file (not allowed on `default`).
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userIds]
+              properties:
+                userIds:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+                role:
+                  type: string
+                  enum: [editor, viewer]
+                  default: editor
+      responses:
+        '200':
+          description: Share(s) created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  added: { type: integer }
+                  role: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/files/{id}/shares/{userId}:
+    patch:
+      tags: [Files]
+      summary: Change a collaborator's role
+      description: >
+        `owner` grants co-ownership (a file may have multiple owners). Requires
+        edit permission on the file.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/ShareUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, editor, viewer]
+      responses:
+        '200':
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  role: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Files]
+      summary: Revoke a collaborator's access
+      description: Requires edit permission on the file.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - $ref: '#/components/parameters/ShareUserId'
+      responses:
+        '200':
+          description: Share removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/files/{id}/copy:
+    post:
+      tags: [Files]
+      summary: Copy a file
+      description: >
+        Creates a quota-checked copy of a file the caller can view. The name
+        defaults to `Copy of <source name>`. Optionally carries over the source's
+        collaborators.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Name for the copy (max 120 chars).
+                shareCollaborators:
+                  type: boolean
+                  description: Carry over the source file's shares.
+      responses:
+        '200':
+          description: Copy created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  url: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/files/{id}/details:
+    get:
+      tags: [Files]
+      summary: File details
+      description: >
+        Metadata for the file-details dialog (name, owner, created/updated
+        timestamps). Requires view access.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileDetails'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/files/{id}/access:
+    patch:
+      tags: [Files]
+      summary: Set link-based access mode
+      description: >
+        `anyone` lets any signed-in user with the link open the file view-only;
+        `restricted` limits it to owner(s)/admins/shared users. Requires edit
+        permission on the file.
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [linkAccess]
+              properties:
+                linkAccess:
+                  type: string
+                  enum: [restricted, anyone]
+      responses:
+        '200':
+          description: Access mode updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  linkAccess: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/files/{id}/star:
+    put:
+      tags: [Files]
+      summary: Star or unstar a file
+      description: >
+        Toggles the file in the signed-in user's personal Starred list. Requires
+        only view access (any file the user can open, including `default`).
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [starred]
+              properties:
+                starred:
+                  type: boolean
+      responses:
+        '200':
+          description: Star state updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  starred: { type: boolean }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/cells:
+    get:
+      tags: [Files]
+      summary: Read cells
+      description: >
+        Returns the cell map for a workbook. Reads are gated by general access:
+        restricted files are only readable by owners/admins/shared users.
+      parameters:
+        - name: file
+          in: query
+          schema:
+            type: string
+            default: default
+          description: File ID; defaults to the shared `default` workbook.
+      responses:
+        '200':
+          description: Cell map keyed by cell ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Files]
+      summary: Write a cell
+      description: >
+        Writes a single cell. The payload is validated before the access check.
+        Only owners, admins, and users shared as `editor` may write (the shared
+        `default` workbook is exempt); viewers are rejected.
+      parameters:
+        - name: file
+          in: query
+          schema:
+            type: string
+          description: File ID (may also be supplied in the body as `file`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CellWrite'
+      responses:
+        '200':
+          description: Cell written.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  cells:
+                    type: object
+                    additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/versions:
+    get:
+      tags: [Files]
+      summary: List version snapshots
+      description: Metadata only (id, created_at, created_by), sorted newest first.
+      responses:
+        '200':
+          description: Version snapshot metadata.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VersionMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/versions/{id}:
+    get:
+      tags: [Files]
+      summary: Fetch a snapshot
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Full workbook state snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/versions/{id}/restore:
+    post:
+      tags: [Files]
+      summary: Restore a snapshot
+      description: >
+        Overwrites the workbook state with the snapshot, records a new version,
+        and broadcasts an `init` state update to all connected clients.
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Snapshot restored.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+      description: Session cookie issued after a successful OIDC sign-in.
+  security:
+    - sessionCookie: []
+  parameters:
+    FileId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: File ID.
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: User identity (lowercased email or username).
+    ShareUserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Collaborator's user identity (lowercased email or username).
+    VersionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: Version snapshot ID.
+  responses:
+    BadRequest:
+      description: Invalid request payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No authenticated session.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated but lacking the required role or access.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: forbidden
+        message:
+          type: string
+    ReadyStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          description: Per-dependency status; a failing check carries an `error` message.
+    CurrentUser:
+      type: object
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          nullable: true
+        picture:
+          type: string
+          nullable: true
+        provider:
+          type: string
+        role:
+          type: string
+          enum: [user, admin, superadmin]
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [user, admin, superadmin]
+        provider:
+          type: string
+        picture:
+          type: string
+          nullable: true
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+        superAdmin:
+          type: boolean
+        self:
+          type: boolean
+    File:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    FileDetails:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        owner:
+          type: string
+          nullable: true
+          description: Owner identity, or null for system-owned files.
+        ownerIsSelf:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    CellWrite:
+      type: object
+      required: [cellId]
+      properties:
+        cellId:
+          type: string
+          example: A1
+        formula:
+          type: string
+          nullable: true
+        value:
+          nullable: true
+        style:
+          type: object
+          nullable: true
+          additionalProperties: true
+        file:
+          type: string
+          description: Optional file ID (overridden by the `file` query parameter).
+    VersionMeta:
+      type: object
+      properties:
+        id:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+security:
+  - sessionCookie: []

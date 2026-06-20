@@ -17,7 +17,6 @@ yarn-error.log*
 .superpowers/
 docs/superpowers/
 images/
-k8s/
 
 # Runtime data store
 store.json
