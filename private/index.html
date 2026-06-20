@@ -538,7 +538,7 @@
 <!-- TopAppBar -->
 <header class="flex flex-col w-full h-[120px] px-4 pt-3 justify-center bg-surface dark:bg-surface-dim z-50">
 <!-- Top Row: Logo, Title, Actions -->
-<div class="flex items-center justify-between w-full pb-2">
+<div class="flex items-center justify-between w-full">
 <div class="flex items-center gap-3">
 <a href="/" title="Back to files" data-i18n-title="drive.backToFiles" class="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center text-on-primary-container hover:brightness-95 transition-all">
 <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">table_chart</span>
@@ -1166,10 +1166,10 @@
   </button>
   <div id="lang-switch-menu" class="hidden absolute right-0 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg py-1 w-36 z-50">
     <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant" data-lang="zh">
-      <span>中文</span><span class="lang-check material-symbols-outlined text-[18px] text-primary">check</span>
+      <span>中文</span><span class="lang-check material-symbols-outlined text-[18px] text-primary"></span>
     </button>
     <button class="lang-option flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-md text-on-surface dark:text-on-surface-variant" data-lang="en">
-      <span>English</span><span class="lang-check material-symbols-outlined text-[18px] text-primary hidden">check</span>
+      <span>English</span><span class="lang-check material-symbols-outlined text-[18px] text-primary"></span>
     </button>
   </div>
 </div>
@@ -1211,7 +1211,7 @@
 </div>
 </div>
 <!-- Toolbar Row -->
-<div id="main-toolbar" class="flex items-center gap-1 bg-surface-container-low px-3 py-1.5 rounded-full mt-2">
+<div id="main-toolbar" class="flex items-center gap-1 bg-surface-container-low px-3 py-1.5 rounded-full">
 <!-- Toolbar Undo and Redo buttons, initially disabled and styled accordingly -->
 <button id="toolbar-undo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Undo (Ctrl+Z)" data-i18n-title="tip.undo"><span class="material-symbols-outlined">undo</span></button>
 <button id="toolbar-redo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Redo (Ctrl+Y)" data-i18n-title="tip.redo"><span class="material-symbols-outlined">redo</span></button>
@@ -1222,7 +1222,7 @@
   <div class="relative inline-block">
     <div class="flex items-center hover:bg-surface-variant rounded px-1.5 py-0.5 gap-0.5 border border-transparent hover:border-outline-variant" title="縮放" data-i18n-title="tip.zoom">
       <!-- Editable Zoom Input -->
-      <input type="text" id="toolbar-zoom-input" class="w-10 bg-transparent border-none focus:ring-0 text-label-md font-label-md text-center p-0 cursor-pointer" value="100%">
+      <input type="text" id="toolbar-zoom-input" class="w-12 bg-transparent border-none focus:ring-0 text-label-lg font-label-lg text-center p-0 cursor-pointer" value="100%">
       <!-- Dropdown Menu Toggle Arrow -->
       <span id="toolbar-zoom-arrow" class="material-symbols-outlined text-[14px] cursor-pointer hover:bg-surface-variant rounded p-0.5">arrow_drop_down</span>
     </div>
@@ -1240,8 +1240,8 @@
 <div class="w-px h-5 bg-outline-variant mx-1"></div>
 <button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">attach_money</span></button>
 <button id="toolbar-format-percent" title="Format as percentage" data-i18n-title="tip.formatPercent" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">percent</span></button>
-<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">exposure_neg_1</span></button>
-<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">exposure_plus_1</span></button>
+<button id="toolbar-decimal-decrease" title="減少小數位數" data-i18n-title="tip.decreaseDecimal" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">decimal_decrease</span></button>
+<button id="toolbar-decimal-increase" title="增加小數位數" data-i18n-title="tip.increaseDecimal" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">decimal_increase</span></button>
 <div class="w-px h-5 bg-outline-variant mx-1"></div>
 <!-- Font Family Selector Container -->
 <div class="relative inline-block">
@@ -1297,7 +1297,7 @@
   <!-- Editable size input that reveals a preset menu -->
   <div class="relative inline-block">
     <input id="toolbar-font-size-input" type="text" value="10" title="Font size" data-i18n-title="tip.fontSize"
-      class="w-12 bg-transparent border border-outline-variant rounded focus:ring-1 focus:ring-primary focus:outline-none text-label-md font-label-md text-center py-0.5 cursor-pointer">
+      class="w-10 bg-transparent border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary focus:outline-none text-label-lg font-label-lg text-center px-1 py-1 cursor-pointer">
     <!-- Preset font size menu -->
     <div id="toolbar-font-size-menu" class="hidden absolute left-1/2 -translate-x-1/2 top-full mt-1 bg-surface-container-lowest dark:bg-inverse-surface border border-outline-variant rounded shadow-lg p-1 flex flex-col gap-0.5 z-50 min-w-[56px]">
       <button class="toolbar-font-size-option text-center px-3 py-1.5 hover:bg-surface-variant rounded text-label-md font-label-md transition-colors" data-size="6">6</button>
@@ -1413,7 +1413,7 @@
 <!-- pr-2 (not px-2): no left padding, so the name box sits flush at x=0 and its
      46px width lines its right border up with the grid's row-index gutter below
      (grid-template-columns: 46px …). -->
-<div id="formula-bar" class="flex items-center h-8 bg-surface-bright border-b border-outline-variant pr-2 shrink-0">
+<div id="formula-bar" class="flex items-center h-7 bg-surface-bright border-b border-outline-variant pr-2 shrink-0">
 <div id="name-box" class="w-[96px] text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
 <div class="px-2 text-primary h-full flex items-center">
 <span class="material-symbols-outlined leading-none" style="font-size: 20px;">function</span>

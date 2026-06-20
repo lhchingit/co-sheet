@@ -185,6 +185,8 @@
   "tip.undo": "Undo (Ctrl+Z)",
   "tip.redo": "Redo (Ctrl+Y)",
   "tip.formatPercent": "Format as percentage",
+  "tip.decreaseDecimal": "Decrease decimal places",
+  "tip.increaseDecimal": "Increase decimal places",
   "tip.selectFont": "Select Font",
   "tip.decreaseFont": "Decrease font size (Ctrl+Shift+,)",
   "tip.fontSize": "Font size",
