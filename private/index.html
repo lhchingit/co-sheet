@@ -65,7 +65,7 @@
            left for horizontal) to the measured header size, and the thumb's
            size/position from the viewport's scroll metrics. The colors match the
            previous native bars. */
-        .grid-custom-scroll { position: absolute; z-index: 40; background: #f1f3f4; }
+        .grid-custom-scroll { position: absolute; z-index: 40; background: #f1f3f4; box-sizing: border-box; border: 1px solid #c3c6d6; }
         .grid-custom-scroll-v { top: 0; right: 0; bottom: 14px; width: 14px; }
         .grid-custom-scroll-h { left: 0; right: 14px; bottom: 0; height: 14px; }
         .grid-custom-scroll-thumb {
@@ -76,8 +76,8 @@
             box-sizing: border-box;
         }
         .grid-custom-scroll-thumb:hover { background-color: #9aa0a6; }
-        .grid-custom-scroll-v .grid-custom-scroll-thumb { left: 0; width: 14px; }
-        .grid-custom-scroll-h .grid-custom-scroll-thumb { top: 0; height: 14px; }
+        .grid-custom-scroll-v .grid-custom-scroll-thumb { left: 0; right: 0; }
+        .grid-custom-scroll-h .grid-custom-scroll-thumb { top: 0; bottom: 0; }
 
         /* Dummy header caps closing the ends of the scrollbar lanes, styled like
            .grid-header. The vertical bar's cap continues the column-header band
@@ -90,6 +90,30 @@
            header cells rather than a detached block. */
         .grid-scroll-cap-v { top: 0; right: 0; border-bottom: 1px solid #c3c6d6; border-left: 1px solid #c3c6d6; }
         .grid-scroll-cap-h { left: 0; bottom: 0; border-right: 1px solid #c3c6d6; border-top: 1px solid #c3c6d6; }
+        /* Header-styled filler for the far bottom-right corner where the vertical
+           and horizontal bars meet. Mirrors the caps: leading borders (top/left)
+           set it off from the two scrollbar lanes so it reads as a header cell. */
+        .grid-scroll-corner {
+            position: absolute; bottom: 0; right: 0; width: 14px; height: 14px;
+            z-index: 41; background-color: #f1f3f4; box-sizing: border-box;
+            border-top: 1px solid #c3c6d6; border-left: 1px solid #c3c6d6;
+        }
+        /* Stepper arrow buttons clustered at the end of each bar: up/down stacked
+           at the bottom of the vertical bar, left/right at the right of the
+           horizontal bar. They share the bar lane (14px) and its #f1f3f4 fill;
+           JS sets the per-button offset along the bar from the corner reservation. */
+        .grid-scroll-arrow {
+            position: absolute; z-index: 41;
+            background-color: #f1f3f4; box-sizing: border-box; cursor: pointer;
+            border: 1px solid #c3c6d6;
+            display: flex; align-items: center; justify-content: center;
+            color: #5f6368; -webkit-user-select: none; user-select: none;
+        }
+        .grid-scroll-arrow:hover { background-color: #e3e5e8; color: #202124; }
+        .grid-scroll-arrow:active { background-color: #d4d6da; }
+        .grid-scroll-arrow svg { width: 8px; height: 8px; display: block; pointer-events: none; fill: currentColor; }
+        .grid-scroll-arrow-v { right: 0; width: 14px; height: 20px; }
+        .grid-scroll-arrow-h { bottom: 0; width: 20px; height: 14px; }
         /* Colored indicator bar under the text/fill color toolbar buttons,
            reflecting the active cell's current color (Google Sheets style). */
         .toolbar-color-swatch {
@@ -1457,6 +1481,24 @@
        bar. Sized/positioned by initGridScrollbars(). -->
   <div id="grid-vscroll-cap" class="grid-scroll-cap grid-scroll-cap-v hidden"></div>
   <div id="grid-hscroll-cap" class="grid-scroll-cap grid-scroll-cap-h hidden"></div>
+  <!-- Header-styled filler for the corner shared by both bars (shown only when
+       both are visible). Sized by CSS; toggled by initGridScrollbars(). -->
+  <div id="grid-scroll-corner" class="grid-scroll-corner hidden"></div>
+  <!-- Stepper arrows. Up/down stacked at the bottom of the vertical bar;
+       left/right at the right of the horizontal bar. Positioned/toggled by
+       initGridScrollbars(); click (or press-and-hold) nudges the viewport. -->
+  <div id="grid-vscroll-up" class="grid-scroll-arrow grid-scroll-arrow-v hidden">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="7,4 11,9 3,9"/></svg>
+  </div>
+  <div id="grid-vscroll-down" class="grid-scroll-arrow grid-scroll-arrow-v hidden">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="3,5 11,5 7,10"/></svg>
+  </div>
+  <div id="grid-hscroll-left" class="grid-scroll-arrow grid-scroll-arrow-h hidden">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="9,3 9,11 4,7"/></svg>
+  </div>
+  <div id="grid-hscroll-right" class="grid-scroll-arrow grid-scroll-arrow-h hidden">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><polygon points="5,3 5,11 10,7"/></svg>
+  </div>
 </div>
 </main>
 <!-- BottomNavBar -->
