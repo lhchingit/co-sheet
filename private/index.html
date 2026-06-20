@@ -536,12 +536,19 @@
 </head>
 <body class="bg-surface text-on-surface overflow-hidden flex flex-col h-screen">
 <!-- TopAppBar -->
-<header class="flex flex-col w-full h-[120px] px-4 pt-3 justify-center bg-surface dark:bg-surface-dim z-50">
-<!-- Top Row: Logo, Title, Actions -->
-<div class="flex items-center justify-between w-full">
+<header class="flex flex-col w-full px-6 pb-1 gap-1 bg-surface dark:bg-surface-dim z-50">
+<!-- Top Row: Logo, Title, Actions. Fixed 64px height (mirrors the homepage
+     app bar's h-16) with items-center, so the brand logo centers at 32px from
+     the page top — the same vertical position as the file-management page. -->
+<div class="flex items-center justify-between w-full" style="height: 64px;">
 <div class="flex items-center gap-3">
-<a href="/" title="Back to files" data-i18n-title="drive.backToFiles" class="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center text-on-primary-container hover:brightness-95 transition-all">
-<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">table_chart</span>
+<!-- Brand mark: solid blue box with a light glyph. Keep these explicit hex
+     colors in sync with the homepage logo (private/drive.html) and favicon.svg.
+     Set inline so they don't depend on theme tokens (primary-container renders
+     as a pale tint in the editor palette) or arbitrary Tailwind utilities that
+     aren't compiled into styles-editor.css. -->
+<a href="/" title="Back to files" data-i18n-title="drive.backToFiles" class="w-10 h-10 flex items-center justify-center hover:brightness-95 transition-all" style="background-color: #0b57d0; color: #ced9ff; border-radius: 8px;">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1; font-size: 24px;">table_chart</span>
 </a>
 <div class="flex flex-col">
 <div class="flex items-center gap-2">
@@ -1415,8 +1422,8 @@
      (grid-template-columns: 46px …). -->
 <div id="formula-bar" class="flex items-center h-7 bg-surface-bright border-b border-outline-variant pr-2 shrink-0">
 <div id="name-box" class="w-[96px] text-center text-label-md font-label-md text-on-surface-variant border-r border-outline-variant h-full flex items-center justify-center">A1</div>
-<div class="px-2 text-primary h-full flex items-center">
-<span class="material-symbols-outlined leading-none" style="font-size: 20px;">function</span>
+<div class="px-2 text-outline h-full flex items-center">
+<span class="material-symbols-outlined leading-none" style="font-size: 20px; font-variation-settings: 'wght' 300;">function</span>
 </div>
 <div class="flex-grow h-full">
 <!-- Formula Bar Input element used for displaying and editing cell formulas -->
