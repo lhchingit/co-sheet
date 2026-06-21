@@ -139,10 +139,25 @@
     <div id="files-view">
         <div class="flex items-center justify-between mb-6 min-h-12">
             <h1 id="files-heading" class="text-2xl font-medium text-on-surface" data-i18n="drive.title">My files</h1>
-            <button id="new-file-btn" class="flex items-center gap-2 h-12 pl-4 pr-5 rounded-full bg-primary text-on-primary text-sm font-medium shadow-sm hover:brightness-105 transition-all">
-                <span class="material-symbols-outlined">add</span>
-                <span data-i18n="drive.newFile">New</span>
-            </button>
+            <!-- "New" is a menu: create a blank spreadsheet, or upload (import) an
+                 .xls/.xlsx. The menu styling mirrors the language / card overflow menus. -->
+            <div id="new-file-wrap" class="relative inline-block">
+                <button id="new-file-btn" class="flex items-center gap-2 h-12 pl-4 pr-5 rounded-full bg-primary text-on-primary text-sm font-medium shadow-sm hover:brightness-105 transition-all">
+                    <span class="material-symbols-outlined">add</span>
+                    <span data-i18n="drive.newFile">New</span>
+                    <span class="material-symbols-outlined text-[18px]">arrow_drop_down</span>
+                </button>
+                <div id="new-file-menu" class="hidden absolute right-0 top-full mt-2 w-56 bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg py-2 z-50">
+                    <button id="new-blank-sheet" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+                        <span class="material-symbols-outlined text-[20px]">add</span><span data-i18n="drive.newSheet">Add spreadsheet</span>
+                    </button>
+                    <button id="new-upload" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+                        <span class="material-symbols-outlined text-[20px]">upload_file</span><span data-i18n="drive.upload">File upload</span>
+                    </button>
+                </div>
+            </div>
+            <!-- Hidden picker for "File upload" (import). -->
+            <input id="import-file-input" type="file" accept=".xls,.xlsx" class="hidden"/>
         </div>
 
         <!-- Empty state -->
@@ -211,6 +226,9 @@
     <button data-action="open" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
         <span class="material-symbols-outlined text-[20px]">open_in_new</span><span data-i18n="drive.open">Open</span>
     </button>
+    <button data-action="download" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
+        <span class="material-symbols-outlined text-[20px]">download</span><span data-i18n="drive.download">Download</span>
+    </button>
     <button data-action="link" class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-on-surface hover:bg-surface-container transition-colors text-left">
         <span class="material-symbols-outlined text-[20px]">link</span><span data-i18n="drive.copyLink">Copy link</span>
     </button>
@@ -244,6 +262,10 @@
 
 <script src="/i18n.js"></script>
 <script src="/user-menu.js"></script>
+<!-- Shared coordinate utils + the dependency-free .xlsx writer, so the per-file
+     Download action can build a workbook client-side (same exporter the editor uses). -->
+<script src="/sheet-utils.js"></script>
+<script src="/xlsx-export.js"></script>
 <script src="/drive.js"></script>
 </body>
 </html>

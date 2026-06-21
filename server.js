@@ -38,6 +38,7 @@ import * as dimensionService from './services/dimensionService.js';
 import { shouldSkipOidcTls } from './services/oidcTls.js';
 import { isExternalOidcUserinfoSkipped } from './services/oidcProfile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtimeBus.js';
+import { parseXlsx } from './services/xlsxImport.js';
 import { logger, component } from './services/logger.js';
 
 // Per-subsystem child loggers. Each tags its lines with a `component` field so
@@ -205,6 +206,33 @@ async function getUserRole(user) {
   } catch (e) {
     return 'user';
   }
+}
+
+/**
+ * The maximum number of files a role may own (the shared 'default' workbook never
+ * counts). A regular user gets one; an admin gets five; super admins are unlimited.
+ * @param {string} role The effective role ('superadmin' | 'admin' | 'user').
+ * @returns {number} The quota (Infinity for unlimited).
+ */
+const fileLimitForRole = (role) => {
+  if (role === 'superadmin') return Infinity;
+  if (role === 'admin') return 5;
+  return 1;
+};
+
+/**
+ * Whether creating one more file would exceed the caller's per-role quota.
+ * @param {Object} user The passport session user.
+ * @param {string} creator The owner identity key.
+ * @returns {Promise<boolean>}
+ */
+async function wouldExceedFileQuota(user, creator) {
+  const role = await getUserRole(user);
+  const limit = fileLimitForRole(role);
+  if (limit === Infinity) return false;
+  const owned = await filesRepo.listFileIdsByCreator(creator);
+  const ownedCount = owned.filter((r) => r.id !== 'default').length;
+  return ownedCount >= limit;
 }
 
 /**
@@ -1503,19 +1531,13 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     // The creator (owner) is identified by their stable identity key.
     const creator = userIdentity(req.user) || 'anonymous';
 
-    // Enforce the per-user file quota: a regular 'user' may own at most one file;
-    // admins and super admins are unlimited. The shared legacy 'default' workbook
-    // is system-owned and never counts against a user.
-    const role = await getUserRole(req.user);
-    if (role !== 'admin' && role !== 'superadmin') {
-      const owned = await filesRepo.listFileIdsByCreator(creator);
-      const ownedCount = owned.filter(r => r.id !== 'default').length;
-      if (ownedCount >= 1) {
-        return res.status(403).json({
-          error: 'file_limit',
-          message: 'Your account can create only one file. Ask an admin for more.'
-        });
-      }
+    // Enforce the per-role file quota (user: 1, admin: 5, super admin: unlimited).
+    // The shared legacy 'default' workbook is system-owned and never counts.
+    if (await wouldExceedFileQuota(req.user, creator)) {
+      return res.status(403).json({
+        error: 'file_limit',
+        message: 'You have reached your file limit. Ask an admin for more.'
+      });
     }
 
     // Mint a unique, URL-safe file id.
@@ -1571,18 +1593,13 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
 
     const creator = userIdentity(req.user) || 'anonymous';
 
-    // Enforce the same per-user quota as fresh creation (admins/super admins are
-    // unlimited; a regular user may own at most one file besides 'default').
-    const role = await getUserRole(req.user);
-    if (role !== 'admin' && role !== 'superadmin') {
-      const owned = await filesRepo.listFileIdsByCreator(creator);
-      const ownedCount = owned.filter(r => r.id !== 'default').length;
-      if (ownedCount >= 1) {
-        return res.status(403).json({
-          error: 'file_limit',
-          message: 'Your account can create only one file. Ask an admin for more.'
-        });
-      }
+    // Enforce the same per-role quota as fresh creation (user: 1, admin: 5, super
+    // admin: unlimited; the shared 'default' workbook never counts).
+    if (await wouldExceedFileQuota(req.user, creator)) {
+      return res.status(403).json({
+        error: 'file_limit',
+        message: 'You have reached your file limit. Ask an admin for more.'
+      });
     }
 
     // Snapshot the source workbook (live in-memory state if loaded, else from the
@@ -1641,6 +1658,104 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
 });
 
 /**
+ * POST /api/files/import
+ * Creates a new file from an uploaded .xlsx workbook. The raw file bytes are the
+ * request body (Content-Type: application/octet-stream); the display name comes
+ * from the `?name=` query. Imports cell values and sheet structure only (styles
+ * and formulas are dropped — see services/xlsxImport.js). The per-role file quota
+ * is enforced *before* parsing, so an over-quota user gets a clean 403 without the
+ * upload being processed. Protected with ensureAuthenticated middleware.
+ */
+app.post('/api/files/import',
+  express.raw({ type: () => true, limit: '15mb' }),
+  ensureAuthenticated,
+  async (req, res) => {
+  try {
+    const creator = userIdentity(req.user) || 'anonymous';
+
+    // Quota check first: reject before spending any work on a large upload.
+    if (await wouldExceedFileQuota(req.user, creator)) {
+      return res.status(403).json({
+        error: 'file_limit',
+        message: 'You have reached your file limit. Ask an admin for more.'
+      });
+    }
+
+    const buf = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buf || buf.length === 0) {
+      return res.status(400).json({ error: 'empty', message: 'No file was uploaded.' });
+    }
+
+    let name = (req.query && typeof req.query.name === 'string') ? req.query.name.trim() : '';
+    if (!name) name = 'Imported spreadsheet';
+    if (name.length > 120) name = name.slice(0, 120);
+
+    // Parse the workbook. Parser errors carry a `code` we surface to the client so
+    // it can show the right localized warning.
+    let parsed;
+    try {
+      parsed = parseXlsx(buf);
+    } catch (e) {
+      const code = (e && e.code) || 'corrupt';
+      return res.status(400).json({ error: code, message: 'Could not import this file.' });
+    }
+
+    // Turn the parsed sheets into a co-sheet workbook state. The parser already
+    // produces co-sheet's cell shape ({ formula, value, style }) and per-sheet
+    // track sizes / tab colors. Filters are browser-local view state (localStorage,
+    // never persisted in the document), so we hand them back to the client to seed.
+    const sheets = Object.create(null);
+    const sheetOrder = [];
+    const sheetColors = Object.create(null);
+    const colWidths = Object.create(null);
+    const rowHeights = Object.create(null);
+    const filters = Object.create(null);
+    let totalCells = 0;
+    for (const s of parsed.sheets) {
+      const cellMap = Object.create(null);
+      for (const [ref, cell] of Object.entries(s.cells)) {
+        cellMap[ref] = { formula: cell.formula || '', value: cell.value || '', style: cell.style || {} };
+        totalCells++;
+      }
+      sheets[s.name] = cellMap;
+      sheetOrder.push(s.name);
+      if (s.tabColor) sheetColors[s.name] = s.tabColor;
+      if (s.colWidths && Object.keys(s.colWidths).length) colWidths[s.name] = s.colWidths;
+      if (s.rowHeights && Object.keys(s.rowHeights).length) rowHeights[s.name] = s.rowHeights;
+      if (s.filter) filters[s.name] = s.filter;
+    }
+    // A workbook with no sheets at all is unusable; fall back to a single blank one.
+    if (sheetOrder.length === 0) {
+      sheets['Sheet1'] = Object.create(null);
+      sheetOrder.push('Sheet1');
+    }
+
+    const freshState = {
+      sheets,
+      sheetOrder,
+      sheetColors,
+      hiddenSheets: [],
+      colWidths: sanitizeDimensionMap(colWidths),
+      rowHeights: sanitizeDimensionMap(rowHeights)
+    };
+
+    const id = crypto.randomBytes(12).toString('hex');
+    await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
+    await filesRepo.insertFile(id, name, creator);
+    workbooks.set(id, setupCellsProxy(freshState));
+
+    logger.info({ fileId: id, sheets: sheetOrder.length, cells: totalCells }, 'Imported xlsx workbook');
+    const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    // `filters` is only non-empty when the workbook had auto-filters; the client
+    // seeds them into localStorage for the new file before opening it.
+    res.json({ id, name, url: `${baseUrl}/sheet?file=${id}`, filters });
+  } catch (err) {
+    logger.error({ err: err }, 'Error importing file');
+    res.status(500).json({ error: 'internal_server_error', message: 'Failed to import file' });
+  }
+});
+
+/**
  * GET /api/files/:id/details
  * Returns metadata for the file-details dialog: name, owner, created and last-modified
  * timestamps. The caller must be able to view the file. Protected with
@@ -1670,6 +1785,31 @@ app.get('/api/files/:id/details', ensureAuthenticated,
   } catch (err) {
     logger.error({ err: err }, 'Error reading file details');
     res.status(500).json({ error: 'internal_server_error', message: 'Failed to read file details' });
+  }
+});
+
+/**
+ * GET /api/files/:id/workbook
+ * Returns the full workbook (name + ordered sheets, each a map of cells) so the
+ * drive page can build an .xlsx for download client-side using the shared exporter.
+ * Each cell's stored `value` already holds the last evaluated result, so no formula
+ * engine is needed here. The caller must be able to view the file.
+ */
+app.get('/api/files/:id/workbook', ensureAuthenticated,
+  requireFileAccess({ level: 'view', forbiddenMessage: 'You do not have permission to download this file' }),
+  async (req, res) => {
+  try {
+    const id = req.params.id;
+    const wb = await getWorkbook(id);
+    const name = (await filesRepo.getFileName(id)) || 'spreadsheet';
+    // Preserve the workbook's own sheet order (fall back to whatever sheets exist).
+    const order = (Array.isArray(wb.sheetOrder) && wb.sheetOrder.length)
+      ? wb.sheetOrder
+      : Object.keys(wb.sheets || {});
+    res.json({ name, sheetOrder: order, sheets: wb.sheets || {} });
+  } catch (err) {
+    logger.error({ err: err }, 'Error reading workbook for download');
+    res.status(500).json({ error: 'internal_server_error', message: 'Failed to load workbook' });
   }
 });
 

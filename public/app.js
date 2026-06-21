@@ -6487,6 +6487,72 @@ if (menuFileBtn && menuFileDropdown) {
     }
   });
 
+  // --- Import: pick a local .xls/.xlsx file and create a new file from it. The
+  // server enforces the per-role file quota and parses the workbook; an over-quota
+  // user (or an unreadable/legacy file) gets a warning dialog instead of a new tab.
+  const fileImportBtn = document.getElementById('file-import');
+  const importInput = document.getElementById('import-file-input');
+  if (fileImportBtn && importInput) {
+    fileImportBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFileMenu();
+      importInput.value = ''; // let the same file be re-picked after a prior attempt
+      importInput.click();
+    });
+
+    importInput.addEventListener('change', async () => {
+      const file = importInput.files && importInput.files[0];
+      if (!file) return;
+      const lower = file.name.toLowerCase();
+      if (!lower.endsWith('.xlsx') && !lower.endsWith('.xls')) {
+        showMessageDialog(t('import.warningTitle'), t('import.badType'));
+        return;
+      }
+      const baseName = file.name.replace(/\.(xlsx|xls)$/i, '').trim() || t('drive.untitled');
+      // Open the tab synchronously (within the change gesture) so the post-upload
+      // navigation isn't popup-blocked; close it on any failure.
+      const win = window.open('', '_blank');
+      try {
+        const buf = await file.arrayBuffer();
+        const res = await fetch(`/api/files/import?name=${encodeURIComponent(baseName)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          credentials: 'same-origin',
+          body: buf
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          if (win) win.close();
+          showMessageDialog(t('import.warningTitle'), importErrorMessage(res.status, d.error));
+          return;
+        }
+        const data = await res.json();
+        // Filters are browser-local view state (localStorage, never in the saved
+        // document). Seed any imported auto-filters under the new file's key before
+        // navigating so the new tab paints them on first render.
+        if (data.filters && Object.keys(data.filters).length) {
+          try {
+            localStorage.setItem(`co-sheet-filters:${data.id}`, JSON.stringify(data.filters));
+          } catch (e) { /* storage full/blocked: skip filter seeding */ }
+        }
+        const url = data.url || `/sheet?file=${data.id}`;
+        if (win) win.location = url; else window.open(url, '_blank');
+      } catch (err) {
+        if (win) win.close();
+        showMessageDialog(t('import.warningTitle'), t('import.failed'));
+      }
+    });
+  }
+
+  // Map an import failure (HTTP status + server error code) to a localized warning.
+  function importErrorMessage(status, code) {
+    if (status === 403 || code === 'file_limit') return t('import.fileLimit');
+    if (code === 'legacy_xls') return t('import.legacyXls');
+    if (code === 'unsupported') return t('import.unsupported');
+    if (code === 'empty') return t('import.empty');
+    return t('import.failed');
+  }
+
   // --- Make a copy: open the copy dialog, prefilled with "<name> 的副本". ---
   const copyModal = document.getElementById('copy-file-modal');
   const copyNameInput = document.getElementById('copy-file-name');

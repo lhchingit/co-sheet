@@ -606,10 +606,12 @@
        <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">folder_open</span><span data-i18n="file.open">Open</span></span><span class="text-xs">Ctrl+O</span>
        </div>
-       <!-- Import (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+       <!-- Import: pick a local .xls/.xlsx file and create a new file from it. -->
+       <button id="file-import" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">login</span><span data-i18n="file.import">Import</span></span>
-       </div>
+       </button>
+       <!-- Hidden picker the Import entry triggers; defaults the dialog to .xls/.xlsx. -->
+       <input id="import-file-input" type="file" accept=".xls,.xlsx" class="hidden"/>
        <!-- Make a copy: duplicates the current file -->
        <button id="file-make-copy" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface dark:text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">file_copy</span><span data-i18n="file.makeCopy">Make a copy</span></span>
