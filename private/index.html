@@ -535,6 +535,17 @@
         .unedited-row-label {
             padding-left: 12px;
         }
+        /* Empty spacer panel below the final row (row 1000). Without it the last
+           row sits flush against the horizontal scrollbar / footer and gets half
+           clipped when scrolled to the bottom; this buffer (~2x a cell's height)
+           lets the last row scroll fully into view. Styled like the header band
+           so it reads as part of the grid chrome rather than a data row. */
+        .grid-bottom-buffer {
+            grid-column: 1 / -1; /* spans the gutter + all 26 columns */
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #c3c6d6;
+            height: 42px;
+        }
         /* Custom styled tooltip (replaces native title tooltips) */
         #app-tooltip {
             position: fixed;
