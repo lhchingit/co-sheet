@@ -192,6 +192,10 @@ let isSelecting = false; // Whether selection drag is active
 let isColumnSelection = false; // Whether the current selection is a full-column header click
 let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
+// Each sheet's last selection, so switching away and back restores where you were.
+// In-memory only (keyed by sheet name); intentionally not persisted, so a page
+// reload starts fresh (the initial load selects A1).
+let sheetSelections = Object.create(null);
 // Formula "point mode": while a formula is being edited (inline cell or formula
 // bar) and the caret sits where a cell reference is expected, clicking/dragging
 // over the grid paints an orange box and writes the picked A1[:B4] range into the
@@ -420,8 +424,13 @@ function handleSocketMessage(event) {
 
       if (payload.sheets && Object.keys(payload.sheets).length > 0) {
         Object.assign(localSheets, payload.sheets);
+        // Prefer a server-provided active sheet; otherwise restore the one this
+        // browser was last on for this file (client-side memory); else the first.
+        const savedSheet = loadActiveSheetPref();
         if (payload.activeSheet && localSheets[payload.activeSheet]) {
           activeSheetName = payload.activeSheet;
+        } else if (savedSheet && localSheets[savedSheet] && !(hiddenSheets || []).includes(savedSheet)) {
+          activeSheetName = savedSheet;
         } else {
           activeSheetName = Object.keys(localSheets)[0] || 'Sheet1';
         }
@@ -444,11 +453,18 @@ function handleSocketMessage(event) {
       renderSpreadsheetGrid();
 
       // Auto-select the top-left cell on first load so the toolbar (font size,
-      // formatting, etc.) always has an active target to act on.
+      // formatting, etc.) always has an active target to act on. Broadcast the
+      // active sheet too, since a restored sheet may differ from the join default.
       if (!activeCellId) {
         const defaultCellEl = document.querySelector('[data-cell-id="A1"]');
         if (defaultCellEl) {
-          handleCellSelect('A1', defaultCellEl);
+          handleCellSelect('A1', defaultCellEl, true); // silent: broadcast below with the sheet
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+              type: 'cursor-move',
+              payload: { cellId: 'A1', sheetName: activeSheetName }
+            }));
+          }
         }
       }
 
@@ -2107,8 +2123,10 @@ const updateGridDOMCell = (cellId, value, style) => {
  * Focuses selection on a spreadsheet cell and triggers cursor events.
  * @param {string} cellId - The selected cell identifier.
  * @param {HTMLElement} cellEl - The selected DOM element.
+ * @param {boolean} [silent=false] - When true, skip the cursor-move WS broadcast
+ *   (the caller sends its own — e.g. switchSheet, which must include the sheet).
  */
-const handleCellSelect = (cellId, cellEl) => {
+const handleCellSelect = (cellId, cellEl, silent = false) => {
   activeCellId = cellId;
   selectionStartCellId = cellId;
   if (!selectionEndCellId) {
@@ -2129,7 +2147,7 @@ const handleCellSelect = (cellId, cellEl) => {
   }
 
   // Notify server of active cell cursor movement
-  if (socket.readyState === WebSocket.OPEN) {
+  if (!silent && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: 'cursor-move',
       payload: { cellId }
@@ -6202,29 +6220,82 @@ const showSheetContextMenu = (sheetName, x, y) => {
  * Switches the active spreadsheet sheet and re-renders the grid.
  * @param {string} sheetName - The sheet name to switch to.
  */
+// Persist the active sheet per file so a reload returns to it. The server doesn't
+// track a per-user active sheet across connections (it resets to the first sheet),
+// so this lives client-side in localStorage, keyed by file id.
+const ACTIVE_SHEET_KEY = `co-sheet:active-sheet:${currentFileId || 'default'}`;
+const saveActiveSheetPref = (sheetName) => {
+  try { localStorage.setItem(ACTIVE_SHEET_KEY, sheetName); } catch (e) { /* storage unavailable */ }
+};
+const loadActiveSheetPref = () => {
+  try { return localStorage.getItem(ACTIVE_SHEET_KEY); } catch (e) { return null; }
+};
+
+/** Records the current sheet's selection so it can be restored on return. */
+const rememberSheetSelection = () => {
+  if (!activeCellId) { delete sheetSelections[activeSheetName]; return; }
+  sheetSelections[activeSheetName] = {
+    activeCellId,
+    startId: selectionStartCellId || activeCellId,
+    endId: selectionEndCellId || activeCellId,
+    isColumnSelection: !!isColumnSelection,
+  };
+};
+
+/**
+ * Re-applies the active sheet's last selection (outline + formula bar + toolbar),
+ * if one was recorded this session and its cell is still on the grid. Returns the
+ * restored active cell id, or null when there was nothing to restore. The cursor
+ * broadcast is left to the caller so it can include the sheet name.
+ */
+const restoreSheetSelection = () => {
+  const saved = sheetSelections[activeSheetName];
+  if (!saved) return null;
+  const cellEl = document.querySelector(`[data-cell-id="${saved.activeCellId}"]`);
+  if (!cellEl) return null;
+  isColumnSelection = saved.isColumnSelection;
+  selectionStartCellId = saved.startId;
+  selectionEndCellId = saved.endId;
+  handleCellSelect(saved.activeCellId, cellEl, true); // silent: switchSheet broadcasts below
+  return saved.activeCellId;
+};
+
 const switchSheet = (sheetName) => {
   if (activeSheetName === sheetName) return;
-  
-  // Clear selection state
+
+  // Remember where we were on this sheet, then clear the selection state.
+  rememberSheetSelection();
   if (activeCellId) {
     clearRangeSelection();
     activeCellId = null;
   }
-  
+  selectionStartCellId = null;
+  selectionEndCellId = null;
+  isColumnSelection = false;
+
   activeSheetName = sheetName;
+  saveActiveSheetPref(sheetName); // remember across reloads (client-side)
   renderSheetTabs();
   renderSpreadsheetGrid();
-  
+
   if (isHistoryMode) return;
 
-  // Send cursor movement update with new sheet name
+  // Restore this sheet's last selection; on a sheet not yet visited this session,
+  // fall back to selecting A1 so the blue outline appears (as on first page load).
+  const restored = restoreSheetSelection();
+  if (!restored) {
+    const a1El = document.querySelector('[data-cell-id="A1"]');
+    if (a1El) handleCellSelect('A1', a1El, true); // silent: the broadcast below carries the sheet
+  }
+
+  // Tell peers the new sheet and the now-active cell in one cursor-move.
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: 'cursor-move',
-      payload: { cellId: null, sheetName: activeSheetName }
+      payload: { cellId: activeCellId || null, sheetName: activeSheetName }
     }));
   }
-  
+
   // Render remote collaborator cursors for the active sheet
   Object.keys(remoteCursors).forEach(id => {
     const cursor = remoteCursors[id];
@@ -6233,8 +6304,9 @@ const switchSheet = (sheetName) => {
     }
   });
 
-  // Reset formatting bar UI
-  updateToolbarFormattingStates({});
+  // Reset the formatting bar only when nothing got selected (A1 missing); a
+  // restore or the A1 fallback already synced the toolbar to its cell's style.
+  if (!activeCellId) updateToolbarFormattingStates({});
 };
 
 /**
