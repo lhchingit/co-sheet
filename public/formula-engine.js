@@ -4,7 +4,8 @@
  * @description Tokenizer + recursive-descent parser + evaluator + function
  * library for the spreadsheet formula language. Published on window.CoSheet.formula.
  * Pure except for cell-reference resolution, which the host app injects via
- * setCellResolver(fn) where fn(coord, depth) returns the raw stored cell text.
+ * setCellResolver(fn) where fn(coord, depth, sheetName?) returns the raw stored
+ * cell text (sheetName selects the sheet for a cross-sheet reference).
  * Depends on window.CoSheet.utils; load as a classic <script> after sheet-utils.js
  * and before app.js.
  */
@@ -15,7 +16,9 @@
 
   // Cell-reference accessor injected by the host (app.js) via setCellResolver().
   // The no-op default keeps the engine callable (refs read blank) before wiring.
-  /** @type {(coord: string, depth?: number) => any} */
+  // `sheetName` (optional) selects the sheet for a cross-sheet reference; null/
+  // omitted reads the host's active sheet.
+  /** @type {(coord: string, depth?: number, sheetName?: string | null) => any} */
   let getCellValue = () => '';
 
 /* =============================================================================
@@ -51,6 +54,9 @@ const tokenizeFormula = (src) => {
   const isAlpha = (c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c === '_' || c === '$';
   let i = 0;
   const n = src.length;
+  // A sheet qualifier ("Sheet1!" or "'Sheet 1'!") attaches to the cell/range ident
+  // that immediately follows it, so the next 'ident' token carries `.sheet`.
+  let pendingSheet = null;
   while (i < n) {
     const c = src[i];
     if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
@@ -62,6 +68,16 @@ const tokenizeFormula = (src) => {
       }
       tokens.push({ t: 'str', v: s }); continue;
     }
+    if (c === "'") { // quoted sheet name, '' escapes a quote, must be followed by '!'
+      let s = ''; i++;
+      while (i < n) {
+        if (src[i] === "'") { if (src[i + 1] === "'") { s += "'"; i += 2; continue; } i++; break; }
+        s += src[i++];
+      }
+      if (src[i] !== '!') throw mkErr('#ERROR!');
+      i++;
+      pendingSheet = s; continue;
+    }
     if (isDigit(c) || (c === '.' && isDigit(src[i + 1]))) {
       let j = i + 1;
       while (j < n && (isDigit(src[j]) || src[j] === '.')) j++;
@@ -71,7 +87,13 @@ const tokenizeFormula = (src) => {
     if (isAlpha(c)) {
       let j = i + 1;
       while (j < n && (isAlpha(src[j]) || isDigit(src[j]) || src[j] === '.')) j++;
-      tokens.push({ t: 'ident', v: src.slice(i, j) }); i = j; continue;
+      const name = src.slice(i, j);
+      // A bare identifier directly before "!" is an (unquoted) sheet name, e.g.
+      // Sheet1!A1; it qualifies the following cell/range ident rather than being one.
+      if (src[j] === '!') { pendingSheet = name; i = j + 1; continue; }
+      const tok = { t: 'ident', v: name };
+      if (pendingSheet !== null) { tok.sheet = pendingSheet; pendingSheet = null; }
+      tokens.push(tok); i = j; continue;
     }
     const two = src.slice(i, i + 2);
     if (two === '<=' || two === '>=' || two === '<>') { tokens.push({ t: 'op', v: two }); i += 2; continue; }
@@ -149,17 +171,22 @@ const parseFormula = (tokens) => {
         expect(')');
         return { type: 'call', name: tk.v.toUpperCase(), args };
       }
+      // A sheet qualifier ("Sheet1!", "'Sheet 1'!") rides on the ident as `.sheet`;
+      // null means the reference resolves against the formula's own (base) sheet.
+      const sheet = tk.sheet != null ? tk.sheet : null;
       const up = tk.v.toUpperCase().replace(/\$/g, '');
-      if (up === 'TRUE') return { type: 'bool', value: true };
-      if (up === 'FALSE') return { type: 'bool', value: false };
+      if (sheet === null) {
+        if (up === 'TRUE') return { type: 'bool', value: true };
+        if (up === 'FALSE') return { type: 'bool', value: false };
+      }
       if (isOp(':')) { // range
         pos++;
         const tk2 = peek();
         if (tk2.t !== 'ident') throw mkErr('#REF!');
         pos++;
-        return { type: 'range', from: up, to: tk2.v.toUpperCase().replace(/\$/g, '') };
+        return { type: 'range', from: up, to: tk2.v.toUpperCase().replace(/\$/g, ''), sheet };
       }
-      return { type: 'ref', ref: up };
+      return { type: 'ref', ref: up, sheet };
     }
     throw mkErr('#ERROR!');
   };
@@ -189,15 +216,19 @@ const coerceRaw = (raw) => {
   return raw;
 };
 
+/** The sheet a ref/range resolves against: its own qualifier, else the base sheet. */
+const refSheet = (node, ctx) => (node.sheet != null ? node.sheet : (ctx.sheet != null ? ctx.sheet : null));
+
 /** Resolves a cell reference (e.g. "A1") to a typed value. */
-const refToValue = (ref, ctx) => {
-  if (!CELL_RE.test(ref)) return mkErr('#NAME?');
-  return coerceRaw(getCellValue(ref, ctx.depth + 1));
+const refToValue = (node, ctx) => {
+  if (!CELL_RE.test(node.ref)) return mkErr('#NAME?');
+  return coerceRaw(getCellValue(node.ref, ctx.depth + 1, refSheet(node, ctx)));
 };
 
 /** Builds a range value object from a range AST node. */
 const evalRange = (node, ctx) => {
   if (!CELL_RE.test(node.from) || !CELL_RE.test(node.to)) return mkErr('#REF!');
+  const sheet = refSheet(node, ctx);
   const a = parseCoordinates(node.from);
   const b = parseCoordinates(node.to);
   const r1 = Math.min(a.row, b.row), r2 = Math.max(a.row, b.row);
@@ -205,7 +236,7 @@ const evalRange = (node, ctx) => {
   const values = [];
   for (let r = r1; r <= r2; r++) {
     const row = [];
-    for (let c = c1; c <= c2; c++) row.push(coerceRaw(getCellValue(`${getColLetter(c)}${r + 1}`, ctx.depth + 1)));
+    for (let c = c1; c <= c2; c++) row.push(coerceRaw(getCellValue(`${getColLetter(c)}${r + 1}`, ctx.depth + 1, sheet)));
     values.push(row);
   }
   return { __range: true, values, r1, c1, r2, c2 };
@@ -319,7 +350,7 @@ const evalNode = (node, ctx) => {
     case 'num': return node.value;
     case 'str': return node.value;
     case 'bool': return node.value;
-    case 'ref': return refToValue(node.ref, ctx);
+    case 'ref': return refToValue(node, ctx);
     case 'range': return evalRange(node, ctx);
     case 'unary': { const v = toNum(scalarize(evalNode(node.operand, ctx))); if (isErr(v)) return v; return node.op === '-' ? -v : v; }
     case 'percent': { const v = toNum(scalarize(evalNode(node.operand, ctx))); if (isErr(v)) return v; return v / 100; }
@@ -671,14 +702,17 @@ const formatWithPattern = (n, pattern) => {
  * @param {number} [recursionDepth=0] - Guards against circular references.
  * @param {string|null} [ownerCoord=null] - Coord of the cell holding this formula
  *   (lets ROW()/COLUMN() with no argument resolve their own position).
+ * @param {string|null} [baseSheet=null] - Sheet the formula lives on; unqualified
+ *   references resolve against it (null = the host's active sheet). A cross-sheet
+ *   reference like 'Sheet1'!A1 overrides this for its own and any nested refs.
  * @returns {string} Evaluated display value.
  */
-const evaluateFormula = (formula, recursionDepth = 0, ownerCoord = null) => {
+const evaluateFormula = (formula, recursionDepth = 0, ownerCoord = null, baseSheet = null) => {
   if (recursionDepth > 50) return '#REF!'; // circular / excessively deep reference
   if (typeof formula !== 'string' || !formula.startsWith('=')) return formula;
   try {
     const ast = parseFormula(tokenizeFormula(formula.slice(1)));
-    const result = evalNode(ast, { depth: recursionDepth, owner: ownerCoord });
+    const result = evalNode(ast, { depth: recursionDepth, owner: ownerCoord, sheet: baseSheet });
     if (isRange(result)) return flattenRange(result).map(formatScalar).join(', ');
     return formatScalar(result);
   } catch (e) {
