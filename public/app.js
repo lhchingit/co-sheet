@@ -1776,6 +1776,16 @@ const renderSpreadsheetGrid = () => {
     }
   }
 
+  // Empty buffer panel below the final row so the last row can scroll fully into
+  // view instead of being half-clipped by the horizontal scrollbar / footer.
+  // Styled like the header band (#f8f9fa); ~2x a cell's height (see CSS). With
+  // explicit placement (merges) we must pin its row track, since it carries no
+  // auto-placed cells of its own.
+  const bottomBuffer = document.createElement('div');
+  bottomBuffer.className = 'grid-bottom-buffer';
+  if (hasMerges) bottomBuffer.style.gridRow = `${TOTAL_ROWS + 2}`;
+  gridRoot.appendChild(bottomBuffer);
+
   // Apply per-sheet column widths / row heights to the freshly built grid.
   applyGridTemplate(gridRoot);
 
