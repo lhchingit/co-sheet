@@ -203,6 +203,12 @@ let fpEndCell = null;           // far cell of the current pick
 let fpInsertStart = -1;         // caret offset in the formula where the ref begins
 let fpInsertLen = 0;            // length of the ref text currently written there
 let fpJustPicked = false;       // true after a pick until the user types (drag replaces)
+// Sheet that owns the cell being edited. Picks made on a *different* sheet are
+// written sheet-qualified ('Other Sheet'!A1); unqualified picks/refs belong here.
+// Set when an editor gains focus, preserved across mid-formula sheet switches.
+let fpOriginSheet = null;
+let fpOriginCell = null;        // cell being edited (commit target across sheet switches)
+let fpHandoff = false;          // true while moving an inline edit to the formula bar
 let socket = null; // WebSocket connection
 let clipboardData = null; // Stores copied cell data offset details
 let frozenRows = 0; // Number of top rows frozen via View > Freeze (0 = none)
@@ -1214,12 +1220,18 @@ const performRedo = () => {
  * Gets cell display value, evaluating formulas if present.
  * @param {string} coord - Cell coordinates.
  * @param {number} [depth=0] - Current recursion depth to prevent infinite loops.
+ * @param {string|null} [sheetName=null] - Sheet to read from (null = active sheet).
+ *   A cross-sheet reference passes the referenced sheet here; a formula found on
+ *   that sheet is then evaluated with it as the base so its own unqualified
+ *   references stay within that sheet.
  * @returns {string} Evaluated text display value.
  */
-const getCellValue = (coord, depth = 0) => {
-  const cell = localCells[coord];
+const getCellValue = (coord, depth = 0, sheetName = null) => {
+  const cells = sheetName != null ? localSheets[sheetName] : localCells;
+  if (!cells) return ''; // reference to an unknown sheet → treated as blank
+  const cell = cells[coord];
   if (!cell) return '';
-  if (cell.formula) return evaluateFormula(cell.formula, depth, coord);
+  if (cell.formula) return evaluateFormula(cell.formula, depth, coord, sheetName != null ? sheetName : null);
   return cell.value || '';
 };
 
@@ -2202,6 +2214,10 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   // The same adapter drives formula point mode (range picking by drag).
   activeFormulaEditor = makeCellEditor(cellEl);
   resetFormulaPick();
+  // Remember which cell/sheet this edit belongs to so picks made after switching
+  // sheets are written sheet-qualified and the edit commits back to the right cell.
+  fpOriginSheet = activeSheetName;
+  fpOriginCell = cellId;
   // Highlight the references of an existing formula (e.g. double-clicking a SUM
   // cell outlines its range in orange); refreshed on every keystroke below.
   refreshFormulaRefHighlights();
@@ -2341,13 +2357,11 @@ if (formulaBarInput) {
       e.stopPropagation();
       return;
     }
-    if (e.key === 'Enter' && activeCellId) {
+    if (e.key === 'Enter' && (activeCellId || fpOriginCell)) {
       e.preventDefault(); // Prevent default enter key behavior
-      window.CoSheet.fnAutocomplete.close();
-      // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4").
-      const text = balanceFormulaParens(formulaBarInput.value);
-      resetFormulaPick();
-      saveCellUpdate(activeCellId, text); // Save cell update
+      // Commit to the cell the edit started in. For a cross-sheet pick this also
+      // returns to that cell's sheet; balanceFormulaParens auto-closes any "(".
+      commitFormulaToOrigin(formulaBarInput.value);
       formulaBarInput.blur(); // Remove focus from the formula bar
     }
   });
@@ -2355,8 +2369,16 @@ if (formulaBarInput) {
   // Track the formula bar as the active formula editor while it has focus, so a
   // click on the grid picks a reference into it (point mode).
   formulaBarInput.addEventListener('focus', () => {
+    // A handoff (mid-formula sheet switch) sets the editor up itself; and a focus
+    // that returns to the bar mid cross-sheet pick (after a grid re-render) must
+    // not reset the in-progress edit. In both cases leave the existing state.
+    if (fpHandoff) return;
+    if (fpOriginSheet != null && fpOriginSheet !== activeSheetName) return;
     activeFormulaEditor = makeInputEditor(formulaBarInput);
     resetFormulaPick();
+    // The formula bar edits the active cell on the active sheet.
+    fpOriginSheet = activeSheetName;
+    fpOriginCell = activeCellId;
     refreshFormulaRefHighlights(); // outline an existing formula's references
   });
 
@@ -2370,6 +2392,10 @@ if (formulaBarInput) {
   // point-mode grid click keeps focus (preventDefault), so this only runs on a
   // real exit — clear the pick state and drop the formula-editor context.
   formulaBarInput.addEventListener('blur', () => setTimeout(() => {
+    // A mid-formula sheet switch re-focuses the bar; don't tear down an edit that
+    // is being handed off or whose focus has already returned to the bar.
+    if (fpHandoff) return;
+    if (document.activeElement === formulaBarInput) return;
     window.CoSheet.fnAutocomplete.close();
     activeFormulaEditor = null;
     resetFormulaPick();
@@ -2480,7 +2506,18 @@ const formulaExpectsReference = (value, caret) => {
   return FORMULA_REF_TRIGGER.test(left);
 };
 
-/** Normalised A1-style reference for a pick: "B1" for a single cell, "B1:B4" else. */
+// A sheet name may be written unquoted only when it is a plain identifier; any
+// other name (spaces, punctuation, CJK, leading digit) is wrapped in single
+// quotes with internal quotes doubled, matching the formula tokenizer.
+const SHEET_NAME_BARE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const formatSheetPrefix = (name) =>
+  `${SHEET_NAME_BARE_RE.test(name) ? name : `'${String(name).replace(/'/g, "''")}'`}!`;
+
+/**
+ * Normalised A1-style reference for a pick: "B1" for a single cell, "B1:B4" else.
+ * When the pick is made on a sheet other than the one being edited (fpOriginSheet),
+ * the reference is qualified with that sheet, e.g. 'Sheet 1'!B1:B4.
+ */
 const buildRangeRef = (startId, endId) => {
   const s = parseCellCoord(startId);
   const e = parseCellCoord(endId);
@@ -2490,8 +2527,13 @@ const buildRangeRef = (startId, endId) => {
   const minRow = Math.min(s.row, e.row);
   const maxRow = Math.max(s.row, e.row);
   const topLeft = `${getColLetter(minCol)}${minRow}`;
-  if (minCol === maxCol && minRow === maxRow) return topLeft;
-  return `${topLeft}:${getColLetter(maxCol)}${maxRow}`;
+  const local = (minCol === maxCol && minRow === maxRow)
+    ? topLeft
+    : `${topLeft}:${getColLetter(maxCol)}${maxRow}`;
+  const prefix = (fpOriginSheet != null && activeSheetName !== fpOriginSheet)
+    ? formatSheetPrefix(activeSheetName)
+    : '';
+  return prefix + local;
 };
 
 /** Appends the ")" needed to balance unclosed "(" in a committed formula. */
@@ -2510,16 +2552,19 @@ const balanceFormulaParens = (text) => {
   return depth > 0 ? text + ')'.repeat(depth) : text;
 };
 
-// Matches an A1-style cell reference or A1:B4 range, ignoring an optional "$" and
-// not consuming a function name (a trailing "(" rules the token out, e.g. LOG10().
-// Capture groups: 1=col, 2=row, 3=end col, 4=end row (3/4 absent for a single cell).
+// Matches an A1-style cell reference or A1:B4 range, with an optional leading sheet
+// qualifier ('Sheet 1'! or Sheet1!), ignoring an optional "$" and not consuming a
+// function name (a trailing "(" rules the token out, e.g. LOG10()). Capture groups:
+// 1=quoted sheet, 2=bare sheet, 3=col, 4=row, 5=end col, 6=end row (5/6 absent for
+// a single cell; 1/2 absent for an unqualified reference).
 const FORMULA_REF_RE =
-  /(?<![A-Za-z0-9_$])\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?(?![A-Za-z0-9_(])/g;
+  /(?<![A-Za-z0-9_$])(?:'((?:[^']|'')*)'!|([A-Za-z_][A-Za-z0-9_]*)!)?\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?(?![A-Za-z0-9_(])/g;
 
 /**
- * Extracts every cell/range reference from a formula string as {startId,endId}
- * pairs (e.g. "B3:C8" -> {startId:"B3", endId:"C8"}). String literals are masked
- * out first so text like "A1" inside quotes is not treated as a reference.
+ * Extracts every cell/range reference from a formula string as {sheet,startId,endId}
+ * objects (e.g. "'S1'!B3:C8" -> {sheet:"S1", startId:"B3", endId:"C8"}; sheet is
+ * null for an unqualified reference). String literals are masked out first so text
+ * like "A1" inside double-quotes is not treated as a reference.
  */
 const parseFormulaRefs = (value) => {
   if (!value || !value.startsWith('=')) return [];
@@ -2529,9 +2574,10 @@ const parseFormulaRefs = (value) => {
   let m;
   FORMULA_REF_RE.lastIndex = 0;
   while ((m = FORMULA_REF_RE.exec(masked)) !== null) {
-    const startId = `${m[1].toUpperCase()}${m[2]}`;
-    const endId = m[3] ? `${m[3].toUpperCase()}${m[4]}` : startId;
-    refs.push({ startId, endId });
+    const sheet = m[1] != null ? m[1].replace(/''/g, "'") : (m[2] != null ? m[2] : null);
+    const startId = `${m[3].toUpperCase()}${m[4]}`;
+    const endId = m[5] ? `${m[5].toUpperCase()}${m[6]}` : startId;
+    refs.push({ sheet, startId, endId });
   }
   return refs;
 };
@@ -2568,12 +2614,17 @@ const clearFormulaRefHighlights = () => {
  * Draws an orange dashed box around each cell/range the formula references. Used
  * both when editing an existing formula (double-click) and live while picking a
  * range by drag — in either case the boxes are derived from the formula text.
+ * Only references that resolve to the currently displayed sheet are drawn: an
+ * unqualified reference belongs to `baseSheet` (the formula's own sheet), while a
+ * qualified one (e.g. 'Sheet 1'!E3) belongs to the named sheet.
  */
-const renderFormulaRefHighlights = (value) => {
+const renderFormulaRefHighlights = (value, baseSheet = activeSheetName) => {
   clearFormulaRefHighlights();
   const gridRoot = document.getElementById('grid-root');
   if (!gridRoot) return;
-  for (const { startId, endId } of parseFormulaRefs(value)) {
+  for (const { sheet, startId, endId } of parseFormulaRefs(value)) {
+    const effectiveSheet = sheet != null ? sheet : baseSheet;
+    if (effectiveSheet !== activeSheetName) continue; // reference lives on another sheet
     const rect = rangeRectFor(startId, endId);
     if (!rect) continue;
     const box = document.createElement('div');
@@ -2588,8 +2639,9 @@ const renderFormulaRefHighlights = (value) => {
 
 /** Re-highlights references from whichever formula editor currently has focus. */
 const refreshFormulaRefHighlights = () => {
-  if (activeFormulaEditor) renderFormulaRefHighlights(activeFormulaEditor.getValue());
-  else clearFormulaRefHighlights();
+  if (activeFormulaEditor) {
+    renderFormulaRefHighlights(activeFormulaEditor.getValue(), fpOriginSheet != null ? fpOriginSheet : activeSheetName);
+  } else clearFormulaRefHighlights();
 };
 
 /** True when a grid click should pick a reference rather than move the selection. */
@@ -2672,7 +2724,97 @@ const resetFormulaPick = () => {
   fpInsertStart = -1;
   fpInsertLen = 0;
   fpJustPicked = false;
+  fpOriginSheet = null;
+  fpOriginCell = null;
   clearFormulaRefHighlights();
+};
+
+/**
+ * Switches the visible sheet in the middle of a formula edit without committing
+ * or losing the in-progress formula. Unlike switchSheet() it preserves the
+ * formula-pick state (origin cell/sheet, insertion span) so a range can be picked
+ * on another sheet; the visible active cell is dropped (the commit target is
+ * fpOriginCell). The formula bar keeps focus so the next grid click picks a ref.
+ */
+const switchSheetForFormulaPick = (sheetName) => {
+  clearRangeSelection();
+  activeCellId = null;
+  activeSheetName = sheetName;
+  renderSheetTabs();
+  renderSpreadsheetGrid();
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'cursor-move', payload: { cellId: null, sheetName: activeSheetName } }));
+  }
+  // Re-outline any references that resolve to the now-visible sheet, and keep the
+  // formula bar focused so point mode stays armed after the grid re-render.
+  refreshFormulaRefHighlights();
+  const formulaBar = document.getElementById('formula-bar-input');
+  if (formulaBar) formulaBar.focus();
+};
+
+/**
+ * Begins a cross-sheet range pick: moves an in-progress formula edit to the
+ * persistent formula bar (so it survives the grid re-render), switches to
+ * `targetSheet`, and keeps focus for picking. No-op (returns false) unless a
+ * formula is being edited and the target differs from the current sheet.
+ */
+const beginCrossSheetFormulaSwitch = (targetSheet) => {
+  const ed = activeFormulaEditor;
+  if (!ed || typeof ed.getValue !== 'function') return false;
+  const text = ed.getValue();
+  if (typeof text !== 'string' || !text.startsWith('=')) return false; // formulas only
+  if (!targetSheet || targetSheet === activeSheetName) return false;
+  const formulaBar = document.getElementById('formula-bar-input');
+  if (!formulaBar) return false;
+
+  const caret = ed.getCaret();
+  fpHandoff = true;
+  try {
+    // If editing inline in a grid cell, neutralise that editor so the imminent
+    // blur (focus moving to the bar / the grid re-rendering) neither commits nor
+    // resets the formula-pick state.
+    if (ed.el && ed.el !== formulaBar) {
+      ed.el.oninput = null;
+      ed.el.onkeydown = null;
+      ed.el.onblur = null;
+      if (typeof ed.el.removeAttribute === 'function') ed.el.removeAttribute('contenteditable');
+      window.CoSheet.fnAutocomplete.close();
+    }
+    // Adopt the formula bar as the live editor, preserving text + caret.
+    formulaBar.value = text;
+    activeFormulaEditor = makeInputEditor(formulaBar);
+    formulaBar.focus();
+    const pos = (typeof caret === 'number' && caret >= 0) ? caret : text.length;
+    try { formulaBar.setSelectionRange(pos, pos); } catch (e) {}
+  } finally {
+    fpHandoff = false;
+  }
+
+  switchSheetForFormulaPick(targetSheet);
+  return true;
+};
+
+/**
+ * Commits an in-progress formula/value edit to the cell it started in, returning
+ * to that cell's sheet first when the user switched away to pick a cross-sheet
+ * range. Falls back to the active cell for an ordinary same-sheet edit.
+ */
+const commitFormulaToOrigin = (rawText) => {
+  const cellId = fpOriginCell || activeCellId;
+  const originSheet = fpOriginSheet;
+  const text = balanceFormulaParens(String(rawText).trim());
+  window.CoSheet.fnAutocomplete.close();
+  resetFormulaPick();
+  activeFormulaEditor = null;
+  if (!cellId) return;
+  if (originSheet && originSheet !== activeSheetName) {
+    switchSheet(originSheet); // back to the origin cell's sheet before writing
+  }
+  activeCellId = cellId;
+  saveCellUpdate(cellId, text);
+  // Re-select the origin cell so the user lands back where they started.
+  const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
+  if (cellEl) handleCellSelect(cellId, cellEl);
 };
 
 /**
@@ -5805,6 +5947,20 @@ const renderSheetTabs = () => {
       });
       tab.appendChild(arrowSpan);
     }
+
+    // While editing a formula, clicking another sheet's tab switches to it to
+    // pick a cross-sheet range instead of committing. Handled on mousedown (before
+    // the editor would blur/commit); preventDefault keeps focus, and the handoff
+    // moves editing to the formula bar. The click below then no-ops (same sheet).
+    tab.addEventListener('mousedown', (e) => {
+      if (isHistoryMode) return;
+      if (sheetName === activeSheetName) return;
+      if (activeFormulaEditor && typeof activeFormulaEditor.getValue === 'function'
+          && activeFormulaEditor.getValue().startsWith('=')) {
+        e.preventDefault();
+        beginCrossSheetFormulaSwitch(sheetName);
+      }
+    });
 
     tab.addEventListener('click', () => {
       switchSheet(sheetName);

@@ -95,11 +95,29 @@ function createSandbox() {
       set: (val) => { localCells = val; },
       configurable: true
     });
+    Object.defineProperty(globalThis, 'localSheets', {
+      get: () => localSheets,
+      set: (val) => { localSheets = val; },
+      configurable: true
+    });
+    Object.defineProperty(globalThis, 'activeSheetName', {
+      get: () => activeSheetName,
+      set: (val) => { activeSheetName = val; },
+      configurable: true
+    });
+    Object.defineProperty(globalThis, 'fpOriginSheet', {
+      get: () => fpOriginSheet,
+      set: (val) => { fpOriginSheet = val; },
+      configurable: true
+    });
     globalThis.getColLetter = getColLetter;
     globalThis.parseCoordinates = parseCoordinates;
     globalThis.getCellValue = getCellValue;
     globalThis.evaluateFormula = evaluateFormula;
     globalThis.recalculateSheet = recalculateSheet;
+    globalThis.buildRangeRef = buildRangeRef;
+    globalThis.parseFormulaRefs = parseFormulaRefs;
+    globalThis.formatSheetPrefix = formatSheetPrefix;
   `;
 
   vm.runInContext(code + exportSuffix, sandbox);
@@ -231,6 +249,142 @@ test('Formula Parser - Invalid formulas return #ERR!', (t) => {
   assert.strictEqual(sandbox.getCellValue('A1'), '#NAME?');
   assert.strictEqual(sandbox.getCellValue('A2'), '#NAME?');
   assert.strictEqual(sandbox.getCellValue('A3'), '#NAME?');
+});
+
+test('Cross-sheet - quoted sheet name range resolves from another sheet', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  // Note: not overriding localCells keeps the activeSheet-bound proxy intact, so
+  // unqualified refs resolve against Sheet2 while 'Sheet 1'!… reads Sheet1.
+  sandbox.localSheets = {
+    'Sheet 1': {
+      'E3': { value: '10' },
+      'E4': { value: '20' },
+      'E5': { value: '30' }
+    },
+    'Sheet2': {
+      'A1': { formula: "=SUM('Sheet 1'!E3:E5)" }
+    }
+  };
+  sandbox.activeSheetName = 'Sheet2';
+
+  // --- Act ---
+  const val = sandbox.getCellValue('A1');
+
+  // --- Assert ---
+  assert.strictEqual(val, '60');
+});
+
+test('Cross-sheet - unquoted sheet name single-cell reference resolves', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  sandbox.localSheets = {
+    'Sheet1': { 'B2': { value: '42' } },
+    'Sheet2': { 'A1': { formula: '=Sheet1!B2*2' } }
+  };
+  sandbox.activeSheetName = 'Sheet2';
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.getCellValue('A1'), '84');
+});
+
+test('Cross-sheet - referenced formula keeps its own sheet as the base', (t) => {
+  // --- Arrange ---
+  // Sheet1!C1 = A1 + B1 — those unqualified refs must resolve within Sheet1 even
+  // though C1 is reached from Sheet2.
+  const sandbox = createSandbox();
+  sandbox.localSheets = {
+    'Sheet1': {
+      'A1': { value: '5' },
+      'B1': { value: '7' },
+      'C1': { formula: '=A1+B1' }
+    },
+    'Sheet2': {
+      'A1': { value: '100' }, // must NOT be picked up by Sheet1!C1
+      'D1': { formula: "=Sheet1!C1" }
+    }
+  };
+  sandbox.activeSheetName = 'Sheet2';
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.getCellValue('D1'), '12');
+});
+
+test('Cross-sheet - chained cross-sheet references resolve transitively', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  sandbox.localSheets = {
+    'Sheet1': { 'A1': { value: '3' } },
+    'Sheet2': { 'A1': { formula: '=Sheet1!A1*10' } },
+    'Sheet3': { 'A1': { formula: '=Sheet2!A1+5' } }
+  };
+  sandbox.activeSheetName = 'Sheet3';
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.getCellValue('A1'), '35');
+});
+
+test('Cross-sheet - reference to an unknown sheet is treated as blank', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  sandbox.localSheets = {
+    'Sheet1': { 'A1': { formula: "=SUM(Ghost!A1:A3)" } }
+  };
+  sandbox.activeSheetName = 'Sheet1';
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.getCellValue('A1'), '0');
+});
+
+test('Cross-sheet - buildRangeRef qualifies picks made on a foreign sheet', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  sandbox.activeSheetName = 'Sheet 1'; // the sheet the user picked on
+  sandbox.fpOriginSheet = 'Sheet2';    // the formula being edited lives on Sheet2
+
+  // --- Act ---
+  const range = sandbox.buildRangeRef('E3', 'E5');
+  const single = sandbox.buildRangeRef('B1', 'B1');
+
+  // --- Assert: foreign sheet name with a space gets quoted ---
+  assert.strictEqual(range, "'Sheet 1'!E3:E5");
+  assert.strictEqual(single, "'Sheet 1'!B1");
+});
+
+test('Cross-sheet - buildRangeRef leaves same-sheet picks unqualified', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+  sandbox.activeSheetName = 'Sheet2';
+  sandbox.fpOriginSheet = 'Sheet2'; // picking on the same sheet being edited
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.buildRangeRef('E3', 'E5'), 'E3:E5');
+});
+
+test('Cross-sheet - formatSheetPrefix quotes only when needed', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+
+  // --- Act & Assert ---
+  assert.strictEqual(sandbox.formatSheetPrefix('Sheet1'), 'Sheet1!');
+  assert.strictEqual(sandbox.formatSheetPrefix('Sheet 1'), "'Sheet 1'!");
+  assert.strictEqual(sandbox.formatSheetPrefix('工作表1'), "'工作表1'!");
+  assert.strictEqual(sandbox.formatSheetPrefix("Bob's"), "'Bob''s'!");
+});
+
+test('Cross-sheet - parseFormulaRefs captures the sheet qualifier', (t) => {
+  // --- Arrange ---
+  const sandbox = createSandbox();
+
+  // --- Act ---
+  // Flatten to strings: parseFormulaRefs returns objects built inside the vm realm,
+  // so deepStrictEqual would trip on the cross-realm prototype mismatch.
+  const refs = sandbox.parseFormulaRefs("=SUM('Sheet 1'!E3:E5)+Sheet2!B2+A1")
+    .map((r) => `${r.sheet}|${r.startId}|${r.endId}`)
+    .join(' ; ');
+
+  // --- Assert ---
+  assert.strictEqual(refs, 'Sheet 1|E3|E5 ; Sheet2|B2|B2 ; null|A1|A1');
 });
 
 test('Toolbar - Formatting buttons toggle style on active cell', (t) => {
