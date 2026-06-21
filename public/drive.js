@@ -39,6 +39,7 @@
   const emptyState = $('empty-state');
   const errorState = $('error-state');
   const cardMenu = $('card-menu');
+  const newFileMenu = $('new-file-menu');
   const navHome = $('nav-home');
   const navShared = $('nav-shared');
   const navStarred = $('nav-starred');
@@ -241,8 +242,8 @@
     if (navShared) navShared.classList.toggle('active', currentView === 'shared');
     if (navStarred) navStarred.classList.toggle('active', currentView === 'starred');
     // Creating a file always makes you its owner, so "New" only belongs in Home.
-    const newBtn = $('new-file-btn');
-    if (newBtn) newBtn.classList.toggle('hidden', currentView !== 'home');
+    const newWrap = $('new-file-wrap');
+    if (newWrap) newWrap.classList.toggle('hidden', currentView !== 'home');
   };
 
   const renderFiles = () => {
@@ -351,6 +352,68 @@
     });
   };
 
+  // Map an import failure (HTTP status + server error code) to a localized warning.
+  const importErrorMessage = (status, code) => {
+    if (status === 403 || code === 'file_limit') return t('import.fileLimit');
+    if (code === 'legacy_xls') return t('import.legacyXls');
+    if (code === 'unsupported') return t('import.unsupported');
+    if (code === 'empty') return t('import.empty');
+    return t('import.failed');
+  };
+
+  // "File upload": import a local .xls/.xlsx into a brand-new file. The server
+  // enforces the per-role file quota and parses the workbook (formatting,
+  // formulas, auto-filters); on success the new file appears in the grid and its
+  // shareable URL is surfaced, mirroring createFile(). Filters are browser-local
+  // (localStorage), so any imported auto-filters are seeded under the new file's
+  // key before the list reloads. Errors (over quota, legacy .xls, unreadable)
+  // become a warning dialog.
+  const importFile = async (file) => {
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.xlsx') && !lower.endsWith('.xls')) {
+      openModal({ title: t('import.warningTitle'), desc: t('import.badType'),
+        okLabel: t('dialog.confirm'), showCancel: false, onOk: closeModal });
+      return;
+    }
+    const baseName = file.name.replace(/\.(xlsx|xls)$/i, '').trim() || t('drive.untitled');
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch(`/api/files/import?name=${encodeURIComponent(baseName)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        credentials: 'same-origin',
+        body: buf
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        openModal({ title: t('import.warningTitle'), desc: importErrorMessage(res.status, d.error),
+          okLabel: t('dialog.confirm'), showCancel: false, onOk: closeModal });
+        await loadFiles();
+        return;
+      }
+      const data = await res.json();
+      if (data.filters && Object.keys(data.filters).length) {
+        try {
+          localStorage.setItem(`co-sheet-filters:${data.id}`, JSON.stringify(data.filters));
+        } catch (e) { /* storage full/blocked: skip filter seeding */ }
+      }
+      await loadFiles();
+      openModal({
+        title: t('drive.shareTitle'),
+        desc: t('drive.shareDesc'),
+        linkValue: data.url || fileUrl(data.id),
+        okLabel: t('drive.open'),
+        cancelLabel: t('drive.done'),
+        showCancel: true,
+        onOk: () => openFile(data.id)
+      });
+    } catch (err) {
+      openModal({ title: t('import.warningTitle'), desc: t('import.failed'),
+        okLabel: t('dialog.confirm'), showCancel: false, onOk: closeModal });
+    }
+  };
+
   const renameFile = (id) => {
     const f = files.find((x) => x.id === id);
     if (!f) return;
@@ -429,7 +492,45 @@
     });
   };
 
-  // Dispatch an action ('open'|'link'|'rename'|'delete') for a file id.
+  // Download a file as .xlsx. Fetches the full workbook (all sheets, each cell's
+  // stored value/style) and builds the workbook client-side with the shared
+  // exporter — the same one the in-editor Download uses — so formatting carries
+  // over. A cell's stored `value` already holds its last evaluated result, so no
+  // formula engine is needed here.
+  const downloadFile = async (id) => {
+    const exporter = root.CoSheet && root.CoSheet.xlsxExport;
+    const utils = root.CoSheet && root.CoSheet.utils;
+    if (!exporter || !utils) { toast(t('drive.loadError')); return; }
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(id)}/workbook`, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('load failed');
+      const data = await res.json();
+      const order = (Array.isArray(data.sheetOrder) && data.sheetOrder.length)
+        ? data.sheetOrder
+        : Object.keys(data.sheets || {});
+      const sheets = order.map((name) => {
+        const cellMap = (data.sheets && data.sheets[name]) || {};
+        const cells = [];
+        for (const cellId of Object.keys(cellMap)) {
+          if (!/^[A-Z]+\d+$/.test(cellId)) continue; // skip stray/proto keys
+          const { col, row } = utils.parseCoordinates(cellId); // 0-based
+          if (row < 0 || col < 0) continue;
+          const cd = cellMap[cellId] || {};
+          const value = cd.value != null ? cd.value : '';
+          const style = exporter.normalizeAppStyle(cd.style);
+          const hasVal = !(value === '' || value === null || value === undefined);
+          if (!hasVal && !style) continue; // keep styled-but-empty cells
+          cells.push({ row, col, value, style });
+        }
+        return { name, cells };
+      });
+      exporter.downloadXlsx(sheets.length ? sheets : [{ name: 'Sheet1', cells: [] }], data.name || 'spreadsheet');
+    } catch (e) {
+      toast(t('drive.loadError'));
+    }
+  };
+
+  // Dispatch an action ('open'|'download'|'link'|'rename'|'delete') for a file id.
   const runAction = (action, id) => {
     if (!id) return;
     // Guard modifying actions against permission (server also enforces).
@@ -438,6 +539,7 @@
       return;
     }
     if (action === 'open') openFile(id);
+    else if (action === 'download') downloadFile(id);
     else if (action === 'link') copyToClipboard(fileUrl(id));
     else if (action === 'rename') renameFile(id);
     else if (action === 'delete') deleteFile(id);
@@ -469,6 +571,17 @@
     cardMenu.style.top = `${top}px`;
   };
   const closeCardMenu = () => { cardMenu.classList.add('hidden'); menuTargetId = null; };
+
+  // ---------------------------------------------------------------------------
+  // "New" menu (create blank spreadsheet / upload a file)
+  // ---------------------------------------------------------------------------
+  const closeNewMenu = () => { if (newFileMenu) newFileMenu.classList.add('hidden'); };
+  const toggleNewMenu = () => {
+    if (!newFileMenu) return;
+    const wasOpen = !newFileMenu.classList.contains('hidden');
+    closeCardMenu();
+    newFileMenu.classList.toggle('hidden', wasOpen);
+  };
 
   // ---------------------------------------------------------------------------
   // Permissions management view
@@ -676,7 +789,7 @@
   const wireMarquee = () => {
     const DRAG_THRESHOLD = 5; // px of movement before a drag (vs. a click) begins
     // Chrome / interactive zones that keep their own behaviour and must not start a marquee.
-    const NO_DRAG = '#app-bar, #selection-bar, #side-nav, #admin-view, #modal-overlay, #card-menu, #lang-switch-menu, #user-menu, button, a, input, select, textarea';
+    const NO_DRAG = '#app-bar, #selection-bar, #side-nav, #admin-view, #modal-overlay, #card-menu, #new-file-menu, #lang-switch-menu, #user-menu, button, a, input, select, textarea';
     let startX = 0, startY = 0;
     let active = false;   // a potential drag is in progress (mouse is down)
     let dragging = false; // movement passed the threshold; the box is showing
@@ -797,6 +910,7 @@
     document.addEventListener('click', (e) => {
       const target = /** @type {Element} */ (e.target);
       if (!cardMenu.contains(target) && !target.closest('.card-menu-btn')) closeCardMenu();
+      if (newFileMenu && !newFileMenu.contains(target) && !target.closest('#new-file-btn')) closeNewMenu();
       if (!$('lang-switch-menu').contains(target) && !target.closest('#lang-switch-btn')) {
         $('lang-switch-menu').classList.add('hidden');
       }
@@ -812,6 +926,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeCardMenu();
+        closeNewMenu();
         $('lang-switch-menu').classList.add('hidden');
         if (!$('modal-overlay').classList.contains('hidden')) closeModal();
         else if (selectedIds.size) clearSelection();
@@ -830,8 +945,20 @@
     if (navShared) navShared.addEventListener('click', () => setView('shared'));
     if (navStarred) navStarred.addEventListener('click', () => setView('starred'));
 
-    // New file.
-    $('new-file-btn').addEventListener('click', () => createFile());
+    // "New" menu: toggle on the button, dispatch its two options.
+    $('new-file-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleNewMenu(); });
+    $('new-blank-sheet').addEventListener('click', () => { closeNewMenu(); createFile(); });
+    const importInput = /** @type {HTMLInputElement} */ ($('import-file-input'));
+    $('new-upload').addEventListener('click', () => {
+      closeNewMenu();
+      if (importInput) { importInput.value = ''; importInput.click(); }
+    });
+    if (importInput) {
+      importInput.addEventListener('change', () => {
+        const file = importInput.files && importInput.files[0];
+        importFile(file);
+      });
+    }
 
     // Modal buttons.
     $('modal-ok').addEventListener('click', () => {

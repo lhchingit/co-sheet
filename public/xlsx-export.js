@@ -422,5 +422,47 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  root.CoSheet.xlsxExport = { buildXlsxBlob, downloadXlsx };
+  // Resolve a cell's border for one side from the app's style model: a legacy
+  // boolean `border` means a thin grey box on every side; otherwise the structured
+  // per-side `borders` map wins. Mirrors app.js's cellBorderSide.
+  const borderSide = (style, side) => {
+    if (!style) return null;
+    if (style.border && !style.borders) return { color: '#717686', style: 'thin' };
+    return style.borders ? (style.borders[side] || null) : null;
+  };
+
+  /**
+   * Convert a co-sheet cell style object into the flat descriptor buildXlsxBlob
+   * understands (fonts, fill, font color, alignment, borders). `style.color` is the
+   * cell's background fill and `style.textColor` is the font color in this model.
+   * Returns null when there's nothing worth exporting. Shared by the editor's
+   * Download and the drive page's per-file download so the two never drift.
+   * @param {Object} [style]
+   * @returns {Object|null}
+   */
+  const normalizeAppStyle = (style) => {
+    if (!style) return null;
+    const out = {};
+    if (style.bold) out.bold = true;
+    if (style.italic) out.italic = true;
+    if (style.underline) out.underline = true;
+    if (style.strikethrough) out.strike = true;
+    if (style.fontFamily) out.fontName = style.fontFamily;
+    if (style.fontSize) out.fontSize = style.fontSize;
+    if (style.textColor) out.fontColor = style.textColor;
+    if (style.color) out.bgColor = style.color;
+    if (style.align) out.hAlign = style.align;
+    if (style.verticalAlign) out.vAlign = style.verticalAlign;
+    if (style.textWrap === 'wrap') out.wrap = true;
+    const borders = {};
+    let hasBorder = false;
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const spec = borderSide(style, side);
+      if (spec) { borders[side] = { color: spec.color, style: spec.style }; hasBorder = true; }
+    }
+    if (hasBorder) out.borders = borders;
+    return Object.keys(out).length ? out : null;
+  };
+
+  root.CoSheet.xlsxExport = { buildXlsxBlob, downloadXlsx, normalizeAppStyle };
 })();
