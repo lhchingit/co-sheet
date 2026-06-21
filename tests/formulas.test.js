@@ -1124,6 +1124,100 @@ test('Sheets - Reordering sheet order updates active indexes', (t) => {
   assert.strictEqual(sandbox.activeSheetName, 'Sheet2');
 });
 
+test('Sheets - Switching restores each sheet\'s last selection and formula bar', (t) => {
+  // --- Arrange ---
+  const code = readAppBundle();
+
+  // A formula bar whose value we can read back to verify it follows the selection.
+  const formulaBar = { value: '', focus() {}, setSelectionRange() {} };
+  const makeEl = () => ({
+    style: {}, attributes: {}, innerText: '', innerHTML: '',
+    appendChild() {}, remove() {}, addEventListener() {}, focus() {},
+    setAttribute(n, v) { this.attributes[n] = v; },
+    removeAttribute(n) { delete this.attributes[n]; },
+    classList: { add() {}, remove() {}, contains() { return false; } }
+  });
+
+  const sandbox = {
+    document: {
+      getElementById(id) { return id === 'formula-bar-input' ? formulaBar : makeEl(); },
+      querySelectorAll: () => [],
+      // Hand back a cell element for any data-cell-id lookup so a remembered cell
+      // can be re-selected after the (mocked) grid re-render.
+      querySelector: (sel) => (/\[data-cell-id=|\.w-12\.text-center/.test(sel) ? makeEl() : null),
+      addEventListener() {},
+      createElement() { return makeEl(); },
+      createRange() { return { selectNodeContents() {}, collapse() {} }; },
+      activeElement: { tagName: 'BODY', getAttribute: () => null }
+    },
+    window: {
+      location: { protocol: 'http:', host: 'localhost:3000' },
+      addEventListener: () => {},
+      getSelection() { return { removeAllRanges() {}, addRange() {} }; }
+    },
+    WebSocket: class { constructor() { this.readyState = 1; } send() {} },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    localStorage: (() => {
+      const store = {};
+      return {
+        getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); },
+        removeItem: (k) => { delete store[k]; }
+      };
+    })(),
+    console, Math, parseFloat, isNaN, String, Object, Array
+  };
+
+  const vmContext = vm.createContext(sandbox);
+  const exportSuffix = `
+    globalThis.sheetOrder = ['Sheet1', 'Sheet2'];
+    Object.defineProperty(globalThis, 'localSheets', { get: () => localSheets, set: (v) => { localSheets = v; } });
+    Object.defineProperty(globalThis, 'activeSheetName', { get: () => activeSheetName, set: (v) => { activeSheetName = v; } });
+    Object.defineProperty(globalThis, 'activeCellId', { get: () => activeCellId, set: (v) => { activeCellId = v; } });
+    globalThis.switchSheet = switchSheet;
+    globalThis.handleCellSelect = handleCellSelect;
+  `;
+  vm.runInContext(code + exportSuffix, vmContext);
+
+  // Seed sheet contents AFTER running the bundle, so app.js's own `let localSheets`
+  // declaration doesn't clobber them. localCells reads the active sheet via a proxy.
+  sandbox.localSheets = {
+    'Sheet1': { 'A2': { value: 'apple', formula: '', style: {} } },
+    'Sheet2': { 'B3': { value: 'banana', formula: '', style: {} } }
+  };
+  sandbox.activeSheetName = 'Sheet1';
+
+  // currentFileId is null in the test harness, so the storage key falls back to 'default'.
+  const SHEET_KEY = 'co-sheet:active-sheet:default';
+
+  // --- Act 1: select A2 on Sheet1, then visit Sheet2 (fresh) ---
+  sandbox.handleCellSelect('A2', sandbox.document.querySelector('[data-cell-id="A2"]'));
+  assert.strictEqual(sandbox.activeCellId, 'A2');
+  assert.strictEqual(formulaBar.value, 'apple');
+
+  sandbox.switchSheet('Sheet2');
+  // A not-yet-visited sheet auto-focuses A1, and the switch is persisted.
+  assert.strictEqual(sandbox.activeCellId, 'A1');
+  assert.strictEqual(sandbox.localStorage.getItem(SHEET_KEY), 'Sheet2');
+
+  sandbox.handleCellSelect('B3', sandbox.document.querySelector('[data-cell-id="B3"]'));
+  assert.strictEqual(formulaBar.value, 'banana');
+
+  // --- Act 2: switch back to Sheet1 — A2 should be restored ---
+  sandbox.switchSheet('Sheet1');
+
+  // --- Assert ---
+  assert.strictEqual(sandbox.activeSheetName, 'Sheet1');
+  assert.strictEqual(sandbox.activeCellId, 'A2');
+  assert.strictEqual(formulaBar.value, 'apple');
+  assert.strictEqual(sandbox.localStorage.getItem(SHEET_KEY), 'Sheet1');
+
+  // --- Act 3: and back to Sheet2 — B3 should be restored ---
+  sandbox.switchSheet('Sheet2');
+  assert.strictEqual(sandbox.activeCellId, 'B3');
+  assert.strictEqual(formulaBar.value, 'banana');
+});
+
 test('Selection - Selecting a cell highlights the corresponding row and column header indexes', (t) => {
   // --- Arrange ---
   // Read code of app.js to run in a mock sandboxed vm context
