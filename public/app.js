@@ -4963,7 +4963,8 @@ if (fileNameEl) {
     // Revert to the previous name if left blank.
     const finalName = name || fileNameBeforeEdit;
     fileNameEl.innerText = finalName;
-    // The browser tab stays branded "Co-Sheet"; the file name lives in the header.
+    // Keep the browser tab in sync with the file name ("{name} - Co-Sheet").
+    if (finalName) document.title = `${finalName} - Co-Sheet`;
     // Persist only when the name actually changed.
     if (finalName && finalName !== fileNameBeforeEdit) {
       persistFileName(finalName);
