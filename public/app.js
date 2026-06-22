@@ -233,9 +233,9 @@ let rowHeights = Object.create(null); // { [sheetName]: { [rowNumber]: px } }
 
 // Per-sheet explicit column count, grown by column inserts and shrunk by column
 // deletes so the grid gains/loses a column even when no data sits at the edge.
-// In-memory only (keyed by sheet name): a reload falls back to the data-derived
-// count (see getColCount), so columns holding data always survive but purely
-// blank trailing columns do not persist.
+// Loaded from the init payload, kept in sync via `col-count-update` broadcasts,
+// and persisted server-side (like colWidths/rowHeights); an absent entry means
+// the default. See getColCount, which also raises this by the data-derived floor.
 let colCounts = Object.create(null); // { [sheetName]: number }
 
 // Default track sizes — must match the base grid-template-columns / row min-height
@@ -288,6 +288,21 @@ const getColCount = (sheetName = activeSheetName) => {
 };
 
 /**
+ * Set the active sheet's explicit column count, clamped to [DEFAULT_COLS,
+ * MAX_COLS]. The default is stored as "no entry" (kept lean, matching the
+ * server). Broadcasts so the server persists it and peers grow/shrink in step;
+ * the server echoes a col-count-update which is harmlessly idempotent here.
+ * @param {number} count
+ */
+const setActiveColCount = (count) => {
+  const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, count));
+  if (n > DEFAULT_COLS) colCounts[activeSheetName] = n; else delete colCounts[activeSheetName];
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'set-col-count', payload: { sheetName: activeSheetName, count: n } }));
+  }
+};
+
+/**
  * Adjust the active sheet's explicit column count by `delta` (used by undo/redo
  * to reverse/replay a column insert or delete) and re-render so the header band
  * and grid tracks reflect the new width. No-op when delta is 0.
@@ -296,7 +311,7 @@ const getColCount = (sheetName = activeSheetName) => {
 const applyColCountDelta = (delta) => {
   if (!delta) return;
   const base = colCounts[activeSheetName] != null ? colCounts[activeSheetName] : getColCount();
-  colCounts[activeSheetName] = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, base + delta));
+  setActiveColCount(base + delta);
   renderSpreadsheetGrid();
 };
 
@@ -345,7 +360,7 @@ let canEditWorkbook = true;
 // a read-only client can't push changes even if a UI affordance slips through.
 const WB_STATE_CHANGING_TYPES = [
   'cell-edit', 'add-sheet', 'delete-sheet', 'copy-sheet', 'rename-sheet',
-  'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets', 'resize'
+  'color-sheet', 'hide-sheet', 'unhide-sheet', 'reorder-sheets', 'resize', 'set-col-count'
 ];
 
 // Footer save-status indicator. The server never acks a save, so this reflects
@@ -472,6 +487,7 @@ function handleSocketMessage(event) {
       if (payload.hiddenSheets) hiddenSheets = payload.hiddenSheets;
       colWidths = (payload.colWidths && typeof payload.colWidths === 'object') ? payload.colWidths : Object.create(null);
       rowHeights = (payload.rowHeights && typeof payload.rowHeights === 'object') ? payload.rowHeights : Object.create(null);
+      colCounts = (payload.colCounts && typeof payload.colCounts === 'object') ? payload.colCounts : Object.create(null);
 
       if (payload.sheets && Object.keys(payload.sheets).length > 0) {
         Object.assign(localSheets, payload.sheets);
@@ -676,6 +692,15 @@ function handleSocketMessage(event) {
       const key = dimension === 'col' ? col : row;
       if (key != null) map[sheet][key] = size;
       // Re-render only when the change lands on the sheet currently in view.
+      if (sheet === activeSheetName) renderSpreadsheetGrid();
+    }
+
+    // Handle a column-count change (insert/delete/undo of columns) from any peer.
+    if (type === 'col-count-update') {
+      const { sheetName, count } = payload;
+      const sheet = sheetName || 'Sheet1';
+      const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, Number(count) || DEFAULT_COLS));
+      if (n > DEFAULT_COLS) colCounts[sheet] = n; else delete colCounts[sheet];
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
 
@@ -4306,7 +4331,7 @@ const performStructuralInsert = (mode, at) => {
   if (mode === 'col') {
     const newCount = Math.min(prevCols + 1, MAX_COLS);
     colDelta = newCount - prevCols;
-    colCounts[activeSheetName] = newCount;
+    setActiveColCount(newCount);
   }
   if (changes.length || colDelta) recordHistoryAction({ type: 'multi', changes, colDelta });
   recalculateSheet();
@@ -4629,7 +4654,7 @@ const performStructuralDelete = (mode, at) => {
   if (mode === 'col') {
     const newCount = Math.max(DEFAULT_COLS, prevCols - 1);
     colDelta = newCount - prevCols;
-    colCounts[activeSheetName] = newCount;
+    setActiveColCount(newCount);
   }
   if (changes.length || colDelta) recordHistoryAction({ type: 'multi', changes, colDelta });
   recalculateSheet();
