@@ -28,9 +28,9 @@ import { SHEET_NAME_REGEX } from './validators.js';
  * 'corrupt' (zip/XML it couldn't read), or 'empty' (no importable sheets).
  */
 
-// The editor renders 26 columns (A–Z) and 1000 rows, so cells/tracks beyond that
-// range can't be shown and are dropped on import.
-const MAX_COL = 25;   // 0-based, 'Z'
+// The editor renders up to 702 columns (A–ZZ) and 1000 rows, so cells/tracks
+// beyond that range can't be shown and are dropped on import.
+const MAX_COL = 701;  // 0-based, 'ZZ'
 const MAX_ROW = 1000; // 1-based
 // Stored cell text / formula is truncated to the length the cell editor accepts, so
 // an imported cell stays editable afterwards.

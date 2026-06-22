@@ -101,9 +101,10 @@
    */
   const getSortedCellSequence = () => {
     const sequence = [];
-    // Standard grid dimensions: 1000 rows, 26 columns (A-Z)
+    // Grid is TOTAL_ROWS tall; columns start at A-Z and grow rightward with data.
+    const cols = app.getColCount();
     for (let r = 1; r <= app.TOTAL_ROWS; r++) {
-      for (let c = 0; c < 26; c++) {
+      for (let c = 0; c < cols; c++) {
         const colLetter = getColLetter(c);
         sequence.push(`${colLetter}${r}`);
       }

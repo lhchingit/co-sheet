@@ -298,15 +298,16 @@
     }
 
     // Hide data rows whose filtered-column value is excluded. A row is hidden by
-    // collapsing its row header and all 26 cells, so the remaining rows reflow
-    // cleanly within the fixed 27-track grid (row numbers stay as gaps).
+    // collapsing its row header and all its cells, so the remaining rows reflow
+    // cleanly within the grid (row numbers stay as gaps).
     if (f.hidden.size) {
+      const cols = app.getColCount();
       for (let r = headerRow + 1; r <= lastRow; r++) {
         const key = filterValueKey(app.getCellValue(`${colLetter}${r}`));
         if (!f.hidden.has(key)) continue;
         const rh = /** @type {HTMLElement} */ (gridRoot.querySelector(`[data-row-id="${r}"]`));
         if (rh) rh.style.display = 'none';
-        for (let c = 0; c < 26; c++) {
+        for (let c = 0; c < cols; c++) {
           const cellEl = /** @type {HTMLElement} */ (gridRoot.querySelector(`[data-cell-id="${getColLetter(c)}${r}"]`));
           if (cellEl) cellEl.style.display = 'none';
         }
