@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { resizeColumn, resizeRow, MIN_SIZE, MAX_SIZE, MAX_ROWS } from '../services/dimensionService.js';
+import { resizeColumn, resizeRow, setColCount, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimensionService.js';
 
 /** Build a minimal workbook with the given sheet names. */
 const makeWb = (...names) => {
@@ -60,4 +60,34 @@ test('resize ignores prototype-polluting keys gracefully (col regex / row range)
   const wb = makeWb('Sheet1');
   assert.deepStrictEqual(resizeColumn(wb, { sheetName: 'Sheet1', col: '__proto__', size: 100 }), { ok: false });
   assert.deepStrictEqual(resizeRow(wb, { sheetName: 'Sheet1', row: '__proto__', size: 100 }), { ok: false });
+});
+
+test('setColCount stores a count above the default in a lazily created map', () => {
+  const wb = makeWb('Sheet1');
+  const res = setColCount(wb, { sheetName: 'Sheet1', count: 30 });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', count: 30 });
+  assert.strictEqual(wb.colCounts.Sheet1, 30);
+});
+
+test('setColCount drops the entry at or below the default (keeps the doc lean)', () => {
+  const wb = makeWb('Sheet1');
+  setColCount(wb, { sheetName: 'Sheet1', count: 30 });
+  // Shrinking back to the default removes the stored growth.
+  const res = setColCount(wb, { sheetName: 'Sheet1', count: DEFAULT_COLS });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', count: DEFAULT_COLS });
+  assert.strictEqual(wb.colCounts.Sheet1, undefined);
+});
+
+test('setColCount accepts the MAX_COLS ceiling and rejects out-of-range / non-integer', () => {
+  const wb = makeWb('Sheet1');
+  assert.strictEqual(setColCount(wb, { sheetName: 'Sheet1', count: MAX_COLS }).count, MAX_COLS);
+  assert.deepStrictEqual(setColCount(wb, { sheetName: 'Sheet1', count: MAX_COLS + 1 }), { ok: false });
+  assert.deepStrictEqual(setColCount(wb, { sheetName: 'Sheet1', count: DEFAULT_COLS - 1 }), { ok: false });
+  assert.deepStrictEqual(setColCount(wb, { sheetName: 'Sheet1', count: 30.5 }), { ok: false });
+});
+
+test('setColCount rejects an unknown sheet', () => {
+  const wb = makeWb('Sheet1');
+  assert.deepStrictEqual(setColCount(wb, { sheetName: 'Nope', count: 30 }), { ok: false });
+  assert.strictEqual(wb.colCounts, undefined);
 });

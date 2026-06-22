@@ -25,8 +25,12 @@ export const MAX_SIZE = 2000;
 // Highest addressable row, matching the client grid (TOTAL_ROWS).
 export const MAX_ROWS = 1000;
 
-// A column key is 1–2 uppercase letters (A … Z, AA … ZZ would be future-proof; the
-// grid currently renders A–Z, but the regex stays lenient within that shape).
+// Column-count bounds, matching the client grid: it starts at A–Z and grows on
+// column insert up to ZZ. A 2-letter key covers the whole A … ZZ range.
+export const DEFAULT_COLS = 26;        // A–Z
+export const MAX_COLS = 26 + 26 * 26;  // up to ZZ (702)
+
+// A column key is 1–2 uppercase letters (A … Z, AA … ZZ), matching MAX_COLS.
 const COL_KEY_REGEX = /^[A-Z]{1,2}$/;
 
 /** Clamp a numeric size into [MIN_SIZE, MAX_SIZE] and round to a whole pixel. */
@@ -84,4 +88,33 @@ export const resizeRow = (wb, { sheetName, row, size }) => {
   const px = clampSize(size);
   bucketFor(wb, 'rowHeights', sheetName)[String(r)] = px;
   return { ok: true, sheetName, row: r, size: px };
+};
+
+/**
+ * Set a sheet's explicit column count (how many columns the grid renders, grown
+ * by column inserts and shrunk by deletes). Stored on `wb.colCounts[sheetName]`
+ * as an integer in [DEFAULT_COLS, MAX_COLS]; the default is dropped so legacy/
+ * untouched sheets stay absent from the map.
+ * @param {{ sheets: Object, colCounts?: Object }} wb
+ * @param {{ sheetName: any, count: any }} payload
+ * @returns {{ ok: true, sheetName: string, count: number } | { ok: false }}
+ */
+export const setColCount = (wb, { sheetName, count }) => {
+  if (!isValidSheetName(sheetName) || !wb.sheets || !wb.sheets[sheetName]) {
+    return { ok: false };
+  }
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < DEFAULT_COLS || n > MAX_COLS) {
+    return { ok: false };
+  }
+  if (!wb.colCounts || typeof wb.colCounts !== 'object') {
+    wb.colCounts = Object.create(null);
+  }
+  if (n > DEFAULT_COLS) {
+    wb.colCounts[sheetName] = n;
+  } else {
+    // The default needs no entry; clear any prior growth so the doc stays lean.
+    delete wb.colCounts[sheetName];
+  }
+  return { ok: true, sheetName, count: n };
 };

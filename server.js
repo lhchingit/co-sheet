@@ -1295,11 +1295,13 @@ const loadState = async (key = 'default') => {
       const sheetColors = (parsed && parsed.sheetColors && typeof parsed.sheetColors === 'object') ? parsed.sheetColors : Object.create(null);
       const hiddenSheets = (parsed && Array.isArray(parsed.hiddenSheets)) ? parsed.hiddenSheets : [];
 
-      // Per-sheet column widths / row heights (added later; absent on legacy docs).
+      // Per-sheet column widths / row heights / column counts (added later; absent
+      // on legacy docs).
       const colWidths = sanitizeDimensionMap(parsed && parsed.colWidths);
       const rowHeights = sanitizeDimensionMap(parsed && parsed.rowHeights);
+      const colCounts = sanitizeColCounts(parsed && parsed.colCounts);
 
-      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights };
+      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights, colCounts };
       // Define a getter/setter proxy for legacy 'cells' compatibility pointing to the first visible sheet
       return setupCellsProxy(state);
     }
@@ -1316,7 +1318,8 @@ const loadState = async (key = 'default') => {
     sheetColors: Object.create(null),
     hiddenSheets: [],
     colWidths: Object.create(null),
-    rowHeights: Object.create(null)
+    rowHeights: Object.create(null),
+    colCounts: Object.create(null)
   };
   // Define getter/setter proxy on the fresh state object pointing to first visible sheet (Sheet1).
   return setupCellsProxy(freshState);
@@ -1340,6 +1343,26 @@ const sanitizeDimensionMap = (raw) => {
       if (typeof val === 'number' && Number.isFinite(val)) bucket[key] = val;
     }
     out[sheetName] = bucket;
+  }
+  return out;
+};
+
+/**
+ * Sanitize a persisted per-sheet column-count map ({ [sheet]: number }). Returns
+ * a prototype-free copy keeping only integer counts above the default and within
+ * the grid's range, dropping `__proto__`/inherited keys.
+ * @param {*} raw
+ * @returns {Object}
+ */
+const sanitizeColCounts = (raw) => {
+  const out = Object.create(null);
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [sheetName, count] of Object.entries(raw)) {
+    if (sheetName === '__proto__') continue;
+    const n = Number(count);
+    if (Number.isInteger(n) && n > dimensionService.DEFAULT_COLS && n <= dimensionService.MAX_COLS) {
+      out[sheetName] = n;
+    }
   }
   return out;
 };
@@ -1553,7 +1576,8 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
       sheetColors: Object.create(null),
       hiddenSheets: [],
       colWidths: Object.create(null),
-      rowHeights: Object.create(null)
+      rowHeights: Object.create(null),
+      colCounts: Object.create(null)
     };
 
     await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
@@ -1612,7 +1636,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       sheetColors: src.sheetColors || {},
       hiddenSheets: src.hiddenSheets || [],
       colWidths: src.colWidths || {},
-      rowHeights: src.rowHeights || {}
+      rowHeights: src.rowHeights || {},
+      colCounts: src.colCounts || {}
     }));
 
     const id = crypto.randomBytes(12).toString('hex');
@@ -1630,7 +1655,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       sheetColors: Object.assign(Object.create(null), clonedState.sheetColors),
       hiddenSheets: clonedState.hiddenSheets,
       colWidths: sanitizeDimensionMap(clonedState.colWidths),
-      rowHeights: sanitizeDimensionMap(clonedState.rowHeights)
+      rowHeights: sanitizeDimensionMap(clonedState.rowHeights),
+      colCounts: sanitizeColCounts(clonedState.colCounts)
     }));
 
     // Optionally carry over the source's collaborators (never re-adding the new
@@ -1736,7 +1762,10 @@ app.post('/api/files/import',
       sheetColors,
       hiddenSheets: [],
       colWidths: sanitizeDimensionMap(colWidths),
-      rowHeights: sanitizeDimensionMap(rowHeights)
+      rowHeights: sanitizeDimensionMap(rowHeights),
+      // Imported columns past Z render via the client's data-derived floor; no
+      // explicit blank-column growth to carry over.
+      colCounts: Object.create(null)
     };
 
     const id = crypto.randomBytes(12).toString('hex');
@@ -2188,7 +2217,8 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       sheetColors: (targetState.sheetColors && typeof targetState.sheetColors === 'object') ? targetState.sheetColors : Object.create(null),
       hiddenSheets: Array.isArray(targetState.hiddenSheets) ? targetState.hiddenSheets : [],
       colWidths: sanitizeDimensionMap(targetState.colWidths),
-      rowHeights: sanitizeDimensionMap(targetState.rowHeights)
+      rowHeights: sanitizeDimensionMap(targetState.rowHeights),
+      colCounts: sanitizeColCounts(targetState.colCounts)
     });
 
     // Save the updated state to the active workbook_state database
@@ -2208,6 +2238,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
         hiddenSheets: sheetState.hiddenSheets,
         colWidths: sheetState.colWidths,
         rowHeights: sheetState.rowHeights,
+        colCounts: sheetState.colCounts,
         cells: sheetState.cells,
         users: Array.from(activeUsers.entries()).map(([uid, info]) => ({
           userId: uid,
@@ -2553,6 +2584,11 @@ const applyStateOp = (workbook, type, payload) => {
     if (result.ok) {
       out.push({ all: true, msg: { type: 'resize-update', payload: { dimension, sheetName: result.sheetName, col: result.col, row: result.row, size: result.size } } });
     }
+  } else if (type === 'set-col-count') {
+    const result = dimensionService.setColCount(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'col-count-update', payload: { sheetName: result.sheetName, count: result.count } } });
+    }
   }
 
   return out;
@@ -2690,6 +2726,7 @@ wss.on('connection', async (ws, req) => {
       hiddenSheets: connWorkbook.hiddenSheets,
       colWidths: connWorkbook.colWidths,
       rowHeights: connWorkbook.rowHeights,
+      colCounts: connWorkbook.colCounts,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
       // Presence list merges this instance's sockets with users mirrored from
@@ -2718,7 +2755,8 @@ wss.on('connection', async (ws, req) => {
     'hide-sheet',
     'unhide-sheet',
     'reorder-sheets',
-    'resize'
+    'resize',
+    'set-col-count'
   ];
 
   // Handle incoming WebSocket message events.
