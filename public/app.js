@@ -151,6 +151,13 @@ let currentZoom = 100;
 
 // Default sheet dimensions: 26 columns (A-Z) and 1000 rows.
 const TOTAL_ROWS = 1000;
+// Columns start at A-Z and grow rightward, labelled AA, AB, … up to the ZZ cap.
+// The rendered count (see getColCount) is the larger of the rightmost column
+// holding data and an explicit per-sheet count bumped by column inserts, so a
+// column insert always adds a column even on an empty sheet while data is never
+// hidden. A column delete (or clearing far columns) shrinks it back.
+const DEFAULT_COLS = 26;        // A-Z
+const MAX_COLS = 26 + 26 * 26;  // up to ZZ (702 columns)
 
 // Initialize with a default sheet
 localSheets[activeSheetName] = Object.create(null);
@@ -224,6 +231,13 @@ let frozenCols = 0; // Number of left columns frozen via View > Freeze (0 = none
 let colWidths = Object.create(null); // { [sheetName]: { [colLetter]: px } }
 let rowHeights = Object.create(null); // { [sheetName]: { [rowNumber]: px } }
 
+// Per-sheet explicit column count, grown by column inserts and shrunk by column
+// deletes so the grid gains/loses a column even when no data sits at the edge.
+// In-memory only (keyed by sheet name): a reload falls back to the data-derived
+// count (see getColCount), so columns holding data always survive but purely
+// blank trailing columns do not persist.
+let colCounts = Object.create(null); // { [sheetName]: number }
+
 // Default track sizes — must match the base grid-template-columns / row min-height
 // in private/index.html (46px gutter + 100px columns, 21px rows).
 const DEFAULT_COL_WIDTH = 100;
@@ -247,6 +261,43 @@ const getRowHeight = (row, sheetName = activeSheetName) => {
 const sheetHasCustomRowHeights = (sheetName = activeSheetName) => {
   const m = rowHeights[sheetName];
   return !!(m && Object.keys(m).length);
+};
+
+/**
+ * Number of columns the grid renders for a sheet. The floor is the rightmost
+ * populated column (so columns holding data are always shown, growing past A-Z
+ * as data extends), raised by any explicit count from column inserts and capped
+ * at MAX_COLS. In history mode the count comes from the previewed snapshot.
+ * @param {string} [sheetName]
+ * @returns {number} Column count in [DEFAULT_COLS, MAX_COLS].
+ */
+const getColCount = (sheetName = activeSheetName) => {
+  const cells = (isHistoryMode && selectedVersionState)
+    ? (selectedVersionState.sheets && selectedVersionState.sheets[sheetName])
+    : localSheets[sheetName];
+  let maxIndex = DEFAULT_COLS - 1;
+  if (cells) {
+    for (const id in cells) {
+      const coord = parseCellCoord(id);
+      if (coord && coord.colIndex > maxIndex) maxIndex = coord.colIndex;
+    }
+  }
+  // History previews show the snapshot as-is; the live explicit count doesn't apply.
+  const explicit = isHistoryMode ? 0 : (colCounts[sheetName] || 0);
+  return Math.min(Math.max(maxIndex + 1, explicit), MAX_COLS);
+};
+
+/**
+ * Adjust the active sheet's explicit column count by `delta` (used by undo/redo
+ * to reverse/replay a column insert or delete) and re-render so the header band
+ * and grid tracks reflect the new width. No-op when delta is 0.
+ * @param {number} delta
+ */
+const applyColCountDelta = (delta) => {
+  if (!delta) return;
+  const base = colCounts[activeSheetName] != null ? colCounts[activeSheetName] : getColCount();
+  colCounts[activeSheetName] = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, base + delta));
+  renderSpreadsheetGrid();
 };
 
 // Per-sheet value filters now live in sort-filter.js (window.CoSheet.sortFilter).
@@ -998,7 +1049,7 @@ const pasteSelectedCells = () => {
   clipboardData.copiedCells.forEach(copied => {
     const newRow = target.row + copied.offsetRow;
     const newColIndex = target.colIndex + copied.offsetCol;
-    if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > 25) return;
+    if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
 
     const newColLetter = getColLetter(newColIndex);
     const newCellId = `${newColLetter}${newRow}`;
@@ -1182,7 +1233,9 @@ const performUndo = () => {
     // doubled inner-border artifact that per-cell restore order can leave. A
     // merge change moves grid tracks, which only a full rebuild reflects.
     if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
-    redoStack.push({ type: 'multi', changes: redoChanges });
+    // Reverse a column insert/delete's width change; re-renders the grid.
+    applyColCountDelta(action.colDelta ? -action.colDelta : 0);
+    redoStack.push({ type: 'multi', changes: redoChanges, colDelta: action.colDelta || 0 });
   } else {
     const cellId = action.cellId;
     const currentState = localCells[cellId] ? JSON.parse(JSON.stringify(localCells[cellId])) : { formula: '', value: '', style: {} };
@@ -1218,7 +1271,9 @@ const performRedo = () => {
       syncCellState(change.cellId);
     });
     if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
-    undoStack.push({ type: 'multi', changes: undoChanges });
+    // Replay a column insert/delete's width change; re-renders the grid.
+    applyColCountDelta(action.colDelta || 0);
+    undoStack.push({ type: 'multi', changes: undoChanges, colDelta: action.colDelta || 0 });
   } else {
     const cellId = action.cellId;
     const currentState = localCells[cellId] ? JSON.parse(JSON.stringify(localCells[cellId])) : { formula: '', value: '', style: {} };
@@ -1411,7 +1466,8 @@ const isCellChanged = (cellId, sheetName) => {
  * Helper to check if a row has any cell changes in history mode.
  */
 const isRowEdited = (r, sheetName) => {
-  for (let c = 0; c < 26; c++) {
+  const cols = getColCount(sheetName);
+  for (let c = 0; c < cols; c++) {
     const colLetter = getColLetter(c);
     const cellId = `${colLetter}${r}`;
     if (isCellChanged(cellId, sheetName)) {
@@ -1456,7 +1512,8 @@ const updateCellOverflow = (cellEl, cellId) => {
   // Count consecutive empty neighbours available for the text to spill over.
   let rightCols = 0;
   if (spillRight) {
-    for (let c = coord.colIndex + 1; c < 26; c++) {
+    const cols = getColCount();
+    for (let c = coord.colIndex + 1; c < cols; c++) {
       if (getCellValue(`${getColLetter(c)}${coord.row}`) !== '') break;
       rightCols++;
     }
@@ -1486,6 +1543,9 @@ const renderSpreadsheetGrid = () => {
   const gridRoot = document.getElementById('grid-root');
   if (!gridRoot) return;
 
+  // Column count for this render — grows past A-Z as data extends rightward.
+  const colCount = getColCount();
+
   // Merge coverage for this render. When the active sheet has merged cells we
   // switch the grid from auto-flow to explicit line placement so anchors can
   // span multiple tracks and their covered cells can be hidden without throwing
@@ -1504,8 +1564,8 @@ const renderSpreadsheetGrid = () => {
     if (corner) { corner.style.gridColumn = '1'; corner.style.gridRow = '1'; }
   }
 
-  // Render Column Headers A-Z
-  for (let c = 0; c < 26; c++) {
+  // Render Column Headers (A-Z and beyond as the grid grows)
+  for (let c = 0; c < colCount; c++) {
     const colLetter = getColLetter(c);
     const colHeader = document.createElement('div');
     colHeader.className = 'grid-header sticky top-0 z-20 cursor-pointer';
@@ -1634,8 +1694,8 @@ const renderSpreadsheetGrid = () => {
 
     gridRoot.appendChild(rowHeader);
 
-    // Cells A-Z for row
-    for (let c = 0; c < 26; c++) {
+    // Cells for row (A-Z and any grown columns)
+    for (let c = 0; c < colCount; c++) {
       const colLetter = getColLetter(c);
       const cellId = `${colLetter}${r}`;
       
@@ -1832,21 +1892,26 @@ const FREEZE_BORDER = '2px solid #919191';
  * by writing explicit CSS grid templates. Columns are always written from the
  * per-sheet widths (defaulting to 100px); row heights are only written when the
  * sheet has custom heights — otherwise the base `grid-auto-rows: minmax(21px,auto)`
- * rule is kept so rows still auto-grow with tall content. Skipped in history mode,
- * where collapsed "unedited" bars break the 1-row-per-grid-track mapping.
+ * rule is kept so rows still auto-grow with tall content. The row template is
+ * skipped in history mode, where collapsed "unedited" bars break the
+ * 1-row-per-grid-track mapping; the column template is still written there.
  * @param {HTMLElement} gridRoot
  */
 function applyGridTemplate(gridRoot) {
+  // Columns: gutter + each column's resolved width. Always written (even in
+  // history mode) so a sheet grown past A-Z gets enough tracks for every column
+  // — the base CSS only defines 26.
+  const colCount = getColCount();
+  const cols = [`${GUTTER_WIDTH}px`];
+  for (let c = 0; c < colCount; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
+  gridRoot.style.gridTemplateColumns = cols.join(' ');
+
+  // Rows are skipped in history mode, where collapsed "unedited" bars break the
+  // 1-row-per-grid-track mapping.
   if (isHistoryMode) {
-    gridRoot.style.gridTemplateColumns = '';
     gridRoot.style.gridTemplateRows = '';
     return;
   }
-  // Columns: gutter + each column's resolved width.
-  const cols = [`${GUTTER_WIDTH}px`];
-  for (let c = 0; c < 26; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
-  gridRoot.style.gridTemplateColumns = cols.join(' ');
-
   // Rows: only override when custom heights exist (keeps the common case on the
   // cheap auto-rows path). The header band is the first track.
   if (sheetHasCustomRowHeights()) {
@@ -2121,7 +2186,8 @@ const updateGridDOMCell = (cellId, value, style) => {
   if (!isHistoryMode) {
     const coord = parseCellCoord(cellId);
     if (coord) {
-      for (let c = 0; c < 26; c++) {
+      const cols = getColCount();
+      for (let c = 0; c < cols; c++) {
         const id = `${getColLetter(c)}${coord.row}`;
         updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
       }
@@ -4070,11 +4136,13 @@ const clearCell = (cellId) => {
 /* ---------------------------------------------------------------------------
  * Row / column insertion
  * ---------------------------------------------------------------------------
- * The grid is a fixed 26 columns (A-Z) x TOTAL_ROWS. Inserting a blank row or
- * column shifts existing cell data down/right (content pushed off the far edge
- * is dropped) and rewrites cell references inside every formula so they keep
- * pointing at the same data. The change is recorded as one multi-cell history
- * action and broadcast per-cell, reusing the existing edit/undo/sync plumbing.
+ * The grid starts at 26 columns (A-Z) x TOTAL_ROWS and grows rightward up to
+ * MAX_COLS as data is pushed past the current edge. Inserting a blank row or
+ * column shifts existing cell data down/right (content pushed past the absolute
+ * MAX_COLS / TOTAL_ROWS edge is dropped) and rewrites cell references inside
+ * every formula so they keep pointing at the same data. The change is recorded
+ * as one multi-cell history action and broadcast per-cell, reusing the existing
+ * edit/undo/sync plumbing.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -4195,6 +4263,8 @@ const adjustFormulaRefsForCellShift = (formula, direction, bounds, W, H) => {
  */
 const performStructuralInsert = (mode, at) => {
   if (isHistoryMode) return;
+  // A column insert adds one column to the grid even if no data sits at the edge.
+  const prevCols = mode === 'col' ? getColCount() : 0;
   const oldKeys = Object.keys(localCells);
 
   // Snapshot current state and compute the shifted target state.
@@ -4206,7 +4276,7 @@ const performStructuralInsert = (mode, at) => {
     let newCol = col, newRow = row;
     if (mode === 'row') { if (row + 1 >= at) newRow = row + 1; }
     else { if (col >= at) newCol = col + 1; }
-    if (newRow > TOTAL_ROWS - 1 || newCol > 25) return; // shifted off-grid -> dropped
+    if (newRow > TOTAL_ROWS - 1 || newCol > MAX_COLS - 1) return; // shifted off-grid -> dropped
     const cell = JSON.parse(JSON.stringify(localCells[id]));
     if (cell.formula) cell.formula = adjustFormulaRefs(cell.formula, mode, at);
     newState[`${getColLetter(newCol)}${newRow + 1}`] = cell;
@@ -4230,7 +4300,15 @@ const performStructuralInsert = (mode, at) => {
     }
   });
 
-  if (changes.length) recordHistoryAction({ type: 'multi', changes });
+  // Grow the grid by one column (recorded as colDelta so undo/redo can reverse
+  // it — needed even when no cells changed, e.g. inserting into an empty sheet).
+  let colDelta = 0;
+  if (mode === 'col') {
+    const newCount = Math.min(prevCols + 1, MAX_COLS);
+    colDelta = newCount - prevCols;
+    colCounts[activeSheetName] = newCount;
+  }
+  if (changes.length || colDelta) recordHistoryAction({ type: 'multi', changes, colDelta });
   recalculateSheet();
   renderSpreadsheetGrid();
 
@@ -4271,7 +4349,7 @@ const performCellInsert = (direction) => {
     } else { // down
       if (coord.colIndex >= minCol && coord.colIndex <= maxCol && coord.row >= minRow) newRow = coord.row + H;
     }
-    if (newCol > 25 || newRow > TOTAL_ROWS) return; // shifted off-grid -> dropped
+    if (newCol > MAX_COLS - 1 || newRow > TOTAL_ROWS) return; // shifted off-grid -> dropped
     const cell = JSON.parse(JSON.stringify(localCells[id]));
     if (cell.formula) cell.formula = adjustFormulaRefsForCellShift(cell.formula, direction, b, W, H);
     newState[`${getColLetter(newCol)}${newRow}`] = cell;
@@ -4507,6 +4585,8 @@ const adjustFormulaRefsForDelete = (formula, mode, at) => {
  */
 const performStructuralDelete = (mode, at) => {
   if (isHistoryMode) return;
+  // A column delete removes one column from the grid (never below the default).
+  const prevCols = mode === 'col' ? getColCount() : 0;
   const oldKeys = Object.keys(localCells);
 
   // Snapshot current state and compute the shifted-back target state.
@@ -4543,7 +4623,15 @@ const performStructuralDelete = (mode, at) => {
     }
   });
 
-  if (changes.length) recordHistoryAction({ type: 'multi', changes });
+  // Shrink the grid by one column (never below the default), recorded as colDelta
+  // so undo/redo can restore it.
+  let colDelta = 0;
+  if (mode === 'col') {
+    const newCount = Math.max(DEFAULT_COLS, prevCols - 1);
+    colDelta = newCount - prevCols;
+    colCounts[activeSheetName] = newCount;
+  }
+  if (changes.length || colDelta) recordHistoryAction({ type: 'multi', changes, colDelta });
   recalculateSheet();
   renderSpreadsheetGrid();
 
@@ -8040,6 +8128,8 @@ window.CoSheet.history.init({
 // ---------------------------------------------------------------------------
 window.CoSheet.app = {
   TOTAL_ROWS,
+  // Current rendered column count for a sheet (grows past A-Z with data).
+  getColCount,
   get activeCellId() { return activeCellId; },
   get activeSheetName() { return activeSheetName; },
   get sheetOrder() { return sheetOrder; },
