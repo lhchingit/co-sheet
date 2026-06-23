@@ -196,6 +196,7 @@
   "tip.strikethrough": "Strikethrough (Alt+Shift+5)",
   "tip.textColor": "Text color",
   "tip.fillColor": "Fill color",
+  "tip.clearFormat": "Clear formatting (Ctrl+\\)",
   "tip.border": "Borders",
   "tip.zoom": "Zoom",
   "border.all": "All borders",

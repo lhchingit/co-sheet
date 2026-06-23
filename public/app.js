@@ -3127,6 +3127,80 @@ const changeCellTextColor = (cellId, hex) => {
 };
 
 /**
+ * Clears all formatting from the selected cell(s), restoring them to their
+ * unstyled default while leaving the underlying content (formula/value) intact.
+ * Mirrors Google Sheets' "Clear formatting" (Ctrl+\): font, colors, borders,
+ * bold/italic/strikethrough, alignment, number format, text wrapping, etc. are
+ * all reset. Two style properties are *not* visual formatting and so survive:
+ *   • link  – the cell's hyperlink target (a cell can render purely from it via
+ *             the `val || link` fallback in the renderer, so dropping it would
+ *             lose content), and
+ *   • merge – the merged-range span anchored on this cell; clearing formatting
+ *             must not unmerge cells.
+ * @param {string} cellId - Selected cell ID.
+ */
+const clearFormatting = (cellId) => {
+  const selectedIds = getSelectedCellIds();
+  const cellIds = selectedIds.includes(cellId) ? selectedIds : [cellId];
+  const historyChanges = [];
+  // Borders are drawn neighbour-aware: a cell's left/top edge is also painted by
+  // the cell to its left/above (as their right/bottom). So when a bordered cell
+  // is cleared, every neighbour around it must be re-rendered too — otherwise the
+  // shared left/top edges linger, drawn by neighbours we never refreshed.
+  const renderIds = new Set();
+
+  cellIds.forEach(id => {
+    const cell = localCells[id];
+    if (!cell || !cell.style) return;
+    const preserved = {};
+    if (cell.style.link) preserved.link = cell.style.link;
+    if (cell.style.merge) preserved.merge = cell.style.merge;
+    // Nothing to clear when every style property is one we keep (or there are none).
+    if (Object.keys(cell.style).length === Object.keys(preserved).length) return;
+
+    const hadBorders = styleHasBorders(cell.style);
+    const before = JSON.parse(JSON.stringify(cell));
+    cell.style = preserved;
+    historyChanges.push({ cellId: id, before, after: JSON.parse(JSON.stringify(cell)) });
+
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'cell-edit',
+        payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
+      }));
+    }
+
+    renderIds.add(id);
+    if (hadBorders) {
+      const coord = parseCellCoord(id);
+      if (coord) {
+        const { row: r, colIndex: c } = coord;
+        const colCount = getColCount(activeSheetName);
+        if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
+        if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
+        if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
+        if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+      }
+    }
+  });
+
+  // Render only after every cell is mutated so neighbour-aware edge de-duping
+  // reads final state.
+  renderIds.forEach(id => {
+    const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
+    updateGridDOMCell(id, getCellValue(id), st);
+  });
+
+  if (historyChanges.length) {
+    recordHistoryAction({ type: 'multi', changes: historyChanges });
+  }
+  recalculateSheet();
+  if (activeCellId) {
+    updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
+  }
+};
+
+/**
  * Sets the number format on the selected cell(s). Applying the same format
  * again is a no-op (the value already displays in that format).
  * @param {string} cellId - Selected cell ID.
@@ -5327,6 +5401,15 @@ if (toolbarStrikethroughBtn) {
   });
 }
 
+const toolbarClearFormatBtn = document.getElementById('toolbar-clear-format');
+if (toolbarClearFormatBtn) {
+  toolbarClearFormatBtn.addEventListener('click', () => {
+    if (activeCellId) {
+      clearFormatting(activeCellId);
+    }
+  });
+}
+
 // Hook up toolbar border, alignment, and link buttons
 const toolbarBorderBtn = document.getElementById('toolbar-border');
 if (toolbarBorderBtn) {
@@ -6018,6 +6101,12 @@ document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'k') {
       e.preventDefault();
       if (activeCellId) openLinkDialog(activeCellId);
+      return;
+    }
+    // Ctrl+\ clears all formatting from the selection (Google Sheets parity).
+    if (e.code === 'Backslash' && !e.shiftKey) {
+      e.preventDefault();
+      clearFormatting(activeCellId);
       return;
     }
     // Ctrl+Shift+. increases font size; Ctrl+Shift+, decreases it
@@ -7162,6 +7251,9 @@ if (menuFormatBtn && menuFormatDropdown) {
   wireFmt('fmt-text-italic',    () => act((id) => toggleFormat(id, 'italic')));
   wireFmt('fmt-text-underline', () => act((id) => toggleFormat(id, 'underline')));
   wireFmt('fmt-text-strike',    () => act((id) => toggleFormat(id, 'strikethrough')));
+
+  // Clear formatting
+  wireFmt('fmt-clear',          () => act((id) => clearFormatting(id)));
 
   // Alignment (horizontal + vertical)
   wireFmt('fmt-align-left',    () => act((id) => setCellAlignment(id, 'left')));

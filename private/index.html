@@ -1093,11 +1093,11 @@
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_color_fill</span><span data-i18n="fmt.altColors">Alternating colors</span></span>
        </div>
        <div class="border-t border-outline-variant my-1"></div>
-       <!-- Clear formatting (unsupported – greyed out) -->
-       <div class="flex items-center justify-between w-full px-4 py-2 text-label-lg text-outline opacity-50 cursor-default select-none">
+       <!-- Clear formatting: resets all cell styling while keeping content. -->
+       <button id="fmt-clear" class="flex items-center justify-between w-full px-4 py-2 text-left hover:bg-surface-variant text-label-lg text-on-surface-variant">
          <span class="flex items-center gap-3"><span class="material-symbols-outlined text-[18px]">format_clear</span><span data-i18n="fmt.clear">Clear formatting</span></span>
-         <span class="text-xs">Ctrl+\</span>
-       </div>
+         <span class="text-xs text-outline">Ctrl+\</span>
+       </button>
      </div>
    </div>
 <!-- Data menu item with dropdown options. Only "Sort sheet" is wired (it sorts
@@ -1388,6 +1388,8 @@
   <span id="toolbar-color-fill-swatch" class="toolbar-color-swatch" style="background-color: #ffffff;"></span>
   <input type="color" id="toolbar-color-fill-input" class="absolute w-0 h-0 opacity-0 pointer-events-none" value="#ffffff" tabindex="-1" aria-hidden="true">
 </div>
+<!-- Clear formatting: strips all styling from the selection while keeping content. -->
+<button id="toolbar-clear-format" title="Clear formatting (Ctrl+\)" data-i18n-title="tip.clearFormat" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">format_clear</span></button>
 <div class="w-px h-5 bg-outline-variant mx-1"></div>
 <button id="toolbar-border" title="Borders" data-i18n-title="tip.border" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">border_all</span></button>
   <!-- Alignment Dropdown Selector -->
