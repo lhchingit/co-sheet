@@ -137,6 +137,11 @@ if (typeof setTimeout === 'undefined') {
   globalThis.setTimeout = (fn) => { fn(); };
 }
 
+// Fallback for sandboxed test environments lacking queueMicrotask
+if (typeof queueMicrotask === 'undefined') {
+  globalThis.queueMicrotask = (fn) => { fn(); };
+}
+
 // Global state variables
 let localSheets = Object.create(null);
 let activeSheetName = 'Sheet1';
