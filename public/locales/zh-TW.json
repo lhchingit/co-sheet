@@ -196,6 +196,7 @@
   "tip.strikethrough": "刪除線 (Alt+Shift+5)",
   "tip.textColor": "文字顏色",
   "tip.fillColor": "填滿顏色",
+  "tip.clearFormat": "清除格式 (Ctrl+\\)",
   "tip.border": "邊框",
   "tip.zoom": "縮放",
   "border.all": "所有框線",
