@@ -1776,13 +1776,17 @@ const renderSpreadsheetGrid = () => {
         } else if (cellData.style.textWrap === 'clip') {
           cellEl.style.overflow = 'hidden';
         }
-        applyCellBorders(cellEl, cellData.style, cellId);
         // Apply vertical alignment style if present
         if (cellData.style.verticalAlign) {
           cellEl.style.justifyContent = cellData.style.verticalAlign === 'top' ? 'flex-start' :
                                         (cellData.style.verticalAlign === 'center' ? 'center' : 'flex-end');
         }
       }
+
+      // Render borders for every cell, even blank ones: an interior boundary
+      // line is painted by the cell to its left/top, so a blank cell may still
+      // need to draw a bordered neighbour's right/bottom edge.
+      applyCellBorders(cellEl, (cellData && cellData.style) || EMPTY_STYLE, cellId);
 
       // Horizontal alignment: explicit style wins, else numbers right-align
       const cellAlign = resolveCellAlign(rawVal, cellData && cellData.style);
@@ -3593,6 +3597,25 @@ const BORDER_STYLE_CSS = {
 let currentBorderColor = '#000000';
 let currentBorderStyle = 'thin';
 
+// Width (px) and line type of each border style. The width doubles as the
+// "visual weight" used to resolve which of two coincident specs wins a shared
+// edge — a heavier border must not be hidden behind a lighter one.
+const BORDER_WEIGHT = { thin: 1, dashed: 1, dotted: 1, medium: 2, thick: 3, double: 3 };
+const BORDER_LINE = { thin: 'solid', medium: 'solid', thick: 'solid', dashed: 'dashed', dotted: 'dotted', double: 'double' };
+/** Weight of a border spec (0 if none); higher draws over a lighter neighbour. */
+const borderWeight = (spec) => (spec ? (BORDER_WEIGHT[spec.style] || 1) : 0);
+/** Build a full-width CSS border value for a spec (used only in history mode). */
+const borderCss = (spec) =>
+  `${BORDER_WEIGHT[spec.style] || 1}px ${BORDER_LINE[spec.style] || 'solid'} ${spec.color || '#000000'}`;
+// Width (px) of a cell's default gridline border — must match the
+// `border-right`/`border-bottom` width on `.grid-cell`. Border overlays are
+// positioned relative to the padding box, which sits this far inside the track
+// boundary on the gridline sides, so the offset is compensated by it.
+const GRIDLINE_W = 1;
+// Shared read-only stand-in for a blank cell's (absent) style, so applyCellBorders
+// can still be asked to paint a bordered neighbour's edge without allocating.
+const EMPTY_STYLE = Object.freeze({});
+
 /**
  * Returns the border spec for one side of a cell's style, normalising the
  * legacy boolean `style.border` to a thin-grey spec on every side.
@@ -3609,49 +3632,119 @@ const styleHasBorders = (style) => !!(style && (style.border || (style.borders &
   (style.borders.top || style.borders.right || style.borders.bottom || style.borders.left))));
 
 /**
- * Applies a cell's stored borders to its DOM element (per-side CSS).
+ * Append one border line as an absolutely-positioned overlay on `cellEl`.
  *
- * Shared interior edges are drawn only once: a cell yields its right/bottom
- * edge to the neighbour's left/top edge when that neighbour also has one.
- * Without this, two coincident 1px borders stack and inner lines render twice
- * as thick as the outer perimeter.
+ * The line is drawn at its full integer width (so thin/medium/thick stay
+ * visually distinct — fractional CSS border widths round to a 1px minimum and
+ * collapse together), and is centered on the cell boundary by offsetting it
+ * half its width past the edge so it bleeds equally into both adjacent cells.
+ * `straddle` is false for the grid's outer frame, where the line is drawn fully
+ * inside the edge cell instead of overflowing off-grid.
+ * @param {HTMLElement} cellEl
+ * @param {'top'|'right'|'bottom'|'left'} edge
+ * @param {{color:string,style:string}} spec
+ * @param {boolean} straddle
+ */
+const addBorderLine = (cellEl, edge, spec, straddle) => {
+  const w = BORDER_WEIGHT[spec.style] || 1;
+  const line = BORDER_LINE[spec.style] || 'solid';
+  const color = spec.color || '#000000';
+  // The right/bottom edges carry the default gridline border, so the padding
+  // box (which absolute offsets reference) is GRIDLINE_W inside the track
+  // boundary there; left/top have no default border. Straddle centers the line
+  // on the boundary; otherwise (grid frame) it sits just inside it.
+  const b = (edge === 'right' || edge === 'bottom') ? GRIDLINE_W : 0;
+  // Centering a 1px line on the boundary would straddle a pixel and antialias
+  // it into a faint, near-invisible half-line (worse under the grid's zoom), so
+  // a hairline is snapped crisp onto the single gridline pixel just inside the
+  // upper/left cell. Interior hairlines snap to that SAME pixel for every edge
+  // (a cell's own left/top and the neighbour's coincident right/bottom), so the
+  // two overlap exactly instead of landing on opposite sides and reading as one
+  // 2px line. Wider lines have a lit core and centre cleanly on the boundary.
+  const off = (straddle && w > 1) ? -(b + w / 2)
+            : straddle            ? -GRIDLINE_W
+            :                       -b;
+  const el = document.createElement('div');
+  el.className = 'grid-border-line';
+  // Span the full track on the cross axis (reaching past the padding box into
+  // the 1px gridline border) so lines meet flush at every crossing with no gap.
+  let css = 'position:absolute;pointer-events:none;z-index:3;';
+  if (edge === 'right' || edge === 'left') {
+    css += `top:0;bottom:-${GRIDLINE_W}px;width:0;${edge}:${off}px;border-left:${w}px ${line} ${color};`;
+  } else {
+    css += `left:0;right:-${GRIDLINE_W}px;height:0;${edge}:${off}px;border-top:${w}px ${line} ${color};`;
+  }
+  el.style.cssText = css;
+  cellEl.appendChild(el);
+};
+
+/**
+ * Applies a cell's stored borders to its DOM element.
+ *
+ * A border between two cells is drawn once (by a single owner — the left cell
+ * of a vertical boundary, the top cell of a horizontal one) as an overlay line
+ * centered on the shared boundary, so it bleeds equally into both cells the way
+ * a spreadsheet's gridlines do. The owner uses the heavier of the two
+ * coincident specs, so a thick border is never hidden behind a neighbour's thin
+ * one. The owner suppresses its own default gridline on that edge so the
+ * gridline doesn't peek out beside the custom line. A cell paints a left/top
+ * border itself only at the grid's outer edge (column A / row 1), where there
+ * is no preceding neighbour to own the boundary.
+ *
+ * History mode renders from a snapshot (no live neighbours), so it falls back
+ * to plain full-width CSS borders on each cell's four stored sides.
  * @param {HTMLElement} cellEl - The grid cell element.
  * @param {Object} [style] - The cell's style object.
- * @param {string} [cellId] - The cell ID, enabling neighbour-aware de-duping.
+ * @param {string} [cellId] - The cell ID, enabling neighbour-aware rendering.
  */
 const applyCellBorders = (cellEl, style, cellId) => {
-  if (!cellEl || !style) return;
-  const top = cellBorderSide(style, 'top');
-  const left = cellBorderSide(style, 'left');
-  let right = cellBorderSide(style, 'right');
-  let bottom = cellBorderSide(style, 'bottom');
+  if (!cellEl) return;
+  // Clear any overlay lines / suppressed gridlines from a previous render so
+  // repeated calls on the same element stay idempotent.
+  cellEl.querySelectorAll(':scope > .grid-border-line').forEach((e) => e.remove());
+  cellEl.style.borderRightColor = '';
+  cellEl.style.borderBottomColor = '';
+  if (!style) return;
 
-  // De-dupe shared edges against live neighbours (skipped in history mode,
-  // which renders from a snapshot rather than localCells).
-  if (cellId && !isHistoryMode) {
-    const coord = parseCellCoord(cellId);
-    if (coord) {
-      if (right) {
-        const rId = `${getColLetter(coord.colIndex + 1)}${coord.row}`;
-        if (cellBorderSide(localCells[rId] && localCells[rId].style, 'left')) right = null;
-      }
-      if (bottom) {
-        const bId = `${getColLetter(coord.colIndex)}${coord.row + 1}`;
-        if (cellBorderSide(localCells[bId] && localCells[bId].style, 'top')) bottom = null;
-      }
-    }
+  const coord = (cellId && !isHistoryMode) ? parseCellCoord(cellId) : null;
+
+  if (!coord) {
+    // No neighbour context (history mode): draw each stored side full width.
+    const top = cellBorderSide(style, 'top'), left = cellBorderSide(style, 'left');
+    const right = cellBorderSide(style, 'right'), bottom = cellBorderSide(style, 'bottom');
+    if (top) cellEl.style.borderTop = borderCss(top);
+    if (left) cellEl.style.borderLeft = borderCss(left);
+    if (right) cellEl.style.borderRight = borderCss(right);
+    if (bottom) cellEl.style.borderBottom = borderCss(bottom);
+    return;
   }
 
-  const applySide = (side, spec) => {
-    if (!spec) return;
-    const fn = BORDER_STYLE_CSS[spec.style] || BORDER_STYLE_CSS.thin;
-    const prop = 'border' + side.charAt(0).toUpperCase() + side.slice(1);
-    cellEl.style[prop] = fn(spec.color || '#000000');
-  };
-  applySide('top', top);
-  applySide('left', left);
-  applySide('right', right);
-  applySide('bottom', bottom);
+  const c = coord.colIndex, r = coord.row;
+  const sideOf = (id, side) => cellBorderSide(localCells[id] && localCells[id].style, side);
+  // Effective boundary spec = heavier of the two coincident sides; equal
+  // weights resolve to the left/top cell so both neighbours agree.
+  const pick = (lo, hi) => (borderWeight(lo) >= borderWeight(hi) ? lo : hi);
+  // A wrapped/clipped cell has overflow:hidden, which would clip a straddling
+  // overlay; draw its borders fully inside instead (slightly off-centre, but
+  // visible). Blank cells (the common owner of a neighbour's edge) never wrap.
+  const canStraddle = style.textWrap !== 'wrap' && style.textWrap !== 'clip';
+
+  // Right boundary — owned by this cell; merge in the right neighbour's left.
+  const rightEff = pick(cellBorderSide(style, 'right'), sideOf(`${getColLetter(c + 1)}${r}`, 'left'));
+  if (rightEff) { addBorderLine(cellEl, 'right', rightEff, canStraddle); cellEl.style.borderRightColor = 'transparent'; }
+  // Bottom boundary — owned by this cell; merge in the bottom neighbour's top.
+  const bottomEff = pick(cellBorderSide(style, 'bottom'), sideOf(`${getColLetter(c)}${r + 1}`, 'top'));
+  if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff, canStraddle && r !== TOTAL_ROWS); cellEl.style.borderBottomColor = 'transparent'; }
+  // Left/top boundaries are also owned by the preceding neighbour (it paints
+  // them as its right/bottom), but a cell paints its OWN explicit left/top too,
+  // so its borders never depend on that neighbour re-rendering — the two
+  // coincident lines centre identically and overlap exactly (no double width).
+  // At the grid's outer edge (column A / row 1) there is no neighbour, so the
+  // line is drawn inset rather than straddling off-grid.
+  const left = cellBorderSide(style, 'left');
+  if (left) addBorderLine(cellEl, 'left', left, canStraddle && c !== 0);
+  const top = cellBorderSide(style, 'top');
+  if (top) addBorderLine(cellEl, 'top', top, canStraddle && r !== 1);
 };
 
 /**
@@ -3741,17 +3834,22 @@ const applyBordersToSelection = (mode) => {
   });
 
   // Render only after every cell is mutated, so neighbour-aware edge de-duping
-  // reads final state. Also refresh the cells just outside the top/left edges,
-  // whose right/bottom edges may now coincide with the selection's borders.
+  // reads final state. Also refresh the ring of cells just outside the
+  // selection: an edge's winning side can flip in either direction, so a
+  // neighbour on any of the four sides may need to start or stop drawing the
+  // shared edge.
+  const colCount = getColCount(activeSheetName);
   const renderIds = new Set(ids);
   for (let r = minRow; r <= maxRow; r++) {
     if (minCol - 1 >= 0) renderIds.add(`${getColLetter(minCol - 1)}${r}`);
+    if (maxCol + 1 < colCount) renderIds.add(`${getColLetter(maxCol + 1)}${r}`);
   }
   for (let c = minCol; c <= maxCol; c++) {
     if (minRow - 1 >= 1) renderIds.add(`${getColLetter(c)}${minRow - 1}`);
+    if (maxRow + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${maxRow + 1}`);
   }
   renderIds.forEach((id) => {
-    const st = localCells[id] ? localCells[id].style : {};
+    const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
     updateGridDOMCell(id, getCellValue(id), st);
   });
 

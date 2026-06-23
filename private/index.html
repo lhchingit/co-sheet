@@ -163,6 +163,15 @@
             grid-template-columns: 46px repeat(26, 100px);
             grid-auto-rows: minmax(21px, auto);
             position: relative; /* Enabled for absolute range positioning */
+            /* Trailing scroll buffer past the last column — the horizontal
+               counterpart of .grid-bottom-buffer. Without it the last column's
+               right border sits under the synthetic vertical scrollbar (14px,
+               drawn over the viewport's right edge) when scrolled fully right,
+               and the bar's own left border shows in its place. This padding
+               lets the last column scroll clear of the bar. It rides #grid-root's
+               CSS `zoom`, so 42px keeps clearing the 14px bar down to 50% zoom
+               (the minimum), matching the bottom buffer's clearance. */
+            padding-right: 42px;
         }
         /* Style for cells that are part of the currently selected cell range.
            Only the light-blue tint fill is applied. The cell's own 1px gray
