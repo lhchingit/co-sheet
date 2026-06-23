@@ -350,3 +350,53 @@ test('Mock OIDC endpoints return 404 when disabled', async (t) => {
   }
 });
 
+test('Login page shows the Google button by default', async (t) => {
+  // Google is the primary production sign-in, so it is enabled without any flag.
+  const html = await fetchLoginPage({ GOOGLE_LOGIN_ENABLED: '' });
+  assert.ok(html.includes('Sign in with Google'));
+  // Other providers are unaffected by the flag.
+  assert.ok(html.includes('Sign in with Local OIDC'));
+  assert.ok(html.includes('Sign in with Mock OIDC'));
+});
+
+test('Login page still shows the Google button in production by default', async (t) => {
+  // Unlike the mock provider, Google stays enabled in production unless turned off.
+  const html = await fetchLoginPage({ NODE_ENV: 'production', GOOGLE_LOGIN_ENABLED: '' });
+  assert.ok(html.includes('Sign in with Google'));
+});
+
+test('Login page hides the Google button when GOOGLE_LOGIN_ENABLED=false', async (t) => {
+  const html = await fetchLoginPage({ GOOGLE_LOGIN_ENABLED: 'false' });
+  assert.ok(!html.includes('Sign in with Google'));
+  // The other login options remain intact.
+  assert.ok(html.includes('Sign in with Local OIDC'));
+  assert.ok(html.includes('Sign in with Mock OIDC'));
+});
+
+test('Google endpoints return 404 when disabled', async (t) => {
+  // Boot with Google login disabled and confirm the sign-in routes are unreachable,
+  // not merely hidden on the login page.
+  const child = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT: '31238', GOOGLE_LOGIN_ENABLED: 'off' }
+  });
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  try {
+    // /auth/google must not start the flow or serve the mock page; it 404s.
+    const authStart = await fetch('http://localhost:31238/auth/google', { redirect: 'manual' });
+    assert.strictEqual(authStart.status, 404);
+
+    const callback = await fetch('http://localhost:31238/auth/google/callback', { redirect: 'manual' });
+    assert.strictEqual(callback.status, 404);
+
+    const mockLogin = await fetch('http://localhost:31238/auth/google/mock-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'a@b.c' })
+    });
+    assert.strictEqual(mockLogin.status, 404);
+  } finally {
+    child.kill();
+  }
+});
+
