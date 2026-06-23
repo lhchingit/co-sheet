@@ -156,6 +156,7 @@ cp .env.example .env
 | `REDIS_CLUSTER`      | Set `true` when `REDIS_URL` points at a cluster-mode Redis (slot-aware client). |
 | `GOOGLE_CLIENT_ID`   | Google OAuth 2.0 client ID (OIDC).                                           |
 | `GOOGLE_CLIENT_SECRET`| Google OAuth 2.0 client secret.                                            |
+| `GOOGLE_LOGIN_ENABLED`| Toggle "Sign in with Google" (enabled by default). Set `false`/`0`/`no`/`off` to remove the button and make the `/auth/google` routes return 404. |
 | `OIDC_ISSUER`        | External OIDC provider issuer URL (enables "Sign in with Local OIDC").       |
 | `OIDC_AUTHORIZATION_URL` / `OIDC_TOKEN_URL` / `OIDC_USERINFO_URL` | External OIDC endpoints (userinfo defaults to `<issuer>/userinfo`). |
 | `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | External OIDC client credentials. Redirect URI: `<BASE_URL>/auth/oidc-sso/callback`. |

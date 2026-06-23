@@ -21,7 +21,10 @@
         
         <!-- Authentication provider buttons -->
         <div class="space-y-4">
-            <!-- Google Login Redirect Link -->
+            <!-- GOOGLE_LOGIN_START: "Sign in with Google" (Google OAuth/OIDC, or
+                 the built-in mock Google page when credentials are unset). The
+                 server strips this block from the served page when Google login
+                 is disabled (see GOOGLE_LOGIN_ENABLED). -->
             <a href="/auth/google" class="w-full flex items-center justify-center gap-3 py-3 border border-slate-200 rounded-xl hover:bg-slate-50 font-medium text-slate-700 transition-all">
                 <svg class="w-5 h-5" viewBox="0 0 24 24">
                     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -31,7 +34,8 @@
                 </svg>
                 Sign in with Google
             </a>
-            
+            <!-- GOOGLE_LOGIN_END -->
+
             <!-- External / self-hosted OIDC Login Redirect Link (configured via OIDC_* env vars) -->
             <a href="/auth/oidc-sso" class="w-full flex items-center justify-center gap-3 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium transition-all shadow-md">
                 <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

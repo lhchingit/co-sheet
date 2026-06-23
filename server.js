@@ -609,8 +609,9 @@ const registerStrategies = () => {
     }));
   }
 
-  // Register Google OIDC strategy if credentials are configured in the environment.
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  // Register Google OIDC strategy if credentials are configured and Google login
+  // is enabled (GOOGLE_LOGIN_ENABLED).
+  if (isGoogleLoginEnabled() && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.use('google', new OIDCStrategy({
       issuer: 'https://accounts.google.com',
       authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -860,6 +861,39 @@ function requireMockOidcEnabled(req, res, next) {
   next();
 }
 
+/**
+ * Whether the "Sign in with Google" option is offered on the login page. Unlike
+ * the mock provider, Google is the primary production sign-in, so it is ENABLED
+ * by default and only turned off when GOOGLE_LOGIN_ENABLED is explicitly set to a
+ * falsy value:
+ *   - unset/blank: enabled
+ *   - "false"/"0"/"no"/"off": disabled
+ *   - any other value: enabled
+ * This governs both the visibility of the login button and whether the
+ * /auth/google routes respond at all (see requireGoogleLoginEnabled), so a
+ * disabled Google option is fully unreachable rather than merely hidden.
+ */
+function isGoogleLoginEnabled() {
+  const v = process.env.GOOGLE_LOGIN_ENABLED;
+  if (v === undefined || v.trim() === '') {
+    return true;
+  }
+  return !/^(false|0|no|off)$/i.test(v.trim());
+}
+
+/**
+ * Express middleware that gates the Google sign-in routes. When Google login is
+ * disabled the /auth/google endpoints respond as if they don't exist (404), so
+ * the option is fully unreachable rather than merely hidden on the login page.
+ * Declared as a function so it is hoisted for routes defined earlier in the file.
+ */
+function requireGoogleLoginEnabled(req, res, next) {
+  if (!isGoogleLoginEnabled()) {
+    return res.status(404).send('Not Found');
+  }
+  next();
+}
+
 // Cache the login page markup; strip the Mock OIDC block once at startup based on
 // the env flag so we don't re-read/re-parse the file on every request.
 const LOGIN_HTML_PATH = path.join(__dirname, 'public', 'login.html');
@@ -867,6 +901,12 @@ let loginPageHtml = fs.readFileSync(LOGIN_HTML_PATH, 'utf8');
 if (!isMockOidcEnabled()) {
   loginPageHtml = loginPageHtml.replace(
     /\s*<!-- MOCK_OIDC_START:[\s\S]*?<!-- MOCK_OIDC_END -->/,
+    ''
+  );
+}
+if (!isGoogleLoginEnabled()) {
+  loginPageHtml = loginPageHtml.replace(
+    /\s*<!-- GOOGLE_LOGIN_START:[\s\S]*?<!-- GOOGLE_LOGIN_END -->/,
     ''
   );
 }
@@ -952,8 +992,9 @@ app.get('/auth/oidc-sso/callback', (req, res, next) => {
   })(req, res, next);
 });
 
-// Route for Google OAuth redirect setup or mock login fallback.
-app.get('/auth/google', (req, res, next) => {
+// Route for Google OAuth redirect setup or mock login fallback. Gated so it is
+// unreachable when Google login is disabled (GOOGLE_LOGIN_ENABLED).
+app.get('/auth/google', requireGoogleLoginEnabled, (req, res, next) => {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.authenticate('google')(req, res, next);
   } else {
@@ -1076,8 +1117,9 @@ app.get('/auth/google', (req, res, next) => {
   }
 });
 
-// Handle mock Google login form submissions.
-app.post('/auth/google/mock-login', (req, res) => {
+// Handle mock Google login form submissions. Gated alongside the other Google
+// routes (GOOGLE_LOGIN_ENABLED).
+app.post('/auth/google/mock-login', requireGoogleLoginEnabled, (req, res) => {
   const { email, name } = req.body;
   req.login({ username: name || email || 'Google User', email: email || null, picture: null, provider: 'google' }, (err) => {
     if (err) {
@@ -1087,8 +1129,9 @@ app.post('/auth/google/mock-login', (req, res) => {
   });
 });
 
-// Callback receiver for Google OAuth OIDC redirects.
-app.get('/auth/google/callback', (req, res, next) => {
+// Callback receiver for Google OAuth OIDC redirects. Gated so it is unreachable
+// when Google login is disabled (GOOGLE_LOGIN_ENABLED).
+app.get('/auth/google/callback', requireGoogleLoginEnabled, (req, res, next) => {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.authenticate('google', {
       successRedirect: '/',
