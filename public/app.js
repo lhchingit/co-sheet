@@ -1506,6 +1506,42 @@ const isRowEdited = (r, sheetName) => {
 const COLUMN_WIDTH = 100;
 
 /**
+ * Recomputing a row's overflow spill is expensive: updateCellOverflow reads
+ * scrollWidth/clientWidth, which forces a synchronous layout (reflow). Multi-cell
+ * formatting (fill colour, borders, …) updates many cells in the same row, and
+ * doing a whole-row recompute per cell turns that into O(cells × cols) forced
+ * reflows — the source of the lag tracked in issue #73.
+ *
+ * Instead, callers schedule the affected row here; rows are de-duplicated and the
+ * recompute runs once per row on the next microtask. A microtask still flushes
+ * before the browser paints, so the result is visually synchronous, and computing
+ * overflow only after the whole batch has mutated the DOM is also more correct
+ * (neighbours are all in their final state).
+ */
+const pendingOverflowRows = new Set();
+let overflowFlushScheduled = false;
+const flushPendingOverflow = () => {
+  overflowFlushScheduled = false;
+  const rows = Array.from(pendingOverflowRows);
+  pendingOverflowRows.clear();
+  if (isHistoryMode) return;
+  const cols = getColCount();
+  rows.forEach(row => {
+    for (let c = 0; c < cols; c++) {
+      const id = `${getColLetter(c)}${row}`;
+      updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
+    }
+  });
+};
+const scheduleRowOverflow = (row) => {
+  pendingOverflowRows.add(row);
+  if (!overflowFlushScheduled) {
+    overflowFlushScheduled = true;
+    queueMicrotask(flushPendingOverflow);
+  }
+};
+
+/**
  * Lets a cell whose text is wider than the column spill across consecutive empty
  * neighbour cells (like Google Sheets / Excel) instead of being clipped by them.
  * Text is still clipped at the first neighbour that has content. Spill direction
@@ -2212,15 +2248,11 @@ const updateGridDOMCell = (cellId, value, style) => {
 
   // Recompute overflow spill for the whole row: this cell's content may now
   // overflow, and a change to its emptiness affects neighbours' ability to spill.
+  // Scheduled (and de-duplicated by row) so a multi-cell update recomputes each
+  // affected row once rather than once per cell — see scheduleRowOverflow / #73.
   if (!isHistoryMode) {
     const coord = parseCellCoord(cellId);
-    if (coord) {
-      const cols = getColCount();
-      for (let c = 0; c < cols; c++) {
-        const id = `${getColLetter(c)}${coord.row}`;
-        updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
-      }
-    }
+    if (coord) scheduleRowOverflow(coord.row);
   }
 };
 
