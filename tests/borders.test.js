@@ -144,3 +144,28 @@ test('grid outer edges (column A / row 1) draw their own left / top', () => {
   assert.ok(css.some((c) => c.includes('left:')), 'A1 draws its own left edge');
   assert.ok(css.some((c) => c.includes('top:')), 'A1 draws its own top edge');
 });
+
+const thick = () => ({ color: '#000000', style: 'thick' });
+
+test('a thick interior border is drawn inset, never straddling into the neighbour', () => {
+  // Regression: a straddling overlay bleeds half its width into the neighbour
+  // cell; that half is painted over when the neighbour is independently
+  // re-rendered (e.g. bordering an adjacent range later), and at fractional
+  // device-pixel ratios (125%/150% display scaling) the line then reads as half
+  // width. Keeping the line fully inside the owner (boundary-facing edge on the
+  // boundary, offset = -GRIDLINE_W on the gridline sides) makes it immune.
+  const sandbox = createSandbox();
+  sandbox.localCells = { B2: { style: { borders: { right: thick(), bottom: thick() } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.B2.style, 'B2');
+
+  const css = lines(el).map((l) => l.style.cssText || '');
+  const right = css.find((c) => /(^|;)\s*right:/.test(c));
+  const bottom = css.find((c) => /(^|;)\s*bottom:/.test(c));
+  assert.ok(right && bottom, 'B2 draws its owned right and bottom edges');
+  // -1px keeps the 3px line inside the owner (right edge on the boundary). The
+  // old straddling value (-2.5px) would push 1.5px across into the neighbour.
+  assert.ok(/right:\s*-1px/.test(right), `right edge must be inset (-1px), got: ${right}`);
+  assert.ok(/bottom:\s*-1px/.test(bottom), `bottom edge must be inset (-1px), got: ${bottom}`);
+  assert.ok(!css.some((c) => /-2\.5px/.test(c)), 'no overlay straddles the boundary (no -2.5px offset)');
+});
