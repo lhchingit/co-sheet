@@ -1241,6 +1241,35 @@ const syncCellState = (cellId) => {
 };
 
 /**
+ * Re-renders the cells named by a multi-change action plus their immediate
+ * four-neighbour ring, so neighbour-aware borders repaint without rebuilding the
+ * entire grid. A cell owns its right/bottom boundary while the left/top owner is
+ * one cell up/left, so the ring around every change covers every shared edge
+ * that could have flipped. Used by border undo/redo in place of a full
+ * renderSpreadsheetGrid(), which got prohibitively expensive once a sheet had
+ * many framed cells (issue #75).
+ * @param {{cellId:string}[]} changes
+ */
+const rerenderBorderRing = (changes) => {
+  const colCount = getColCount(activeSheetName);
+  const renderIds = new Set();
+  changes.forEach(({ cellId }) => {
+    const coord = parseCellCoord(cellId);
+    if (!coord) return;
+    const { row: r, colIndex: c } = coord;
+    renderIds.add(cellId);
+    if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
+    if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
+    if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
+    if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+  });
+  renderIds.forEach((id) => {
+    const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
+    updateGridDOMCell(id, getCellValue(id), st);
+  });
+};
+
+/**
  * Reverts the last recorded cell state modification from the undo stack.
  */
 const performUndo = () => {
@@ -1259,10 +1288,12 @@ const performUndo = () => {
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.before));
       syncCellState(change.cellId);
     });
-    // Border edges are drawn neighbour-aware; a full re-render avoids the
-    // doubled inner-border artifact that per-cell restore order can leave. A
-    // merge change moves grid tracks, which only a full rebuild reflects.
-    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
+    // A merge change moves grid tracks, which only a full rebuild reflects.
+    // Border edges are drawn neighbour-aware (one owner per shared edge); a
+    // targeted ring re-render around the changed cells repaints every affected
+    // edge without the cost of rebuilding the whole grid (issue #75).
+    if (touchesMerge) renderSpreadsheetGrid();
+    else if (touchesBorders) rerenderBorderRing(action.changes);
     // Reverse a column insert/delete's width change; re-renders the grid.
     applyColCountDelta(action.colDelta ? -action.colDelta : 0);
     redoStack.push({ type: 'multi', changes: redoChanges, colDelta: action.colDelta || 0 });
@@ -1300,7 +1331,8 @@ const performRedo = () => {
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.after));
       syncCellState(change.cellId);
     });
-    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
+    if (touchesMerge) renderSpreadsheetGrid();
+    else if (touchesBorders) rerenderBorderRing(action.changes);
     // Replay a column insert/delete's width change; re-renders the grid.
     applyColCountDelta(action.colDelta || 0);
     undoStack.push({ type: 'multi', changes: undoChanges, colDelta: action.colDelta || 0 });
@@ -3846,16 +3878,23 @@ const applyCellBorders = (cellEl, style, cellId) => {
   // Bottom boundary — owned by this cell; merge in the bottom neighbour's top.
   const bottomEff = pick(cellBorderSide(style, 'bottom'), sideOf(`${getColLetter(c)}${r + 1}`, 'top'));
   if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff, canStraddle && r !== TOTAL_ROWS); cellEl.style.borderBottomColor = 'transparent'; }
-  // Left/top boundaries are also owned by the preceding neighbour (it paints
-  // them as its right/bottom), but a cell paints its OWN explicit left/top too,
-  // so its borders never depend on that neighbour re-rendering — the two
-  // coincident lines centre identically and overlap exactly (no double width).
-  // At the grid's outer edge (column A / row 1) there is no neighbour, so the
-  // line is drawn inset rather than straddling off-grid.
-  const left = cellBorderSide(style, 'left');
-  if (left) addBorderLine(cellEl, 'left', left, canStraddle && c !== 0);
-  const top = cellBorderSide(style, 'top');
-  if (top) addBorderLine(cellEl, 'top', top, canStraddle && r !== 1);
+  // Left/top boundaries are owned by the preceding neighbour, which already
+  // paints them as its right/bottom (merged in via pick() above). Drawing them
+  // here too would double the overlay nodes on every interior edge — the source
+  // of the lag when a sheet has many framed cells — so a cell draws its OWN
+  // left/top only at the grid's outer edge (column A / row 1), where there is no
+  // preceding neighbour to own the boundary (and the line is inset, not
+  // straddling off-grid). Every border-mutation path refreshes the left/top
+  // neighbour (applyBordersToSelection's ring, clearFormatting, remote edits,
+  // undo/redo), so the owner always repaints and the edge never goes missing.
+  if (c === 0) {
+    const left = cellBorderSide(style, 'left');
+    if (left) addBorderLine(cellEl, 'left', left, false);
+  }
+  if (r === 1) {
+    const top = cellBorderSide(style, 'top');
+    if (top) addBorderLine(cellEl, 'top', top, false);
+  }
 };
 
 /**
