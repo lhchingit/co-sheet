@@ -1241,6 +1241,35 @@ const syncCellState = (cellId) => {
 };
 
 /**
+ * Re-renders the cells named by a multi-change action plus their immediate
+ * four-neighbour ring, so neighbour-aware borders repaint without rebuilding the
+ * entire grid. A cell owns its right/bottom boundary while the left/top owner is
+ * one cell up/left, so the ring around every change covers every shared edge
+ * that could have flipped. Used by border undo/redo in place of a full
+ * renderSpreadsheetGrid(), which got prohibitively expensive once a sheet had
+ * many framed cells (issue #75).
+ * @param {{cellId:string}[]} changes
+ */
+const rerenderBorderRing = (changes) => {
+  const colCount = getColCount(activeSheetName);
+  const renderIds = new Set();
+  changes.forEach(({ cellId }) => {
+    const coord = parseCellCoord(cellId);
+    if (!coord) return;
+    const { row: r, colIndex: c } = coord;
+    renderIds.add(cellId);
+    if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
+    if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
+    if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
+    if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+  });
+  renderIds.forEach((id) => {
+    const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
+    updateGridDOMCell(id, getCellValue(id), st);
+  });
+};
+
+/**
  * Reverts the last recorded cell state modification from the undo stack.
  */
 const performUndo = () => {
@@ -1259,10 +1288,12 @@ const performUndo = () => {
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.before));
       syncCellState(change.cellId);
     });
-    // Border edges are drawn neighbour-aware; a full re-render avoids the
-    // doubled inner-border artifact that per-cell restore order can leave. A
-    // merge change moves grid tracks, which only a full rebuild reflects.
-    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
+    // A merge change moves grid tracks, which only a full rebuild reflects.
+    // Border edges are drawn neighbour-aware (one owner per shared edge); a
+    // targeted ring re-render around the changed cells repaints every affected
+    // edge without the cost of rebuilding the whole grid (issue #75).
+    if (touchesMerge) renderSpreadsheetGrid();
+    else if (touchesBorders) rerenderBorderRing(action.changes);
     // Reverse a column insert/delete's width change; re-renders the grid.
     applyColCountDelta(action.colDelta ? -action.colDelta : 0);
     redoStack.push({ type: 'multi', changes: redoChanges, colDelta: action.colDelta || 0 });
@@ -1300,7 +1331,8 @@ const performRedo = () => {
       localCells[change.cellId] = JSON.parse(JSON.stringify(change.after));
       syncCellState(change.cellId);
     });
-    if (touchesBorders || touchesMerge) renderSpreadsheetGrid();
+    if (touchesMerge) renderSpreadsheetGrid();
+    else if (touchesBorders) rerenderBorderRing(action.changes);
     // Replay a column insert/delete's width change; re-renders the grid.
     applyColCountDelta(action.colDelta || 0);
     undoStack.push({ type: 'multi', changes: undoChanges, colDelta: action.colDelta || 0 });
@@ -3747,34 +3779,31 @@ const styleHasBorders = (style) => !!(style && (style.border || (style.borders &
  *
  * The line is drawn at its full integer width (so thin/medium/thick stay
  * visually distinct — fractional CSS border widths round to a 1px minimum and
- * collapse together), and is centered on the cell boundary by offsetting it
- * half its width past the edge so it bleeds equally into both adjacent cells.
- * `straddle` is false for the grid's outer frame, where the line is drawn fully
- * inside the edge cell instead of overflowing off-grid.
+ * collapse together), inset so its boundary-facing edge sits on the cell
+ * boundary and the whole line stays inside the owning cell.
+ *
+ * It deliberately does NOT straddle (bleed across) the boundary into the
+ * neighbour. A bleeding half gets painted over when the neighbour cell is
+ * independently re-rendered (e.g. when an adjacent range is bordered later, which
+ * repaints the shared neighbour), and at fractional device-pixel ratios — 125% /
+ * 150% display scaling, the Windows default — that covered half makes a thick
+ * line read as half its width. Staying fully inside the owner makes the line
+ * immune to any neighbour repaint at every DPR.
  * @param {HTMLElement} cellEl
  * @param {'top'|'right'|'bottom'|'left'} edge
  * @param {{color:string,style:string}} spec
- * @param {boolean} straddle
  */
-const addBorderLine = (cellEl, edge, spec, straddle) => {
+const addBorderLine = (cellEl, edge, spec) => {
   const w = BORDER_WEIGHT[spec.style] || 1;
   const line = BORDER_LINE[spec.style] || 'solid';
   const color = spec.color || '#000000';
-  // The right/bottom edges carry the default gridline border, so the padding
-  // box (which absolute offsets reference) is GRIDLINE_W inside the track
-  // boundary there; left/top have no default border. Straddle centers the line
-  // on the boundary; otherwise (grid frame) it sits just inside it.
+  // The right/bottom edges carry the default gridline border, so the padding box
+  // (which absolute offsets reference) is GRIDLINE_W inside the track boundary
+  // there; left/top have no default border. Offsetting by -b lands the line's
+  // boundary-facing edge exactly on the track boundary with the line sitting
+  // fully inside the cell — crisp for a hairline, non-bleeding for a thick line.
   const b = (edge === 'right' || edge === 'bottom') ? GRIDLINE_W : 0;
-  // Centering a 1px line on the boundary would straddle a pixel and antialias
-  // it into a faint, near-invisible half-line (worse under the grid's zoom), so
-  // a hairline is snapped crisp onto the single gridline pixel just inside the
-  // upper/left cell. Interior hairlines snap to that SAME pixel for every edge
-  // (a cell's own left/top and the neighbour's coincident right/bottom), so the
-  // two overlap exactly instead of landing on opposite sides and reading as one
-  // 2px line. Wider lines have a lit core and centre cleanly on the boundary.
-  const off = (straddle && w > 1) ? -(b + w / 2)
-            : straddle            ? -GRIDLINE_W
-            :                       -b;
+  const off = -b;
   const el = document.createElement('div');
   el.className = 'grid-border-line';
   // Span the full track on the cross axis (reaching past the padding box into
@@ -3835,27 +3864,30 @@ const applyCellBorders = (cellEl, style, cellId) => {
   // Effective boundary spec = heavier of the two coincident sides; equal
   // weights resolve to the left/top cell so both neighbours agree.
   const pick = (lo, hi) => (borderWeight(lo) >= borderWeight(hi) ? lo : hi);
-  // A wrapped/clipped cell has overflow:hidden, which would clip a straddling
-  // overlay; draw its borders fully inside instead (slightly off-centre, but
-  // visible). Blank cells (the common owner of a neighbour's edge) never wrap.
-  const canStraddle = style.textWrap !== 'wrap' && style.textWrap !== 'clip';
 
   // Right boundary — owned by this cell; merge in the right neighbour's left.
   const rightEff = pick(cellBorderSide(style, 'right'), sideOf(`${getColLetter(c + 1)}${r}`, 'left'));
-  if (rightEff) { addBorderLine(cellEl, 'right', rightEff, canStraddle); cellEl.style.borderRightColor = 'transparent'; }
+  if (rightEff) { addBorderLine(cellEl, 'right', rightEff); cellEl.style.borderRightColor = 'transparent'; }
   // Bottom boundary — owned by this cell; merge in the bottom neighbour's top.
   const bottomEff = pick(cellBorderSide(style, 'bottom'), sideOf(`${getColLetter(c)}${r + 1}`, 'top'));
-  if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff, canStraddle && r !== TOTAL_ROWS); cellEl.style.borderBottomColor = 'transparent'; }
-  // Left/top boundaries are also owned by the preceding neighbour (it paints
-  // them as its right/bottom), but a cell paints its OWN explicit left/top too,
-  // so its borders never depend on that neighbour re-rendering — the two
-  // coincident lines centre identically and overlap exactly (no double width).
-  // At the grid's outer edge (column A / row 1) there is no neighbour, so the
-  // line is drawn inset rather than straddling off-grid.
-  const left = cellBorderSide(style, 'left');
-  if (left) addBorderLine(cellEl, 'left', left, canStraddle && c !== 0);
-  const top = cellBorderSide(style, 'top');
-  if (top) addBorderLine(cellEl, 'top', top, canStraddle && r !== 1);
+  if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff); cellEl.style.borderBottomColor = 'transparent'; }
+  // Left/top boundaries are owned by the preceding neighbour, which already
+  // paints them as its right/bottom (merged in via pick() above). Drawing them
+  // here too would double the overlay nodes on every interior edge — the source
+  // of the lag when a sheet has many framed cells — so a cell draws its OWN
+  // left/top only at the grid's outer edge (column A / row 1), where there is no
+  // preceding neighbour to own the boundary. Every border-mutation path refreshes
+  // the left/top neighbour (applyBordersToSelection's ring, clearFormatting,
+  // remote edits, undo/redo), so the owner always repaints and the edge never
+  // goes missing.
+  if (c === 0) {
+    const left = cellBorderSide(style, 'left');
+    if (left) addBorderLine(cellEl, 'left', left);
+  }
+  if (r === 1) {
+    const top = cellBorderSide(style, 'top');
+    if (top) addBorderLine(cellEl, 'top', top);
+  }
 };
 
 /**
