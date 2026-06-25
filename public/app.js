@@ -2224,8 +2224,10 @@ const updateGridDOMCell = (cellId, value, style) => {
   cursorBorders.forEach(border => cellEl.appendChild(border));
   presenceTags.forEach(tag => cellEl.appendChild(tag));
 
-  // Reset standard styling classes
-  cellEl.className = 'grid-cell text-body-sm font-body-sm select-none cursor-pointer';
+  // Reset standard styling classes. Use cursor-default to match the initial
+  // grid render; cursor-pointer here would wrongly show a finger icon over any
+  // cell that has been styled (e.g. given a border or fill).
+  cellEl.className = 'grid-cell text-body-sm font-body-sm select-none cursor-default';
   // Restore the selection highlight class if the cell was previously selected
   if (cellEl.classList && typeof cellEl.classList.add === 'function') {
     if (isSelected) cellEl.classList.add('grid-cell-selected');
