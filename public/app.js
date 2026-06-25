@@ -3865,11 +3865,23 @@ const applyCellBorders = (cellEl, style, cellId) => {
   // weights resolve to the left/top cell so both neighbours agree.
   const pick = (lo, hi) => (borderWeight(lo) >= borderWeight(hi) ? lo : hi);
 
+  // A merged anchor is rendered as a single element spanning its whole block, so
+  // its right/bottom boundary is the FAR edge of the block. applyBordersToSelection
+  // stores the block's outer border on the perimeter members, so the right spec
+  // lives on the top-right member and the bottom spec on the bottom-left member,
+  // and the neighbour past the boundary is one track beyond the span. A 1×1 cell
+  // spans itself, reducing to the anchor and its immediate neighbour.
+  const isMerged = !!(style.merge && style.merge.rows * style.merge.cols > 1);
+  const rightCol = isMerged ? c + style.merge.cols - 1 : c;
+  const bottomRow = isMerged ? r + style.merge.rows - 1 : r;
+  const ownRight = isMerged ? sideOf(`${getColLetter(rightCol)}${r}`, 'right') : cellBorderSide(style, 'right');
+  const ownBottom = isMerged ? sideOf(`${getColLetter(c)}${bottomRow}`, 'bottom') : cellBorderSide(style, 'bottom');
+
   // Right boundary — owned by this cell; merge in the right neighbour's left.
-  const rightEff = pick(cellBorderSide(style, 'right'), sideOf(`${getColLetter(c + 1)}${r}`, 'left'));
+  const rightEff = pick(ownRight, sideOf(`${getColLetter(rightCol + 1)}${r}`, 'left'));
   if (rightEff) { addBorderLine(cellEl, 'right', rightEff); cellEl.style.borderRightColor = 'transparent'; }
   // Bottom boundary — owned by this cell; merge in the bottom neighbour's top.
-  const bottomEff = pick(cellBorderSide(style, 'bottom'), sideOf(`${getColLetter(c)}${r + 1}`, 'top'));
+  const bottomEff = pick(ownBottom, sideOf(`${getColLetter(c)}${bottomRow + 1}`, 'top'));
   if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff); cellEl.style.borderBottomColor = 'transparent'; }
   // Left/top boundaries are owned by the preceding neighbour, which already
   // paints them as its right/bottom (merged in via pick() above). Drawing them
