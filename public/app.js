@@ -3877,12 +3877,15 @@ const applyCellBorders = (cellEl, style, cellId) => {
   const ownRight = isMerged ? sideOf(`${getColLetter(rightCol)}${r}`, 'right') : cellBorderSide(style, 'right');
   const ownBottom = isMerged ? sideOf(`${getColLetter(c)}${bottomRow}`, 'bottom') : cellBorderSide(style, 'bottom');
 
-  // Right boundary — owned by this cell; merge in the right neighbour's left.
+  // Collect the edges this cell owns, then append them in a deterministic paint
+  // order (below). Right boundary — owned by this cell; merge in the right
+  // neighbour's left. Bottom boundary — owned by this cell; merge in the bottom
+  // neighbour's top.
+  const edges = [];
   const rightEff = pick(ownRight, sideOf(`${getColLetter(rightCol + 1)}${r}`, 'left'));
-  if (rightEff) { addBorderLine(cellEl, 'right', rightEff); cellEl.style.borderRightColor = 'transparent'; }
-  // Bottom boundary — owned by this cell; merge in the bottom neighbour's top.
+  if (rightEff) { edges.push(['right', rightEff]); cellEl.style.borderRightColor = 'transparent'; }
   const bottomEff = pick(ownBottom, sideOf(`${getColLetter(c)}${bottomRow + 1}`, 'top'));
-  if (bottomEff) { addBorderLine(cellEl, 'bottom', bottomEff); cellEl.style.borderBottomColor = 'transparent'; }
+  if (bottomEff) { edges.push(['bottom', bottomEff]); cellEl.style.borderBottomColor = 'transparent'; }
   // Left/top boundaries are owned by the preceding neighbour, which already
   // paints them as its right/bottom (merged in via pick() above). Drawing them
   // here too would double the overlay nodes on every interior edge — the source
@@ -3894,12 +3897,26 @@ const applyCellBorders = (cellEl, style, cellId) => {
   // goes missing.
   if (c === 0) {
     const left = cellBorderSide(style, 'left');
-    if (left) addBorderLine(cellEl, 'left', left);
+    if (left) edges.push(['left', left]);
   }
   if (r === 1) {
     const top = cellBorderSide(style, 'top');
-    if (top) addBorderLine(cellEl, 'top', top);
+    if (top) edges.push(['top', top]);
   }
+
+  // Overlay lines share one z-index, so the later-appended line paints on top.
+  // An overlay spans the full track on its cross axis (so corners meet flush),
+  // which means a horizontal line also covers the corner the perpendicular
+  // vertical passes through. Appending in incidental order (right, bottom, …)
+  // let a cell's bottom horizontal chip a gap out of its right vertical at every
+  // crossing — breaking a differently-coloured vertical border into segments —
+  // while the left vertical, appended last, stayed intact (issue #80). Append in
+  // a deterministic order instead: a heavier border paints above a lighter one,
+  // and at equal weight a vertical edge paints above a horizontal one, so both
+  // verticals sit cleanly above any horizontal they cross.
+  const isVertical = (edge) => (edge === 'left' || edge === 'right' ? 1 : 0);
+  edges.sort((a, b) => (borderWeight(a[1]) - borderWeight(b[1])) || (isVertical(a[0]) - isVertical(b[0])));
+  edges.forEach(([edge, spec]) => addBorderLine(cellEl, edge, spec));
 };
 
 /**
