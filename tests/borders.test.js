@@ -219,3 +219,45 @@ test('a vertically merged anchor draws the block\'s far-bottom edge', () => {
   assert.ok(e.has('bottom'), 'the merged anchor must paint the block\'s far-bottom edge');
   assert.ok(e.has('right'), 'and its right edge');
 });
+
+test('a vertical edge paints above a horizontal one at equal weight (#80)', () => {
+  // Regression (#80): overlay lines share one z-index, so paint order is append
+  // order. A horizontal line spans the full track and covers the corner the
+  // perpendicular vertical passes through, so if the horizontal is appended last
+  // it chips a gap out of a differently-coloured vertical at every crossing —
+  // the reported broken right edge / intact left edge asymmetry. A cell's own
+  // edges must be appended horizontal-before-vertical so both verticals sit on
+  // top. A1 (grid corner) owns all four edges, exercising every side at once.
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    A1: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } },
+  };
+  const elA1 = makeEl();
+  sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
+
+  const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
+  assert.strictEqual(order.length, 4, 'A1 at the grid corner draws all four edges');
+  // Verticals (left/right) must come after horizontals (top/bottom) so they paint
+  // on top — both of them, symmetrically, not just the one appended last.
+  const lastTwo = order.slice(2);
+  assert.ok(lastTwo.every((e) => e === 'left' || e === 'right'),
+    `both verticals must paint last (on top), got order: ${order.join(',')}`);
+});
+
+test('a heavier border paints above a lighter one regardless of axis (#80)', () => {
+  // The primary key is weight: a thick horizontal must sit above a thin vertical
+  // (and vice versa), so a bold separator is never chipped by a hairline crossing.
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    // A1 grid corner: thick top/bottom horizontals, thin left/right verticals.
+    A1: { style: { borders: { top: thick(), bottom: thick(), left: thin(), right: thin() } } },
+  };
+  const elA1 = makeEl();
+  sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
+  const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
+  assert.strictEqual(order.length, 4, 'A1 draws all four edges');
+  // The two thick horizontals must paint last (on top) despite being horizontal.
+  const lastTwo = order.slice(2);
+  assert.ok(lastTwo.every((e) => e === 'top' || e === 'bottom'),
+    `the heavier (thick) horizontals must paint on top, got order: ${order.join(',')}`);
+});
