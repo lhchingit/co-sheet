@@ -63,6 +63,13 @@ function createSandbox() {
     Object.defineProperty(globalThis, 'localCells', { get: () => localCells, set: (v) => { localCells = v; }, configurable: true });
     Object.defineProperty(globalThis, 'isHistoryMode', { get: () => isHistoryMode, set: (v) => { isHistoryMode = v; }, configurable: true });
     globalThis.applyCellBorders = applyCellBorders;
+    globalThis.applyBordersToSelection = applyBordersToSelection;
+    Object.defineProperty(globalThis, 'selectionStartCellId', { get: () => selectionStartCellId, set: (v) => { selectionStartCellId = v; }, configurable: true });
+    Object.defineProperty(globalThis, 'selectionEndCellId', { get: () => selectionEndCellId, set: (v) => { selectionEndCellId = v; }, configurable: true });
+    Object.defineProperty(globalThis, 'activeCellId', { get: () => activeCellId, set: (v) => { activeCellId = v; }, configurable: true });
+    Object.defineProperty(globalThis, 'currentBorderColor', { get: () => currentBorderColor, set: (v) => { currentBorderColor = v; }, configurable: true });
+    Object.defineProperty(globalThis, 'currentBorderStyle', { get: () => currentBorderStyle, set: (v) => { currentBorderStyle = v; }, configurable: true });
+    Object.defineProperty(globalThis, 'socket', { get: () => socket, set: (v) => { socket = v; }, configurable: true });
   `;
   vm.runInContext(code + exportSuffix, sandbox);
   return sandbox;
@@ -170,6 +177,34 @@ test('a thick interior border is drawn inset, never straddling into the neighbou
   assert.ok(!css.some((c) => /-2\.5px/.test(c)), 'no overlay straddles the boundary (no -2.5px offset)');
 });
 
+test('overlay lines overrun GRIDLINE_W past BOTH ends to close every corner (#82)', () => {
+  // A line's far-end overrun (bottom:-1 on verticals, right:-1 on horizontals)
+  // lets a cell's own right+bottom fill its bottom-right corner. The symmetric
+  // near-end overrun (top:-1 / left:-1) closes the top-left corner, whose left
+  // edge is drawn by the left neighbour and top edge by the upper neighbour —
+  // without it those two lines met only at a point, leaving the corner open.
+  const sandbox = createSandbox();
+  // A1 at the grid corner draws all four of its own edges in one element set.
+  sandbox.localCells = { A1: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
+  const css = lines(el).map((l) => l.style.cssText || '');
+
+  const verticals = css.filter((c) => /width:0/.test(c));
+  const horizontals = css.filter((c) => /height:0/.test(c));
+  assert.strictEqual(verticals.length, 2, 'A1 has its left + right vertical lines');
+  assert.strictEqual(horizontals.length, 2, 'A1 has its top + bottom horizontal lines');
+  // Every vertical overruns top AND bottom; every horizontal overruns left AND right.
+  verticals.forEach((c) => {
+    assert.ok(/top:\s*-1px/.test(c), `vertical must overrun its top end (-1px), got: ${c}`);
+    assert.ok(/bottom:\s*-1px/.test(c), `vertical must overrun its bottom end (-1px), got: ${c}`);
+  });
+  horizontals.forEach((c) => {
+    assert.ok(/left:\s*-1px/.test(c), `horizontal must overrun its left end (-1px), got: ${c}`);
+    assert.ok(/right:\s*-1px/.test(c), `horizontal must overrun its right end (-1px), got: ${c}`);
+  });
+});
+
 // Classify an overlay by the edge it actually paints. A vertical line (width:0) is
 // left/right per the offset following width:0; a horizontal line (height:0) is
 // top/bottom per the offset following height:0. (The cross-axis span — e.g. the
@@ -260,4 +295,78 @@ test('a heavier border paints above a lighter one regardless of axis (#80)', () 
   const lastTwo = order.slice(2);
   assert.ok(lastTwo.every((e) => e === 'top' || e === 'bottom'),
     `the heavier (thick) horizontals must paint on top, got order: ${order.join(',')}`);
+});
+
+// --- applyBordersToSelection face mirroring (#82) ---------------------------
+// A shared boundary is drawn once by its owner (the left/top cell) and pick()
+// ties to the owner's own side. Applying a border to a cell whose left/top
+// neighbour already has a coincident border used to leave the neighbour's stale
+// spec winning, so the freshly-applied colour showed only on the cell's own
+// right/bottom. applyBordersToSelection now mirrors each set side onto the
+// neighbour's opposite face so the owner paints the applied spec.
+const blueThin = () => ({ color: '#1a56ff', style: 'thin' });
+const redThin = () => ({ color: '#ff0000', style: 'thin' });
+const colorOf = (cells, id, side) =>
+  (cells[id] && cells[id].style && cells[id].style.borders && cells[id].style.borders[side]
+    ? cells[id].style.borders[side].color : null);
+
+/** Seed B7:C9 all blue, select one cell, apply red in `mode`, return localCells. */
+function applyRedTo(cellId, mode) {
+  const sandbox = createSandbox();
+  sandbox.socket = { readyState: 0 }; // never OPEN → skip network send
+  const cells = {};
+  ['B7', 'C7', 'B8', 'C8', 'B9', 'C9'].forEach((id) => {
+    cells[id] = { formula: '', value: '', style: { borders: { top: blueThin(), right: blueThin(), bottom: blueThin(), left: blueThin() } } };
+  });
+  sandbox.localCells = cells;
+  sandbox.activeCellId = cellId;
+  sandbox.selectionStartCellId = cellId;
+  sandbox.selectionEndCellId = cellId;
+  sandbox.currentBorderColor = '#ff0000';
+  sandbox.currentBorderStyle = 'thin';
+  sandbox.applyBordersToSelection(mode);
+  return sandbox.localCells;
+}
+
+test('applying a border mirrors the applied spec onto neighbour faces (#82)', () => {
+  // Apply red "all" to C8 inside an all-blue B7:C9. C8's left is owned by B8 (its
+  // right) and its top by C7 (its bottom); without mirroring those stayed blue.
+  const cells = applyRedTo('C8', 'all');
+  assert.strictEqual(colorOf(cells, 'C8', 'right'), '#ff0000', 'C8 own right is red');
+  assert.strictEqual(colorOf(cells, 'C8', 'bottom'), '#ff0000', 'C8 own bottom is red');
+  // The fix: the left/top owners now store red on the shared faces.
+  assert.strictEqual(colorOf(cells, 'B8', 'right'), '#ff0000', "C8's left edge (B8.right) is now red");
+  assert.strictEqual(colorOf(cells, 'C7', 'bottom'), '#ff0000', "C8's top edge (C7.bottom) is now red");
+  // Only the shared faces flip; the neighbours' unrelated sides stay blue.
+  assert.strictEqual(colorOf(cells, 'B8', 'bottom'), '#1a56ff', 'B8 unrelated side untouched');
+  assert.strictEqual(colorOf(cells, 'C7', 'right'), '#1a56ff', 'C7 unrelated side untouched');
+});
+
+test('mirroring never creates records on empty neighbours (#82)', () => {
+  // Apply red "all" to a lone E5 with no surrounding borders. A null neighbour
+  // face already loses to the applied spec in pick(), so empty neighbours must be
+  // left untouched — no border records, no history/sync bloat.
+  const sandbox = createSandbox();
+  sandbox.socket = { readyState: 0 };
+  sandbox.localCells = {};
+  sandbox.activeCellId = 'E5';
+  sandbox.selectionStartCellId = 'E5';
+  sandbox.selectionEndCellId = 'E5';
+  sandbox.currentBorderColor = '#ff0000';
+  sandbox.currentBorderStyle = 'thin';
+  sandbox.applyBordersToSelection('all');
+  const cells = sandbox.localCells;
+  assert.strictEqual(colorOf(cells, 'E5', 'left'), '#ff0000', 'E5 itself gets all four red');
+  ['D5', 'F5', 'E4', 'E6'].forEach((id) => {
+    assert.ok(!cells[id], `empty neighbour ${id} must not be created`);
+  });
+});
+
+test('clear does not mirror onto neighbour faces (#82)', () => {
+  // Clearing must keep its existing behaviour: it nulls the target's own sides
+  // and leaves the neighbours' borders intact (a cleared side mirrors nothing).
+  const cells = applyRedTo('C8', 'clear');
+  assert.ok(!cells.C8.style.borders, 'C8 borders cleared');
+  assert.strictEqual(colorOf(cells, 'B8', 'right'), '#1a56ff', 'B8 untouched by clear');
+  assert.strictEqual(colorOf(cells, 'C7', 'bottom'), '#1a56ff', 'C7 untouched by clear');
 });
