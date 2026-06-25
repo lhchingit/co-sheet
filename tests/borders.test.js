@@ -169,3 +169,53 @@ test('a thick interior border is drawn inset, never straddling into the neighbou
   assert.ok(/bottom:\s*-1px/.test(bottom), `bottom edge must be inset (-1px), got: ${bottom}`);
   assert.ok(!css.some((c) => /-2\.5px/.test(c)), 'no overlay straddles the boundary (no -2.5px offset)');
 });
+
+// Classify an overlay by the edge it actually paints. A vertical line (width:0) is
+// left/right per the offset following width:0; a horizontal line (height:0) is
+// top/bottom per the offset following height:0. (The cross-axis span — e.g. the
+// "right:-1px" reach on a horizontal line — is NOT its edge.)
+const edgeOf = (cssText) => {
+  let m = /width:0;\s*(left|right):/.exec(cssText);
+  if (m) return m[1];
+  m = /height:0;\s*(top|bottom):/.exec(cssText);
+  if (m) return m[1];
+  return '?';
+};
+const edgeSet = (el) => new Set(lines(el).map((l) => edgeOf(l.style.cssText || '')));
+
+test('a horizontally merged anchor draws the block\'s far-right edge', () => {
+  // Regression (#78): a merged anchor is rendered as one element spanning the
+  // whole block, so the block's right boundary is the FAR edge of the merge —
+  // owned by the right-column member, where applyBordersToSelection stores the
+  // outer border. That member is a covered cell (display:none), so reading only
+  // the anchor's own right left the far edge unpainted on horizontal merges.
+  const sandbox = createSandbox();
+  // Outer border on merge B1:C1: B1 (anchor) gets left/top/bottom, C1 (far
+  // member) gets right. B1 carries the merge marker.
+  sandbox.localCells = {
+    B1: { style: { merge: { rows: 1, cols: 2 }, borders: { top: thick(), bottom: thick(), left: thick(), right: null } } },
+    C1: { style: { borders: { top: thick(), bottom: thick(), right: thick(), left: null } } },
+  };
+  const elB1 = makeEl();
+  sandbox.applyCellBorders(elB1, sandbox.localCells.B1.style, 'B1');
+  const e = edgeSet(elB1);
+  assert.ok(e.has('right'), 'the merged anchor must paint the block\'s far-right edge');
+  assert.ok(e.has('bottom'), 'and its bottom edge');
+});
+
+test('a vertically merged anchor draws the block\'s far-bottom edge', () => {
+  // Regression (#78): symmetric to the horizontal case — a vertical merge's
+  // bottom edge is owned by the (hidden) bottom-row member.
+  const sandbox = createSandbox();
+  // Outer border on merge A1:A2: A1 (anchor) gets left/top/right, A2 (far member)
+  // gets bottom.
+  sandbox.localCells = {
+    A1: { style: { merge: { rows: 2, cols: 1 }, borders: { top: thick(), left: thick(), right: thick(), bottom: null } } },
+    A2: { style: { borders: { left: thick(), right: thick(), bottom: thick(), top: null } } },
+  };
+  const elA1 = makeEl();
+  sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
+  const e = edgeSet(elA1);
+  assert.ok(e.has('bottom'), 'the merged anchor must paint the block\'s far-bottom edge');
+  assert.ok(e.has('right'), 'and its right edge');
+});
