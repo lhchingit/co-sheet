@@ -3940,12 +3940,28 @@ const applyBordersToSelection = (mode) => {
   });
 
   const mkSpec = () => ({ color: currentBorderColor, style: currentBorderStyle });
+  const specEq = (a, b) => (!a && !b) || !!(a && b && a.color === b.color && a.style === b.style);
   const historyChanges = [];
+  const colCount = getColCount(activeSheetName);
+  const selectedSet = new Set(ids);
+  // A shared boundary stores a spec on each cell's facing side, but is drawn once
+  // by the boundary's owner (its left/top cell). When a freshly-applied side ties
+  // an already-bordered neighbour's coincident side, pick() keeps the owner's
+  // (stale) spec, so the just-applied colour shows only on the edges the target
+  // owns (right/bottom) — its left/top kept the old colour (#82). Mirror each set
+  // side onto the neighbour's opposite face so the boundary is stored consistently
+  // and the owner paints the applied spec. Only the FOUR neighbour opposite of a
+  // changed side, only when that neighbour already holds a *different* non-null
+  // spec there (a null face already loses to the applied one in pick(), so leave
+  // empty neighbours untouched — no record/history bloat), and never a neighbour
+  // that is itself in the selection (it sets its own face).
+  const propTargets = [];
 
   ids.forEach((id) => {
     const coord = parseCellCoord(id);
     if (!coord) return;
     const before = localCells[id] ? JSON.parse(JSON.stringify(localCells[id])) : { formula: '', value: '', style: {} };
+    const beforeBorders = (before.style && before.style.borders) || {};
     const cell = localCells[id] || { formula: '', value: '', style: {} };
     if (!cell.style) cell.style = {};
     delete cell.style.border; // drop legacy boolean in favour of structured borders
@@ -4003,6 +4019,47 @@ const applyBordersToSelection = (mode) => {
         payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
       }));
     }
+
+    // Record neighbour faces to mirror: each side this op set to a new non-null
+    // spec, whose opposite-face neighbour exists in-grid and isn't itself selected.
+    // (A cleared side leaves b[side] null, so 'clear' propagates nothing here and
+    // keeps its current behaviour.)
+    const r = coord.row, c = coord.colIndex;
+    const neigh = {
+      top:    { id: `${getColLetter(c)}${r - 1}`, face: 'bottom', ok: r - 1 >= 1 },
+      bottom: { id: `${getColLetter(c)}${r + 1}`, face: 'top',    ok: r + 1 <= TOTAL_ROWS },
+      left:   { id: `${getColLetter(c - 1)}${r}`, face: 'right',  ok: c - 1 >= 0 },
+      right:  { id: `${getColLetter(c + 1)}${r}`, face: 'left',   ok: c + 1 < colCount },
+    };
+    ['top', 'bottom', 'left', 'right'].forEach((side) => {
+      if (!b[side] || specEq(b[side], beforeBorders[side])) return; // unchanged / not set
+      const n = neigh[side];
+      if (n.ok && !selectedSet.has(n.id)) propTargets.push({ id: n.id, face: n.face });
+    });
+  });
+
+  // Apply the mirrored faces (deduped per neighbour), but only where the neighbour
+  // currently holds a different non-null spec on that face — see note above.
+  const propByCell = new Map();
+  propTargets.forEach(({ id, face }) => {
+    if (!propByCell.has(id)) propByCell.set(id, new Set());
+    propByCell.get(id).add(face);
+  });
+  propByCell.forEach((faces, id) => {
+    const existing = localCells[id] && localCells[id].style && localCells[id].style.borders;
+    const toSet = [...faces].filter((face) => existing && existing[face] && !specEq(existing[face], mkSpec()));
+    if (!toSet.length) return;
+    const before = JSON.parse(JSON.stringify(localCells[id]));
+    const cell = localCells[id];
+    if (!cell.style.borders) cell.style.borders = { top: null, right: null, bottom: null, left: null };
+    toSet.forEach((face) => { cell.style.borders[face] = mkSpec(); });
+    historyChanges.push({ cellId: id, before, after: JSON.parse(JSON.stringify(cell)) });
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'cell-edit',
+        payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
+      }));
+    }
   });
 
   // Render only after every cell is mutated, so neighbour-aware edge de-duping
@@ -4010,8 +4067,8 @@ const applyBordersToSelection = (mode) => {
   // selection: an edge's winning side can flip in either direction, so a
   // neighbour on any of the four sides may need to start or stop drawing the
   // shared edge.
-  const colCount = getColCount(activeSheetName);
   const renderIds = new Set(ids);
+  propByCell.forEach((_faces, id) => renderIds.add(id));
   for (let r = minRow; r <= maxRow; r++) {
     if (minCol - 1 >= 0) renderIds.add(`${getColLetter(minCol - 1)}${r}`);
     if (maxCol + 1 < colCount) renderIds.add(`${getColLetter(maxCol + 1)}${r}`);
