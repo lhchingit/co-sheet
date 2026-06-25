@@ -3806,13 +3806,19 @@ const addBorderLine = (cellEl, edge, spec) => {
   const off = -b;
   const el = document.createElement('div');
   el.className = 'grid-border-line';
-  // Span the full track on the cross axis (reaching past the padding box into
-  // the 1px gridline border) so lines meet flush at every crossing with no gap.
+  // Span the full track on the cross axis, reaching GRIDLINE_W past the padding
+  // box at BOTH ends (into the 1px gridline border). Overrunning the far end lets
+  // a cell's own right+bottom overlap and fill its bottom-right corner; overrunning
+  // the near end (top for verticals, left for horizontals) is the symmetric fix
+  // for the top-left corner, whose left edge is drawn by the left neighbour and
+  // top edge by the upper neighbour — without it those two lines only met at a
+  // point, leaving the corner open (#82). Both overruns sit in the gridline gap,
+  // matching the existing 1px far-end overhang.
   let css = 'position:absolute;pointer-events:none;z-index:3;';
   if (edge === 'right' || edge === 'left') {
-    css += `top:0;bottom:-${GRIDLINE_W}px;width:0;${edge}:${off}px;border-left:${w}px ${line} ${color};`;
+    css += `top:-${GRIDLINE_W}px;bottom:-${GRIDLINE_W}px;width:0;${edge}:${off}px;border-left:${w}px ${line} ${color};`;
   } else {
-    css += `left:0;right:-${GRIDLINE_W}px;height:0;${edge}:${off}px;border-top:${w}px ${line} ${color};`;
+    css += `left:-${GRIDLINE_W}px;right:-${GRIDLINE_W}px;height:0;${edge}:${off}px;border-top:${w}px ${line} ${color};`;
   }
   el.style.cssText = css;
   cellEl.appendChild(el);

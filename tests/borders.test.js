@@ -177,6 +177,34 @@ test('a thick interior border is drawn inset, never straddling into the neighbou
   assert.ok(!css.some((c) => /-2\.5px/.test(c)), 'no overlay straddles the boundary (no -2.5px offset)');
 });
 
+test('overlay lines overrun GRIDLINE_W past BOTH ends to close every corner (#82)', () => {
+  // A line's far-end overrun (bottom:-1 on verticals, right:-1 on horizontals)
+  // lets a cell's own right+bottom fill its bottom-right corner. The symmetric
+  // near-end overrun (top:-1 / left:-1) closes the top-left corner, whose left
+  // edge is drawn by the left neighbour and top edge by the upper neighbour —
+  // without it those two lines met only at a point, leaving the corner open.
+  const sandbox = createSandbox();
+  // A1 at the grid corner draws all four of its own edges in one element set.
+  sandbox.localCells = { A1: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
+  const css = lines(el).map((l) => l.style.cssText || '');
+
+  const verticals = css.filter((c) => /width:0/.test(c));
+  const horizontals = css.filter((c) => /height:0/.test(c));
+  assert.strictEqual(verticals.length, 2, 'A1 has its left + right vertical lines');
+  assert.strictEqual(horizontals.length, 2, 'A1 has its top + bottom horizontal lines');
+  // Every vertical overruns top AND bottom; every horizontal overruns left AND right.
+  verticals.forEach((c) => {
+    assert.ok(/top:\s*-1px/.test(c), `vertical must overrun its top end (-1px), got: ${c}`);
+    assert.ok(/bottom:\s*-1px/.test(c), `vertical must overrun its bottom end (-1px), got: ${c}`);
+  });
+  horizontals.forEach((c) => {
+    assert.ok(/left:\s*-1px/.test(c), `horizontal must overrun its left end (-1px), got: ${c}`);
+    assert.ok(/right:\s*-1px/.test(c), `horizontal must overrun its right end (-1px), got: ${c}`);
+  });
+});
+
 // Classify an overlay by the edge it actually paints. A vertical line (width:0) is
 // left/right per the offset following width:0; a horizontal line (height:0) is
 // top/bottom per the offset following height:0. (The cross-axis span — e.g. the
