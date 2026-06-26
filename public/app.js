@@ -585,13 +585,19 @@ function handleSocketMessage(event) {
         // Recalculate sheet to propagate dependencies
         recalculateSheet();
         updateGridDOMCell(cellId, getCellValue(cellId), style);
-        // Borders are drawn neighbour-aware (shared edges drawn once): refresh the
-        // left/top neighbours so a remote border edit doesn't leave a doubled edge.
+        // Borders are drawn neighbour-aware: every cell draws its own copy of each
+        // shared edge, resolved with pick() against the facing neighbour. A remote
+        // border edit thus changes what all FOUR neighbours should paint on their
+        // facing side, so refresh each so the coincident copies stay in sync.
         const coord = parseCellCoord(cellId);
         if (coord) {
-          const leftId = coord.colIndex - 1 >= 0 ? `${getColLetter(coord.colIndex - 1)}${coord.row}` : null;
-          const topId = coord.row - 1 >= 1 ? `${getColLetter(coord.colIndex)}${coord.row - 1}` : null;
-          [leftId, topId].forEach((nId) => {
+          const neighbourIds = [
+            coord.colIndex - 1 >= 0 ? `${getColLetter(coord.colIndex - 1)}${coord.row}` : null,
+            `${getColLetter(coord.colIndex + 1)}${coord.row}`,
+            coord.row - 1 >= 1 ? `${getColLetter(coord.colIndex)}${coord.row - 1}` : null,
+            `${getColLetter(coord.colIndex)}${coord.row + 1}`,
+          ];
+          neighbourIds.forEach((nId) => {
             if (!nId) return;
             const nStyle = localCells[nId] ? localCells[nId].style : null;
             if (styleHasBorders(style) || styleHasBorders(nStyle)) {
@@ -1243,11 +1249,11 @@ const syncCellState = (cellId) => {
 /**
  * Re-renders the cells named by a multi-change action plus their immediate
  * four-neighbour ring, so neighbour-aware borders repaint without rebuilding the
- * entire grid. A cell owns its right/bottom boundary while the left/top owner is
- * one cell up/left, so the ring around every change covers every shared edge
- * that could have flipped. Used by border undo/redo in place of a full
- * renderSpreadsheetGrid(), which got prohibitively expensive once a sheet had
- * many framed cells (issue #75).
+ * entire grid. Each cell draws its own copy of every shared edge, resolved with
+ * pick() against the facing neighbour, so a change to one cell can flip what any
+ * of its four neighbours paint — the ring around every change covers them all.
+ * Used by border undo/redo in place of a full renderSpreadsheetGrid(), which got
+ * prohibitively expensive once a sheet had many framed cells (issue #75).
  * @param {{cellId:string}[]} changes
  */
 const rerenderBorderRing = (changes) => {
@@ -1289,9 +1295,9 @@ const performUndo = () => {
       syncCellState(change.cellId);
     });
     // A merge change moves grid tracks, which only a full rebuild reflects.
-    // Border edges are drawn neighbour-aware (one owner per shared edge); a
-    // targeted ring re-render around the changed cells repaints every affected
-    // edge without the cost of rebuilding the whole grid (issue #75).
+    // Border edges are drawn neighbour-aware (each cell draws its own copy of a
+    // shared edge); a targeted ring re-render around the changed cells repaints
+    // every affected edge without the cost of rebuilding the whole grid (#75).
     if (touchesMerge) renderSpreadsheetGrid();
     else if (touchesBorders) rerenderBorderRing(action.changes);
     // Reverse a column insert/delete's width change; re-renders the grid.
@@ -3214,10 +3220,11 @@ const clearFormatting = (cellId) => {
   const selectedIds = getSelectedCellIds();
   const cellIds = selectedIds.includes(cellId) ? selectedIds : [cellId];
   const historyChanges = [];
-  // Borders are drawn neighbour-aware: a cell's left/top edge is also painted by
-  // the cell to its left/above (as their right/bottom). So when a bordered cell
-  // is cleared, every neighbour around it must be re-rendered too — otherwise the
-  // shared left/top edges linger, drawn by neighbours we never refreshed.
+  // Borders are drawn neighbour-aware: every shared edge is also painted by the
+  // facing neighbour, which draws its own coincident copy (resolved with pick()).
+  // So when a bordered cell is cleared, all four neighbours around it must be
+  // re-rendered too — otherwise their copies of the shared edges linger, drawn by
+  // neighbours we never refreshed.
   const renderIds = new Set();
 
   cellIds.forEach(id => {
@@ -3781,16 +3788,16 @@ const styleHasBorders = (style) => !!(style && (style.border || (style.borders &
  *
  * The line is drawn at its full integer width (so thin/medium/thick stay
  * visually distinct — fractional CSS border widths round to a 1px minimum and
- * collapse together), inset so its boundary-facing edge sits on the cell
- * boundary and the whole line stays inside the owning cell.
+ * collapse together) and CENTRED on the cell boundary, half its width on each
+ * side, the way Excel and Google Sheets draw borders.
  *
- * It deliberately does NOT straddle (bleed across) the boundary into the
- * neighbour. A bleeding half gets painted over when the neighbour cell is
- * independently re-rendered (e.g. when an adjacent range is bordered later, which
- * repaints the shared neighbour), and at fractional device-pixel ratios — 125% /
- * 150% display scaling, the Windows default — that covered half makes a thick
- * line read as half its width. Staying fully inside the owner makes the line
- * immune to any neighbour repaint at every DPR.
+ * A centred line bleeds half its width into the neighbour, so each cell draws
+ * its OWN copy of a shared boundary (see applyCellBorders) rather than leaving
+ * it to a single owner. Each copy is a child of its own cell, so it always
+ * paints above that cell's background even when the neighbour is the active cell
+ * (z-index 6, above the overlay's z-index 3) — the half a neighbour's higher
+ * stacking context would otherwise cover is redrawn by that neighbour's own
+ * coincident copy, so the boundary is never lost to a repaint at any DPR.
  * @param {HTMLElement} cellEl
  * @param {'top'|'right'|'bottom'|'left'} edge
  * @param {{color:string,style:string}} spec
@@ -3799,28 +3806,37 @@ const addBorderLine = (cellEl, edge, spec) => {
   const w = BORDER_WEIGHT[spec.style] || 1;
   const line = BORDER_LINE[spec.style] || 'solid';
   const color = spec.color || '#000000';
-  // The right/bottom edges carry the default gridline border, so the padding box
-  // (which absolute offsets reference) is GRIDLINE_W inside the track boundary
-  // there; left/top have no default border. Offsetting by -b lands the line's
-  // boundary-facing edge exactly on the track boundary with the line sitting
-  // fully inside the cell — crisp for a hairline, non-bleeding for a thick line.
-  const b = (edge === 'right' || edge === 'bottom') ? GRIDLINE_W : 0;
-  const off = -b;
+  // Centre the line on the track boundary: push it out by half its width so
+  // half sits each side. The right/bottom edges carry the default gridline
+  // border, so the padding box (which absolute offsets reference) is GRIDLINE_W
+  // inside the track boundary there; left/top have no default border, so their
+  // padding box already sits on the boundary.
+  const half = w / 2;
+  const off = (edge === 'right' || edge === 'bottom') ? -(GRIDLINE_W + half) : -half;
   const el = document.createElement('div');
   el.className = 'grid-border-line';
-  // Span the full track on the cross axis, reaching GRIDLINE_W past the padding
-  // box at BOTH ends (into the 1px gridline border). Overrunning the far end lets
-  // a cell's own right+bottom overlap and fill its bottom-right corner; overrunning
-  // the near end (top for verticals, left for horizontals) is the symmetric fix
-  // for the top-left corner, whose left edge is drawn by the left neighbour and
-  // top edge by the upper neighbour — without it those two lines only met at a
-  // point, leaving the corner open (#82). Both overruns sit in the gridline gap,
-  // matching the existing 1px far-end overhang.
+  // Span the full track on the cross axis, overrunning the padding box at BOTH
+  // ends so this line reaches the outline's outer corners and meets the
+  // perpendicular edges flush. Overrunning the far end lets a cell's own
+  // right+bottom overlap and fill its bottom-right corner; overrunning the near
+  // end (top for verticals, left for horizontals) is the symmetric fix for the
+  // top-left corner, whose left edge is drawn by the left neighbour and top edge
+  // by the upper neighbour — without it those two lines only met at a point,
+  // leaving the corner open (#82).
+  //
+  // The overrun must reach the outline's outer corner, which sits half the
+  // perpendicular line's width beyond the boundary. For a frame of uniform
+  // weight that equals THIS line's own half-width, so a fixed GRIDLINE_W (1px)
+  // overrun fell short of a thick line's 1.5px half — leaving a ~0.5px notch
+  // chipped out of every corner (#86). Overrun by max(GRIDLINE_W, half): thin /
+  // medium keep the 1px gridline-gap overhang, thick / double reach their full
+  // 1.5px so the corners close.
+  const over = Math.max(GRIDLINE_W, half);
   let css = 'position:absolute;pointer-events:none;z-index:3;';
   if (edge === 'right' || edge === 'left') {
-    css += `top:-${GRIDLINE_W}px;bottom:-${GRIDLINE_W}px;width:0;${edge}:${off}px;border-left:${w}px ${line} ${color};`;
+    css += `top:-${over}px;bottom:-${over}px;width:0;${edge}:${off}px;border-left:${w}px ${line} ${color};`;
   } else {
-    css += `left:-${GRIDLINE_W}px;right:-${GRIDLINE_W}px;height:0;${edge}:${off}px;border-top:${w}px ${line} ${color};`;
+    css += `left:-${over}px;right:-${over}px;height:0;${edge}:${off}px;border-top:${w}px ${line} ${color};`;
   }
   el.style.cssText = css;
   cellEl.appendChild(el);
@@ -3829,15 +3845,17 @@ const addBorderLine = (cellEl, edge, spec) => {
 /**
  * Applies a cell's stored borders to its DOM element.
  *
- * A border between two cells is drawn once (by a single owner — the left cell
- * of a vertical boundary, the top cell of a horizontal one) as an overlay line
- * centered on the shared boundary, so it bleeds equally into both cells the way
- * a spreadsheet's gridlines do. The owner uses the heavier of the two
- * coincident specs, so a thick border is never hidden behind a neighbour's thin
- * one. The owner suppresses its own default gridline on that edge so the
- * gridline doesn't peek out beside the custom line. A cell paints a left/top
- * border itself only at the grid's outer edge (column A / row 1), where there
- * is no preceding neighbour to own the boundary.
+ * A border between two cells is drawn as an overlay line centred on the shared
+ * boundary, so it bleeds equally into both cells the way a spreadsheet's
+ * gridlines do. Because a centred line crosses the boundary, EACH cell draws its
+ * own copy of every edge it touches: the two coincident copies (e.g. the left
+ * cell's right and the right cell's left) are identical — both resolve the edge
+ * to the heavier of the two specs via pick(), so a thick border is never hidden
+ * behind a neighbour's thin one — and each is a child of its own cell, so a
+ * neighbour with a higher stacking context (the active cell) repaints over only
+ * its own coincident copy, never erasing the boundary. A cell suppresses its own
+ * default gridline on the right/bottom of any edge it draws so the gridline
+ * doesn't peek out beside the custom line.
  *
  * History mode renders from a snapshot (no live neighbours), so it falls back
  * to plain full-width CSS borders on each cell's four stored sides.
@@ -3894,23 +3912,31 @@ const applyCellBorders = (cellEl, style, cellId) => {
   if (rightEff) { edges.push(['right', rightEff]); cellEl.style.borderRightColor = 'transparent'; }
   const bottomEff = pick(ownBottom, sideOf(`${getColLetter(c)}${bottomRow + 1}`, 'top'));
   if (bottomEff) { edges.push(['bottom', bottomEff]); cellEl.style.borderBottomColor = 'transparent'; }
-  // Left/top boundaries are owned by the preceding neighbour, which already
-  // paints them as its right/bottom (merged in via pick() above). Drawing them
-  // here too would double the overlay nodes on every interior edge — the source
-  // of the lag when a sheet has many framed cells — so a cell draws its OWN
-  // left/top only at the grid's outer edge (column A / row 1), where there is no
-  // preceding neighbour to own the boundary. Every border-mutation path refreshes
-  // the left/top neighbour (applyBordersToSelection's ring, clearFormatting,
-  // remote edits, undo/redo), so the owner always repaints and the edge never
-  // goes missing.
-  if (c === 0) {
-    const left = cellBorderSide(style, 'left');
-    if (left) edges.push(['left', left]);
-  }
-  if (r === 1) {
-    const top = cellBorderSide(style, 'top');
-    if (top) edges.push(['top', top]);
-  }
+  // Left/top boundaries are shared with the preceding neighbour, which draws the
+  // SAME centred line as its right/bottom (resolved by pick() to the heavier of
+  // the two specs). A centred border bleeds half its width across the boundary,
+  // and that half — drawn here as a child of THIS cell — would be covered when a
+  // higher-stacking neighbour (the active cell, z-index 6) repaints over the
+  // overlay (z-index 3). So each cell draws its own copy of its left/top too:
+  // the neighbour's coincident copy redraws the half it covers, and the boundary
+  // survives. The own left/top are merged with the preceding neighbour's facing
+  // side, with the tie resolving to that neighbour (the left/top owner) so both
+  // cells agree on which spec wins. At the grid's outer edge (column A / row 1)
+  // there is no preceding neighbour, so the cell's own side stands alone.
+  // An interior shared edge is drawn by BOTH cells (this cell and its neighbour),
+  // and those two coincident copies reinforce each other so the line stays at full
+  // weight even when the boundary lands on a fractional device pixel (e.g. at a
+  // 150% zoom whose row-header width makes column A's left boundary fall on a half
+  // pixel). The grid's physical frame — column A's left, row 1's top — has no
+  // neighbour to draw that second copy, so a lone line there anti-aliases to half
+  // intensity and looks thinner than the other three sides. Draw the frame edge
+  // twice (a self-coincident copy) so it matches the doubled interior edges.
+  const leftNbr = c > 0 ? sideOf(`${getColLetter(c - 1)}${r}`, 'right') : null;
+  const leftEff = pick(leftNbr, cellBorderSide(style, 'left'));
+  if (leftEff) { edges.push(['left', leftEff]); if (c === 0) edges.push(['left', leftEff]); }
+  const topNbr = r > 1 ? sideOf(`${getColLetter(c)}${r - 1}`, 'bottom') : null;
+  const topEff = pick(topNbr, cellBorderSide(style, 'top'));
+  if (topEff) { edges.push(['top', topEff]); if (r === 1) edges.push(['top', topEff]); }
 
   // Overlay lines share one z-index, so the later-appended line paints on top.
   // An overlay spans the full track on its cross axis (so corners meet flush),
@@ -3952,13 +3978,14 @@ const applyBordersToSelection = (mode) => {
   const historyChanges = [];
   const colCount = getColCount(activeSheetName);
   const selectedSet = new Set(ids);
-  // A shared boundary stores a spec on each cell's facing side, but is drawn once
-  // by the boundary's owner (its left/top cell). When a freshly-applied side ties
-  // an already-bordered neighbour's coincident side, pick() keeps the owner's
-  // (stale) spec, so the just-applied colour shows only on the edges the target
-  // owns (right/bottom) — its left/top kept the old colour (#82). Mirror each set
-  // side onto the neighbour's opposite face so the boundary is stored consistently
-  // and the owner paints the applied spec. Only the FOUR neighbour opposite of a
+  // A shared boundary stores a spec on each cell's facing side, and both cells
+  // resolve it with pick() to draw their own coincident copy. When a freshly-
+  // applied side ties an already-bordered neighbour's coincident side, pick()
+  // keeps the neighbour's (stale) spec, so the just-applied colour would show
+  // only on the target's own copy while the neighbour's copy kept the old colour
+  // (#82). Mirror each set side onto the neighbour's opposite face so the
+  // boundary is stored consistently and both copies paint the applied spec. Only
+  // the FOUR neighbour opposite of a
   // changed side, only when that neighbour already holds a *different* non-null
   // spec there (a null face already loses to the applied one in pick(), so leave
   // empty neighbours untouched — no record/history bloat), and never a neighbour

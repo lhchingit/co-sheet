@@ -1,12 +1,16 @@
 /**
  * @file borders.test.js
  * @description Unit tests for the neighbour-aware cell-border renderer
- * (applyCellBorders / addBorderLine in public/app.js). The key invariant under
- * test is that an interior shared boundary between two cells is drawn exactly
- * ONCE — by the left/top owner — so framing many cells doesn't multiply the
- * number of overlay DOM nodes (the cause of the "many framed cells" lag). The
- * grid's outer edges (column A / row 1), which have no preceding neighbour to
- * own the boundary, still draw their own left/top.
+ * (applyCellBorders / addBorderLine in public/app.js). Borders are CENTRED on
+ * the cell boundary (half their width each side, like Excel/Sheets), so a
+ * centred line bleeds across the boundary. The key invariant under test is that
+ * EACH cell draws its own copy of every edge it touches — a shared interior
+ * boundary is drawn by BOTH neighbours as two identical, coincident lines (e.g.
+ * the left cell's right and the right cell's left) — so the half a higher
+ * stacking neighbour (the active cell) would paint over is always redrawn by
+ * that neighbour's own copy and the boundary survives any repaint. The two
+ * copies agree because pick() resolves a shared edge to the heavier of the two
+ * coincident specs in both cells.
  */
 
 import test from 'node:test';
@@ -75,10 +79,10 @@ function createSandbox() {
   return sandbox;
 }
 
-test('interior vertical boundary between two framed cells is drawn once', () => {
+test('interior vertical boundary is drawn by both neighbours (coincident copies)', () => {
   const sandbox = createSandbox();
-  // A1's right and B1's left describe the SAME shared boundary; A1 (the left
-  // owner) should draw it and B1 should not redraw its own left.
+  // A1's right and B1's left describe the SAME shared boundary. A centred line
+  // bleeds across it, so each cell draws its own copy: A1 its right, B1 its left.
   sandbox.localCells = {
     A1: { style: { borders: { right: thin() } } },
     B1: { style: { borders: { left: thin() } } },
@@ -89,12 +93,13 @@ test('interior vertical boundary between two framed cells is drawn once', () => 
   sandbox.applyCellBorders(elA, sandbox.localCells.A1.style, 'A1');
   sandbox.applyCellBorders(elB, sandbox.localCells.B1.style, 'B1');
 
-  assert.strictEqual(lines(elA).length + lines(elB).length, 1, 'shared boundary should yield exactly one overlay line');
-  assert.strictEqual(lines(elA).length, 1, 'the left owner (A1) draws the boundary');
-  assert.strictEqual(lines(elB).length, 0, 'the right cell (B1) must not redraw its own left');
+  assert.strictEqual(lines(elA).length, 1, 'A1 draws its right copy of the boundary');
+  assert.strictEqual(lines(elB).length, 1, 'B1 draws its own left copy (covers the half A1 bleeds in)');
+  assert.ok(/(^|;)\s*right:/.test(elA._children[0].style.cssText || ''), 'A1 copy is a right edge');
+  assert.ok(/(^|;)\s*left:/.test(elB._children[0].style.cssText || ''), 'B1 copy is a left edge');
 });
 
-test('interior horizontal boundary between two framed cells is drawn once', () => {
+test('interior horizontal boundary is drawn by both neighbours (coincident copies)', () => {
   const sandbox = createSandbox();
   sandbox.localCells = {
     A1: { style: { borders: { bottom: thin() } } },
@@ -106,15 +111,16 @@ test('interior horizontal boundary between two framed cells is drawn once', () =
   sandbox.applyCellBorders(el1, sandbox.localCells.A1.style, 'A1');
   sandbox.applyCellBorders(el2, sandbox.localCells.A2.style, 'A2');
 
-  assert.strictEqual(lines(el1).length + lines(el2).length, 1, 'shared boundary should yield exactly one overlay line');
-  assert.strictEqual(lines(el1).length, 1, 'the top owner (A1) draws the boundary');
-  assert.strictEqual(lines(el2).length, 0, 'the bottom cell (A2) must not redraw its own top');
+  assert.strictEqual(lines(el1).length, 1, 'A1 draws its bottom copy of the boundary');
+  assert.strictEqual(lines(el2).length, 1, 'A2 draws its own top copy (covers the half A1 bleeds in)');
+  assert.ok(/(^|;)\s*bottom:/.test(el1._children[0].style.cssText || ''), 'A1 copy is a bottom edge');
+  assert.ok(/(^|;)\s*top:/.test(el2._children[0].style.cssText || ''), 'A2 copy is a top edge');
 });
 
-test('a fully framed interior cell still shows all four edges via its neighbours', () => {
+test('a fully framed interior cell draws all four of its own edges', () => {
   const sandbox = createSandbox();
   // B2 framed on all sides, sitting amongst blank neighbours. B2 draws its own
-  // right & bottom; its left is drawn by A2's right, its top by B1's bottom.
+  // four edges; each shared boundary is ALSO drawn by the facing neighbour.
   sandbox.localCells = {
     B2: { style: { borders: { top: thin(), right: thin(), bottom: thin(), left: thin() } } },
   };
@@ -127,14 +133,14 @@ test('a fully framed interior cell still shows all four edges via its neighbours
 
   const edges = (el, axis) => lines(el).filter((l) => (l.style.cssText || '').includes(axis));
   const elB2 = at('B2');
-  const elA2 = at('A2'); // left neighbour owns B2's left edge
-  const elB1 = at('B1'); // top neighbour owns B2's top edge
+  const elA2 = at('A2'); // left neighbour: draws B2's left boundary as its own right
+  const elB1 = at('B1'); // top neighbour: draws B2's top boundary as its own bottom
 
-  // B2 itself owns only its right & bottom (two lines, no self left/top).
-  assert.strictEqual(lines(elB2).length, 2, 'B2 draws only its owned right & bottom');
-  // The left edge is painted by A2 (as its right), the top by B1 (as its bottom).
-  assert.strictEqual(edges(elA2, 'right:').length, 1, 'A2 paints B2 left edge as its own right');
-  assert.strictEqual(edges(elB1, 'bottom:').length, 1, 'B1 paints B2 top edge as its own bottom');
+  // B2 draws all four of its own edges.
+  assert.strictEqual(lines(elB2).length, 4, 'B2 draws its own four edges');
+  // Each shared boundary is redrawn by the facing neighbour's coincident copy.
+  assert.strictEqual(edges(elA2, 'right:').length, 1, 'A2 redraws B2 left boundary as its own right');
+  assert.strictEqual(edges(elB1, 'bottom:').length, 1, 'B1 redraws B2 top boundary as its own bottom');
 });
 
 test('grid outer edges (column A / row 1) draw their own left / top', () => {
@@ -145,64 +151,133 @@ test('grid outer edges (column A / row 1) draw their own left / top', () => {
   const elA1 = makeEl();
   sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
 
-  // No preceding neighbour exists for column A / row 1, so A1 must draw both.
+  // No preceding neighbour exists for column A / row 1, so A1 must draw both —
+  // and each frame edge is drawn twice (a self-coincident copy, see below), so
+  // two left + two top = four lines.
   const css = lines(elA1).map((l) => l.style.cssText || '');
-  assert.strictEqual(lines(elA1).length, 2, 'A1 draws its own left and top at the grid frame');
-  assert.ok(css.some((c) => c.includes('left:')), 'A1 draws its own left edge');
-  assert.ok(css.some((c) => c.includes('top:')), 'A1 draws its own top edge');
+  assert.strictEqual(lines(elA1).length, 4, 'A1 draws its own left and top (doubled) at the grid frame');
+  assert.ok(css.some((c) => /width:0;\s*left:/.test(c)), 'A1 draws its own left edge');
+  assert.ok(css.some((c) => /height:0;\s*top:/.test(c)), 'A1 draws its own top edge');
+});
+
+test('the grid frame (column A left / row 1 top) is drawn twice so it is not thinner than the other sides', () => {
+  // An interior shared edge is drawn by both neighbours; the two coincident copies
+  // reinforce each other so the line keeps full weight even when its boundary
+  // lands on a fractional device pixel (e.g. at 150% zoom). The grid frame has no
+  // neighbour to draw that second copy, so a lone centred line there anti-aliases
+  // to half intensity and looks thinner. The frame cell draws the edge twice to
+  // match. Both copies stay CENTRED (offset -1.5 for thick), never inset.
+  const sandbox = createSandbox();
+  sandbox.localCells = { A1: { style: { borders: { left: thick(), top: thick() } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
+  const css = lines(el).map((l) => l.style.cssText || '');
+  const lefts = css.filter((c) => /width:0;\s*left:/.test(c));
+  const tops = css.filter((c) => /height:0;\s*top:/.test(c));
+  assert.strictEqual(lefts.length, 2, 'column A left frame is drawn twice (coincident copies)');
+  assert.strictEqual(tops.length, 2, 'row 1 top frame is drawn twice (coincident copies)');
+  assert.ok(lefts.every((c) => /width:0;\s*left:\s*-1\.5px/.test(c)), 'both left copies stay centred (-1.5px)');
+  assert.ok(tops.every((c) => /height:0;\s*top:\s*-1\.5px/.test(c)), 'both top copies stay centred (-1.5px)');
+});
+
+test('an interior left/top edge (not on the grid frame) stays centred', () => {
+  // Only the grid's physical frame is inset; an interior cell's left/top still
+  // straddle the boundary, backed by the neighbour's coincident copy.
+  const sandbox = createSandbox();
+  sandbox.localCells = { C3: { style: { borders: { left: thick(), top: thick() } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
+  const css = lines(el).map((l) => l.style.cssText || '');
+  const left = css.find((c) => /width:0;\s*left:/.test(c));
+  const top = css.find((c) => /height:0;\s*top:/.test(c));
+  assert.ok(/width:0;\s*left:\s*-1\.5px/.test(left), `interior left must be centred (-1.5px), got: ${left}`);
+  assert.ok(/height:0;\s*top:\s*-1\.5px/.test(top), `interior top must be centred (-1.5px), got: ${top}`);
 });
 
 const thick = () => ({ color: '#000000', style: 'thick' });
 
-test('a thick interior border is drawn inset, never straddling into the neighbour', () => {
-  // Regression: a straddling overlay bleeds half its width into the neighbour
-  // cell; that half is painted over when the neighbour is independently
-  // re-rendered (e.g. bordering an adjacent range later), and at fractional
-  // device-pixel ratios (125%/150% display scaling) the line then reads as half
-  // width. Keeping the line fully inside the owner (boundary-facing edge on the
-  // boundary, offset = -GRIDLINE_W on the gridline sides) makes it immune.
+test('a thick border is centred on the boundary, half its width each side', () => {
+  // Borders straddle the boundary (Excel/Sheets behaviour). A 3px thick line
+  // sits 1.5px each side. The gridline-bearing sides (right/bottom) reference a
+  // padding box GRIDLINE_W (1px) inside the boundary, so their offset is
+  // -(GRIDLINE_W + w/2) = -2.5px; the borderless sides (left/top) reference a
+  // padding box on the boundary, so their offset is -w/2 = -1.5px. The line is
+  // safe to bleed because the facing neighbour draws its own coincident copy.
   const sandbox = createSandbox();
-  sandbox.localCells = { B2: { style: { borders: { right: thick(), bottom: thick() } } } };
+  sandbox.localCells = { B2: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.B2.style, 'B2');
 
   const css = lines(el).map((l) => l.style.cssText || '');
-  const right = css.find((c) => /(^|;)\s*right:/.test(c));
-  const bottom = css.find((c) => /(^|;)\s*bottom:/.test(c));
-  assert.ok(right && bottom, 'B2 draws its owned right and bottom edges');
-  // -1px keeps the 3px line inside the owner (right edge on the boundary). The
-  // old straddling value (-2.5px) would push 1.5px across into the neighbour.
-  assert.ok(/right:\s*-1px/.test(right), `right edge must be inset (-1px), got: ${right}`);
-  assert.ok(/bottom:\s*-1px/.test(bottom), `bottom edge must be inset (-1px), got: ${bottom}`);
-  assert.ok(!css.some((c) => /-2\.5px/.test(c)), 'no overlay straddles the boundary (no -2.5px offset)');
+  // The edge-defining offset always immediately follows width:0 (verticals) or
+  // height:0 (horizontals); the values before it (thick: -1.5px) are the
+  // cross-axis corner overruns, not the edge offset.
+  const right = css.find((c) => /width:0;\s*right:/.test(c));
+  const left = css.find((c) => /width:0;\s*left:/.test(c));
+  const bottom = css.find((c) => /height:0;\s*bottom:/.test(c));
+  const top = css.find((c) => /height:0;\s*top:/.test(c));
+  assert.ok(right && bottom && left && top, 'B2 draws all four of its own edges');
+  // Gridline sides: -(1 + 1.5) = -2.5px. Borderless sides: -1.5px.
+  assert.ok(/width:0;\s*right:\s*-2\.5px/.test(right), `right edge must be centred (-2.5px), got: ${right}`);
+  assert.ok(/height:0;\s*bottom:\s*-2\.5px/.test(bottom), `bottom edge must be centred (-2.5px), got: ${bottom}`);
+  assert.ok(/width:0;\s*left:\s*-1\.5px/.test(left), `left edge must be centred (-1.5px), got: ${left}`);
+  assert.ok(/height:0;\s*top:\s*-1\.5px/.test(top), `top edge must be centred (-1.5px), got: ${top}`);
+  // The old inset edge offsets (-1px on right/bottom, 0 on left/top) must be gone.
+  assert.ok(!/width:0;\s*right:\s*-1px/.test(right) && !/height:0;\s*bottom:\s*-1px/.test(bottom),
+    'right/bottom edges must no longer be inset to -1px');
+  assert.ok(!/width:0;\s*left:\s*0px/.test(left) && !/height:0;\s*top:\s*0px/.test(top),
+    'left/top edges must no longer be inset to 0px');
 });
 
-test('overlay lines overrun GRIDLINE_W past BOTH ends to close every corner (#82)', () => {
-  // A line's far-end overrun (bottom:-1 on verticals, right:-1 on horizontals)
-  // lets a cell's own right+bottom fill its bottom-right corner. The symmetric
-  // near-end overrun (top:-1 / left:-1) closes the top-left corner, whose left
-  // edge is drawn by the left neighbour and top edge by the upper neighbour —
-  // without it those two lines met only at a point, leaving the corner open.
+test('overlay lines overrun past BOTH ends to close every corner (#82, #86)', () => {
+  // A line's far-end overrun (bottom on verticals, right on horizontals) lets a
+  // cell's own right+bottom fill its bottom-right corner. The symmetric near-end
+  // overrun (top / left) closes the top-left corner, whose left edge is drawn by
+  // the left neighbour and top edge by the upper neighbour — without it those two
+  // lines met only at a point, leaving the corner open. The overrun reaches the
+  // outline's outer corner, which sits half the perpendicular line's width beyond
+  // the boundary, so for a thick (3px) frame it must be max(GRIDLINE_W, w/2) =
+  // 1.5px — a fixed 1px fell short and chipped a notch out of every corner (#86).
   const sandbox = createSandbox();
-  // A1 at the grid corner draws all four of its own edges in one element set.
-  sandbox.localCells = { A1: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
+  // C3 (an interior cell) draws all four of its own edges, one each — no frame
+  // doubling, which only applies at column A / row 1.
+  sandbox.localCells = { C3: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
   const el = makeEl();
-  sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
+  sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
   const css = lines(el).map((l) => l.style.cssText || '');
 
   const verticals = css.filter((c) => /width:0/.test(c));
   const horizontals = css.filter((c) => /height:0/.test(c));
-  assert.strictEqual(verticals.length, 2, 'A1 has its left + right vertical lines');
-  assert.strictEqual(horizontals.length, 2, 'A1 has its top + bottom horizontal lines');
-  // Every vertical overruns top AND bottom; every horizontal overruns left AND right.
+  assert.strictEqual(verticals.length, 2, 'C3 has its left + right vertical lines');
+  assert.strictEqual(horizontals.length, 2, 'C3 has its top + bottom horizontal lines');
+  // Thick: overrun = max(1, 1.5) = 1.5px. Every vertical overruns top AND bottom;
+  // every horizontal overruns left AND right.
   verticals.forEach((c) => {
-    assert.ok(/top:\s*-1px/.test(c), `vertical must overrun its top end (-1px), got: ${c}`);
-    assert.ok(/bottom:\s*-1px/.test(c), `vertical must overrun its bottom end (-1px), got: ${c}`);
+    assert.ok(/top:\s*-1\.5px/.test(c), `vertical must overrun its top end (-1.5px), got: ${c}`);
+    assert.ok(/bottom:\s*-1\.5px/.test(c), `vertical must overrun its bottom end (-1.5px), got: ${c}`);
   });
   horizontals.forEach((c) => {
-    assert.ok(/left:\s*-1px/.test(c), `horizontal must overrun its left end (-1px), got: ${c}`);
-    assert.ok(/right:\s*-1px/.test(c), `horizontal must overrun its right end (-1px), got: ${c}`);
+    assert.ok(/left:\s*-1\.5px/.test(c), `horizontal must overrun its left end (-1.5px), got: ${c}`);
+    assert.ok(/right:\s*-1\.5px/.test(c), `horizontal must overrun its right end (-1.5px), got: ${c}`);
   });
+});
+
+test('thin / medium borders keep the 1px overrun; thick overruns its half-width (#86)', () => {
+  // The corner overrun is max(GRIDLINE_W, w/2): it must reach the outline's outer
+  // corner (half the perpendicular line beyond the boundary) without shrinking the
+  // existing 1px gridline-gap overhang for lighter borders.
+  const sandbox = createSandbox();
+  const overrun = (style) => {
+    sandbox.localCells = { C3: { style: { borders: { top: { color: '#000', style }, left: { color: '#000', style } } } } };
+    const el = makeEl();
+    sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
+    const css = lines(el).map((l) => l.style.cssText || '');
+    const vert = css.find((c) => /width:0/.test(c));
+    return /top:\s*(-?[\d.]+)px/.exec(vert)[1]; // cross-axis overrun of the left vertical
+  };
+  assert.strictEqual(overrun('thin'), '-1', 'thin (0.5px half) keeps the 1px overrun');
+  assert.strictEqual(overrun('medium'), '-1', 'medium (1px half) keeps the 1px overrun');
+  assert.strictEqual(overrun('thick'), '-1.5', 'thick (1.5px half) overruns to its outer corner');
 });
 
 // Classify an overlay by the edge it actually paints. A vertical line (width:0) is
@@ -264,14 +339,15 @@ test('a vertical edge paints above a horizontal one at equal weight (#80)', () =
   // edges must be appended horizontal-before-vertical so both verticals sit on
   // top. A1 (grid corner) owns all four edges, exercising every side at once.
   const sandbox = createSandbox();
+  // C3 (interior) owns all four edges without the frame doubling at column A / row 1.
   sandbox.localCells = {
-    A1: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } },
+    C3: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } },
   };
   const elA1 = makeEl();
-  sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
+  sandbox.applyCellBorders(elA1, sandbox.localCells.C3.style, 'C3');
 
   const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
-  assert.strictEqual(order.length, 4, 'A1 at the grid corner draws all four edges');
+  assert.strictEqual(order.length, 4, 'C3 draws all four edges');
   // Verticals (left/right) must come after horizontals (top/bottom) so they paint
   // on top — both of them, symmetrically, not just the one appended last.
   const lastTwo = order.slice(2);
@@ -284,13 +360,13 @@ test('a heavier border paints above a lighter one regardless of axis (#80)', () 
   // (and vice versa), so a bold separator is never chipped by a hairline crossing.
   const sandbox = createSandbox();
   sandbox.localCells = {
-    // A1 grid corner: thick top/bottom horizontals, thin left/right verticals.
-    A1: { style: { borders: { top: thick(), bottom: thick(), left: thin(), right: thin() } } },
+    // C3 (interior): thick top/bottom horizontals, thin left/right verticals.
+    C3: { style: { borders: { top: thick(), bottom: thick(), left: thin(), right: thin() } } },
   };
   const elA1 = makeEl();
-  sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
+  sandbox.applyCellBorders(elA1, sandbox.localCells.C3.style, 'C3');
   const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
-  assert.strictEqual(order.length, 4, 'A1 draws all four edges');
+  assert.strictEqual(order.length, 4, 'C3 draws all four edges');
   // The two thick horizontals must paint last (on top) despite being horizontal.
   const lastTwo = order.slice(2);
   assert.ok(lastTwo.every((e) => e === 'top' || e === 'bottom'),
