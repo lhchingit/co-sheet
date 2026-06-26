@@ -1606,6 +1606,19 @@ const updateCellOverflow = (cellEl, cellId) => {
   // Nothing to do when the content fits within the cell.
   if (cellEl.scrollWidth <= cellEl.clientWidth + 1) return;
 
+  applyCellSpill(cellEl, cellId);
+};
+
+/**
+ * Writes the spill styling for a cell already known to overflow: extends its clip
+ * region across the consecutive empty neighbours and lifts it above their
+ * backgrounds. Pure writes + non-geometry reads (getCellValue), no layout reads —
+ * so a batch of these can run after a single batched geometry read without
+ * thrashing (see the render pass / #88).
+ * @param {HTMLElement} cellEl
+ * @param {string} cellId
+ */
+const applyCellSpill = (cellEl, cellId) => {
   const coord = parseCellCoord(cellId);
   if (!coord) return;
 
@@ -1748,6 +1761,14 @@ const renderSpreadsheetGrid = () => {
 
   const showUneditedChecked = document.getElementById('showUnedited')?.checked ?? false;
   const highlightChangesChecked = document.getElementById('highlightChanges')?.checked ?? false;
+
+  // id → element for every cell built this render, so the post-render passes
+  // (text-overflow spill, etc.) can look a cell up in O(1) instead of running a
+  // full-document `document.querySelector('[data-cell-id]')` per cell. With a
+  // bordered cell for every entry in localCells, that per-cell DOM scan turned
+  // the overflow pass quadratic and was the real cause of multi-second loads on
+  // borders-heavy sheets (#88).
+  const cellElById = new Map();
 
   // Render Grid Rows and Cells
   for (let r = 1; r <= TOTAL_ROWS; r++) {
@@ -1941,6 +1962,7 @@ const renderSpreadsheetGrid = () => {
       }
 
       gridRoot.appendChild(cellEl);
+      cellElById.set(cellId, cellEl);
     }
   }
 
@@ -1965,14 +1987,31 @@ const renderSpreadsheetGrid = () => {
   }
 
   // After layout, let cells with overflowing text spill across empty neighbours.
-  // Only data-bearing cells can overflow, so iterate those rather than all cells.
+  // Only data-bearing cells can overflow, so iterate localCells rather than the
+  // whole grid. This pass is split into a read phase then a write phase to avoid
+  // layout thrashing: updateCellOverflow both reads geometry (scrollWidth) and
+  // writes style (clipPath/zIndex), so calling it in a loop forced a full reflow
+  // of the (non-virtualised, 1000-row) grid for every data cell — ~3s for a few
+  // hundred cells, the real cause of the borders-heavy-sheet freeze (#88). The
+  // freshly built cells carry no stale spill styling, so we can read every
+  // candidate's overflow first (one reflow for the batch) and only then write the
+  // spill on the few that overflow (writes + getCellValue, no layout reads).
   if (!isHistoryMode) {
+    const candidates = [];
     Object.keys(localCells).forEach(id => {
       // Merged anchors already span their block, and covered cells are hidden —
       // neither should spill across neighbours.
       if (hasMerges && (anchorSpan.has(id) || coveredTo.has(id))) return;
-      updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
+      const el = cellElById.get(id); // O(1) lookup, not a per-cell querySelector
+      if (!el || typeof el.scrollWidth !== 'number') return;
+      const wrapMode = localCells[id].style && localCells[id].style.textWrap;
+      if (wrapMode === 'wrap' || wrapMode === 'clip') return;
+      candidates.push([id, el]);
     });
+    // Read phase: a single reflow resolves layout for the whole batch.
+    const overflowing = candidates.filter(([, el]) => el.scrollWidth > el.clientWidth + 1);
+    // Write phase: no geometry reads here, so these don't trigger further reflows.
+    overflowing.forEach(([id, el]) => applyCellSpill(el, id));
   }
 
   // Re-apply frozen rows/columns (if any) on the freshly built DOM.
@@ -3784,20 +3823,15 @@ const styleHasBorders = (style) => !!(style && (style.border || (style.borders &
   (style.borders.top || style.borders.right || style.borders.bottom || style.borders.left))));
 
 /**
- * Append one border line as an absolutely-positioned overlay on `cellEl`.
+ * Append a single border line as an absolutely-positioned overlay on `cellEl`.
  *
- * The line is drawn at its full integer width (so thin/medium/thick stay
- * visually distinct — fractional CSS border widths round to a 1px minimum and
- * collapse together) and CENTRED on the cell boundary, half its width on each
- * side, the way Excel and Google Sheets draw borders.
- *
- * A centred line bleeds half its width into the neighbour, so each cell draws
- * its OWN copy of a shared boundary (see applyCellBorders) rather than leaving
- * it to a single owner. Each copy is a child of its own cell, so it always
- * paints above that cell's background even when the neighbour is the active cell
- * (z-index 6, above the overlay's z-index 3) — the half a neighbour's higher
- * stacking context would otherwise cover is redrawn by that neighbour's own
- * coincident copy, so the boundary is never lost to a repaint at any DPR.
+ * A whole cell's borders are normally drawn by ONE box overlay (addBorderBox);
+ * this single-edge helper now only draws the SECOND, reinforcing copy of a grid-
+ * frame edge (column A's left, row 1's top — see applyCellBorders). The line is
+ * drawn at its full integer width (so thin/medium/thick stay visually distinct —
+ * fractional CSS border widths round to a 1px minimum and collapse together) and
+ * CENTRED on the cell boundary, half its width on each side, coinciding exactly
+ * with the box overlay's same edge so the two reinforce each other.
  * @param {HTMLElement} cellEl
  * @param {'top'|'right'|'bottom'|'left'} edge
  * @param {{color:string,style:string}} spec
@@ -3843,18 +3877,65 @@ const addBorderLine = (cellEl, edge, spec) => {
 };
 
 /**
+ * Append ONE overlay box carrying all of a cell's effective border sides.
+ *
+ * A cell's four edges used to be four separate overlay lines; on a borders-heavy
+ * sheet that meant ~4 overlay <div>s per cell (~100k extra nodes for a full
+ * 1000×26 grid), and laying out / painting that many absolutely-positioned nodes
+ * froze the main thread for seconds when opening or switching to the sheet
+ * (#88). A single box carrying border-top/right/bottom/left collapses that to one
+ * node per cell, and CSS mitres its corners so a thick frame closes flush (no
+ * #86 notch) and a cell's own edges can never chip each other (no #80 within a
+ * cell).
+ *
+ * The box is positioned so each present border is CENTRED on its track boundary
+ * (half its width each side, Excel/Sheets style): the borderless near sides
+ * (top/left) reference a padding box on the boundary, so the inset is -half; the
+ * gridline-bearing far sides (right/bottom) reference a padding box GRIDLINE_W
+ * inside the boundary, so the inset is -(GRIDLINE_W + half). An absent side gets
+ * a zero-width border and a flush inset, so it neither paints nor shifts the box.
+ * box-sizing:border-box keeps the borders inside the inset-defined edges.
+ *
+ * Each cell draws its own box, so an interior boundary is still drawn by BOTH
+ * neighbours (coincident, reinforcing at fractional DPR) and the half a higher-
+ * stacking neighbour (the active cell, z-index 6) repaints over is always
+ * redrawn by that neighbour's own box — the boundary survives any repaint.
+ * @param {HTMLElement} cellEl
+ * @param {?{color:string,style:string}} top
+ * @param {?{color:string,style:string}} right
+ * @param {?{color:string,style:string}} bottom
+ * @param {?{color:string,style:string}} left
+ */
+const addBorderBox = (cellEl, top, right, bottom, left) => {
+  const half = (spec) => (spec ? (BORDER_WEIGHT[spec.style] || 1) / 2 : 0);
+  const sideCss = (spec) =>
+    `${BORDER_WEIGHT[spec.style] || 1}px ${BORDER_LINE[spec.style] || 'solid'} ${spec.color || '#000000'}`;
+  const el = document.createElement('div');
+  el.className = 'grid-border-line';
+  let css = 'position:absolute;pointer-events:none;z-index:3;box-sizing:border-box;';
+  css += `top:-${half(top)}px;left:-${half(left)}px;`;
+  css += `right:-${GRIDLINE_W + half(right)}px;bottom:-${GRIDLINE_W + half(bottom)}px;`;
+  if (top) css += `border-top:${sideCss(top)};`;
+  if (right) css += `border-right:${sideCss(right)};`;
+  if (bottom) css += `border-bottom:${sideCss(bottom)};`;
+  if (left) css += `border-left:${sideCss(left)};`;
+  el.style.cssText = css;
+  cellEl.appendChild(el);
+};
+
+/**
  * Applies a cell's stored borders to its DOM element.
  *
- * A border between two cells is drawn as an overlay line centred on the shared
- * boundary, so it bleeds equally into both cells the way a spreadsheet's
- * gridlines do. Because a centred line crosses the boundary, EACH cell draws its
- * own copy of every edge it touches: the two coincident copies (e.g. the left
- * cell's right and the right cell's left) are identical — both resolve the edge
- * to the heavier of the two specs via pick(), so a thick border is never hidden
- * behind a neighbour's thin one — and each is a child of its own cell, so a
+ * A border between two cells is centred on the shared boundary, so it bleeds
+ * equally into both cells the way a spreadsheet's gridlines do. Because a centred
+ * border crosses the boundary, EACH cell draws its own copy of every edge it
+ * touches — both neighbours resolve the edge to the heavier of the two specs via
+ * pick(), so a thick border is never hidden behind a neighbour's thin one, and a
  * neighbour with a higher stacking context (the active cell) repaints over only
- * its own coincident copy, never erasing the boundary. A cell suppresses its own
- * default gridline on the right/bottom of any edge it draws so the gridline
+ * its own copy, never erasing the boundary. A cell's four effective edges are
+ * emitted as ONE box overlay (addBorderBox) rather than four separate lines, to
+ * keep the node count down on borders-heavy sheets (#88). A cell suppresses its
+ * own default gridline on the right/bottom of any edge it draws so the gridline
  * doesn't peek out beside the custom line.
  *
  * History mode renders from a snapshot (no live neighbours), so it falls back
@@ -3903,54 +3984,38 @@ const applyCellBorders = (cellEl, style, cellId) => {
   const ownRight = isMerged ? sideOf(`${getColLetter(rightCol)}${r}`, 'right') : cellBorderSide(style, 'right');
   const ownBottom = isMerged ? sideOf(`${getColLetter(c)}${bottomRow}`, 'bottom') : cellBorderSide(style, 'bottom');
 
-  // Collect the edges this cell owns, then append them in a deterministic paint
-  // order (below). Right boundary — owned by this cell; merge in the right
-  // neighbour's left. Bottom boundary — owned by this cell; merge in the bottom
-  // neighbour's top.
-  const edges = [];
+  // Resolve each boundary to its effective spec (heavier of the two coincident
+  // sides). Right/bottom are owned by this cell, merged with the neighbour past
+  // the boundary; left/top are shared with the preceding neighbour, with the tie
+  // resolving to that neighbour (the left/top owner) so both cells agree on which
+  // spec wins. At the grid's outer edge (column A / row 1) there is no preceding
+  // neighbour, so the cell's own side stands alone.
   const rightEff = pick(ownRight, sideOf(`${getColLetter(rightCol + 1)}${r}`, 'left'));
-  if (rightEff) { edges.push(['right', rightEff]); cellEl.style.borderRightColor = 'transparent'; }
   const bottomEff = pick(ownBottom, sideOf(`${getColLetter(c)}${bottomRow + 1}`, 'top'));
-  if (bottomEff) { edges.push(['bottom', bottomEff]); cellEl.style.borderBottomColor = 'transparent'; }
-  // Left/top boundaries are shared with the preceding neighbour, which draws the
-  // SAME centred line as its right/bottom (resolved by pick() to the heavier of
-  // the two specs). A centred border bleeds half its width across the boundary,
-  // and that half — drawn here as a child of THIS cell — would be covered when a
-  // higher-stacking neighbour (the active cell, z-index 6) repaints over the
-  // overlay (z-index 3). So each cell draws its own copy of its left/top too:
-  // the neighbour's coincident copy redraws the half it covers, and the boundary
-  // survives. The own left/top are merged with the preceding neighbour's facing
-  // side, with the tie resolving to that neighbour (the left/top owner) so both
-  // cells agree on which spec wins. At the grid's outer edge (column A / row 1)
-  // there is no preceding neighbour, so the cell's own side stands alone.
-  // An interior shared edge is drawn by BOTH cells (this cell and its neighbour),
-  // and those two coincident copies reinforce each other so the line stays at full
-  // weight even when the boundary lands on a fractional device pixel (e.g. at a
-  // 150% zoom whose row-header width makes column A's left boundary fall on a half
-  // pixel). The grid's physical frame — column A's left, row 1's top — has no
-  // neighbour to draw that second copy, so a lone line there anti-aliases to half
-  // intensity and looks thinner than the other three sides. Draw the frame edge
-  // twice (a self-coincident copy) so it matches the doubled interior edges.
   const leftNbr = c > 0 ? sideOf(`${getColLetter(c - 1)}${r}`, 'right') : null;
   const leftEff = pick(leftNbr, cellBorderSide(style, 'left'));
-  if (leftEff) { edges.push(['left', leftEff]); if (c === 0) edges.push(['left', leftEff]); }
   const topNbr = r > 1 ? sideOf(`${getColLetter(c)}${r - 1}`, 'bottom') : null;
   const topEff = pick(topNbr, cellBorderSide(style, 'top'));
-  if (topEff) { edges.push(['top', topEff]); if (r === 1) edges.push(['top', topEff]); }
 
-  // Overlay lines share one z-index, so the later-appended line paints on top.
-  // An overlay spans the full track on its cross axis (so corners meet flush),
-  // which means a horizontal line also covers the corner the perpendicular
-  // vertical passes through. Appending in incidental order (right, bottom, …)
-  // let a cell's bottom horizontal chip a gap out of its right vertical at every
-  // crossing — breaking a differently-coloured vertical border into segments —
-  // while the left vertical, appended last, stayed intact (issue #80). Append in
-  // a deterministic order instead: a heavier border paints above a lighter one,
-  // and at equal weight a vertical edge paints above a horizontal one, so both
-  // verticals sit cleanly above any horizontal they cross.
-  const isVertical = (edge) => (edge === 'left' || edge === 'right' ? 1 : 0);
-  edges.sort((a, b) => (borderWeight(a[1]) - borderWeight(b[1])) || (isVertical(a[0]) - isVertical(b[0])));
-  edges.forEach(([edge, spec]) => addBorderLine(cellEl, edge, spec));
+  // Suppress this cell's own default gridline wherever it draws a custom edge, so
+  // the grey gridline doesn't peek out beside the custom line.
+  if (rightEff) cellEl.style.borderRightColor = 'transparent';
+  if (bottomEff) cellEl.style.borderBottomColor = 'transparent';
+
+  // Draw all four effective edges as ONE box overlay (one node per cell instead
+  // of one per edge — see addBorderBox / #88). Its mitred corners close a frame
+  // flush and keep a cell's own edges from chipping each other.
+  if (topEff || rightEff || bottomEff || leftEff) {
+    addBorderBox(cellEl, topEff, rightEff, bottomEff, leftEff);
+    // An interior boundary is reinforced by the facing neighbour's own coincident
+    // box, so it stays full-weight when it lands on a fractional device pixel
+    // (e.g. at 150% zoom). The grid's physical frame — column A's left, row 1's
+    // top — has no neighbour to draw that second copy, so a lone box edge there
+    // anti-aliases to half intensity and looks thinner than the other sides. Add
+    // a single-edge reinforcing copy that coincides with the box's frame edge.
+    if (c === 0 && leftEff) addBorderLine(cellEl, 'left', leftEff);
+    if (r === 1 && topEff) addBorderLine(cellEl, 'top', topEff);
+  }
 };
 
 /**

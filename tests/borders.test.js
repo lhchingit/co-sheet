@@ -1,16 +1,23 @@
 /**
  * @file borders.test.js
  * @description Unit tests for the neighbour-aware cell-border renderer
- * (applyCellBorders / addBorderLine in public/app.js). Borders are CENTRED on
- * the cell boundary (half their width each side, like Excel/Sheets), so a
- * centred line bleeds across the boundary. The key invariant under test is that
- * EACH cell draws its own copy of every edge it touches — a shared interior
- * boundary is drawn by BOTH neighbours as two identical, coincident lines (e.g.
- * the left cell's right and the right cell's left) — so the half a higher
- * stacking neighbour (the active cell) would paint over is always redrawn by
- * that neighbour's own copy and the boundary survives any repaint. The two
- * copies agree because pick() resolves a shared edge to the heavier of the two
- * coincident specs in both cells.
+ * (applyCellBorders / addBorderBox in public/app.js). Borders are CENTRED on the
+ * cell boundary (half their width each side, like Excel/Sheets), so a centred
+ * border bleeds across the boundary. The key invariant under test is that EACH
+ * cell draws its own copy of every edge it touches — a shared interior boundary
+ * is drawn by BOTH neighbours (e.g. the left cell's right and the right cell's
+ * left) — so the half a higher stacking neighbour (the active cell) would paint
+ * over is always redrawn by that neighbour's own copy and the boundary survives
+ * any repaint. The two agree because pick() resolves a shared edge to the heavier
+ * of the two coincident specs in both cells.
+ *
+ * A cell's four effective edges are emitted as ONE box overlay carrying
+ * border-top/right/bottom/left (one node per cell, not one per edge — #88); CSS
+ * mitres its corners so a thick frame closes flush (#86) and a cell's own edges
+ * can't chip each other (#80). The grid's physical frame (column A left, row 1
+ * top) has no neighbour to draw a coincident copy, so the box edge there is
+ * reinforced by a single-edge overlay (addBorderLine) to stay full-weight at
+ * fractional zoom.
  */
 
 import test from 'node:test';
@@ -41,8 +48,31 @@ function makeEl() {
   return el;
 }
 
-/** The overlay border lines currently on a cell element. */
+/** The overlay border elements currently on a cell element (box + reinforcers). */
 const lines = (el) => el._children.filter((c) => c.className === 'grid-border-line');
+
+/** The single box overlay carrying a cell's border sides (box-sizing:border-box). */
+const boxOf = (el) => lines(el).find((l) => /box-sizing:\s*border-box/.test(l.style.cssText || ''));
+/** Single-edge reinforcing overlays (the non-box lines, used at the grid frame). */
+const reinforcers = (el) => lines(el).filter((l) => !/box-sizing:\s*border-box/.test(l.style.cssText || ''));
+/** Map of side → CSS border shorthand for the sides the box actually paints. */
+const boxSides = (el) => {
+  const css = (boxOf(el) && boxOf(el).style.cssText) || '';
+  const out = {};
+  for (const s of ['top', 'right', 'bottom', 'left']) {
+    const m = new RegExp(`border-${s}:\\s*([^;]+)`).exec(css);
+    if (m) out[s] = m[1].trim();
+  }
+  return out;
+};
+/** The set of sides the box paints. */
+const boxEdgeSet = (el) => new Set(Object.keys(boxSides(el)));
+/** The box's positioning inset (px, signed number) for one side — the centring offset. */
+const boxInset = (el, side) => {
+  const css = (boxOf(el) && boxOf(el).style.cssText) || '';
+  const m = new RegExp(`(?:^|;)\\s*${side}:\\s*(-?[\\d.]+)px`).exec(css);
+  return m ? parseFloat(m[1]) : null;
+};
 
 function createSandbox() {
   const code = readAppBundle();
@@ -79,10 +109,11 @@ function createSandbox() {
   return sandbox;
 }
 
-test('interior vertical boundary is drawn by both neighbours (coincident copies)', () => {
+test('interior vertical boundary is drawn by both neighbours (coincident boxes)', () => {
   const sandbox = createSandbox();
-  // A1's right and B1's left describe the SAME shared boundary. A centred line
-  // bleeds across it, so each cell draws its own copy: A1 its right, B1 its left.
+  // A1's right and B1's left describe the SAME shared boundary. A centred border
+  // bleeds across it, so each cell's box draws its own copy: A1 its right, B1 its
+  // left.
   sandbox.localCells = {
     A1: { style: { borders: { right: thin() } } },
     B1: { style: { borders: { left: thin() } } },
@@ -93,13 +124,11 @@ test('interior vertical boundary is drawn by both neighbours (coincident copies)
   sandbox.applyCellBorders(elA, sandbox.localCells.A1.style, 'A1');
   sandbox.applyCellBorders(elB, sandbox.localCells.B1.style, 'B1');
 
-  assert.strictEqual(lines(elA).length, 1, 'A1 draws its right copy of the boundary');
-  assert.strictEqual(lines(elB).length, 1, 'B1 draws its own left copy (covers the half A1 bleeds in)');
-  assert.ok(/(^|;)\s*right:/.test(elA._children[0].style.cssText || ''), 'A1 copy is a right edge');
-  assert.ok(/(^|;)\s*left:/.test(elB._children[0].style.cssText || ''), 'B1 copy is a left edge');
+  assert.deepStrictEqual([...boxEdgeSet(elA)], ['right'], 'A1 box paints the boundary as its right');
+  assert.deepStrictEqual([...boxEdgeSet(elB)], ['left'], 'B1 box paints its own left copy (covers the half A1 bleeds in)');
 });
 
-test('interior horizontal boundary is drawn by both neighbours (coincident copies)', () => {
+test('interior horizontal boundary is drawn by both neighbours (coincident boxes)', () => {
   const sandbox = createSandbox();
   sandbox.localCells = {
     A1: { style: { borders: { bottom: thin() } } },
@@ -111,16 +140,14 @@ test('interior horizontal boundary is drawn by both neighbours (coincident copie
   sandbox.applyCellBorders(el1, sandbox.localCells.A1.style, 'A1');
   sandbox.applyCellBorders(el2, sandbox.localCells.A2.style, 'A2');
 
-  assert.strictEqual(lines(el1).length, 1, 'A1 draws its bottom copy of the boundary');
-  assert.strictEqual(lines(el2).length, 1, 'A2 draws its own top copy (covers the half A1 bleeds in)');
-  assert.ok(/(^|;)\s*bottom:/.test(el1._children[0].style.cssText || ''), 'A1 copy is a bottom edge');
-  assert.ok(/(^|;)\s*top:/.test(el2._children[0].style.cssText || ''), 'A2 copy is a top edge');
+  assert.deepStrictEqual([...boxEdgeSet(el1)], ['bottom'], 'A1 box paints its bottom copy of the boundary');
+  assert.deepStrictEqual([...boxEdgeSet(el2)], ['top'], 'A2 box paints its own top copy (covers the half A1 bleeds in)');
 });
 
-test('a fully framed interior cell draws all four of its own edges', () => {
+test('a fully framed interior cell draws all four of its own edges in one box', () => {
   const sandbox = createSandbox();
-  // B2 framed on all sides, sitting amongst blank neighbours. B2 draws its own
-  // four edges; each shared boundary is ALSO drawn by the facing neighbour.
+  // B2 framed on all sides, sitting amongst blank neighbours. B2's box paints its
+  // own four edges; each shared boundary is ALSO drawn by the facing neighbour.
   sandbox.localCells = {
     B2: { style: { borders: { top: thin(), right: thin(), bottom: thin(), left: thin() } } },
   };
@@ -131,19 +158,19 @@ test('a fully framed interior cell draws all four of its own edges', () => {
     return el;
   };
 
-  const edges = (el, axis) => lines(el).filter((l) => (l.style.cssText || '').includes(axis));
   const elB2 = at('B2');
   const elA2 = at('A2'); // left neighbour: draws B2's left boundary as its own right
   const elB1 = at('B1'); // top neighbour: draws B2's top boundary as its own bottom
 
-  // B2 draws all four of its own edges.
-  assert.strictEqual(lines(elB2).length, 4, 'B2 draws its own four edges');
-  // Each shared boundary is redrawn by the facing neighbour's coincident copy.
-  assert.strictEqual(edges(elA2, 'right:').length, 1, 'A2 redraws B2 left boundary as its own right');
-  assert.strictEqual(edges(elB1, 'bottom:').length, 1, 'B1 redraws B2 top boundary as its own bottom');
+  // B2 emits ONE box carrying all four of its edges.
+  assert.strictEqual(lines(elB2).length, 1, 'B2 draws a single box overlay');
+  assert.strictEqual(boxEdgeSet(elB2).size, 4, 'B2 box paints its own four edges');
+  // Each shared boundary is redrawn by the facing neighbour's coincident box.
+  assert.ok(boxSides(elA2).right, 'A2 redraws B2 left boundary as its own right');
+  assert.ok(boxSides(elB1).bottom, 'B1 redraws B2 top boundary as its own bottom');
 });
 
-test('grid outer edges (column A / row 1) draw their own left / top', () => {
+test('grid outer edges (column A / row 1) draw their own left / top, reinforced', () => {
   const sandbox = createSandbox();
   sandbox.localCells = {
     A1: { style: { borders: { left: thin(), top: thin() } } },
@@ -151,147 +178,107 @@ test('grid outer edges (column A / row 1) draw their own left / top', () => {
   const elA1 = makeEl();
   sandbox.applyCellBorders(elA1, sandbox.localCells.A1.style, 'A1');
 
-  // No preceding neighbour exists for column A / row 1, so A1 must draw both —
-  // and each frame edge is drawn twice (a self-coincident copy, see below), so
-  // two left + two top = four lines.
-  const css = lines(elA1).map((l) => l.style.cssText || '');
-  assert.strictEqual(lines(elA1).length, 4, 'A1 draws its own left and top (doubled) at the grid frame');
-  assert.ok(css.some((c) => /width:0;\s*left:/.test(c)), 'A1 draws its own left edge');
-  assert.ok(css.some((c) => /height:0;\s*top:/.test(c)), 'A1 draws its own top edge');
+  // No preceding neighbour exists for column A / row 1, so A1's box draws both —
+  // and because there's no neighbour to draw the second coincident copy, each
+  // frame edge gets a reinforcing single-edge overlay (see next test).
+  assert.deepStrictEqual([...boxEdgeSet(elA1)].sort(), ['left', 'top'], 'A1 box paints its own left and top');
+  assert.strictEqual(reinforcers(elA1).length, 2, 'the two frame edges are each reinforced once');
 });
 
-test('the grid frame (column A left / row 1 top) is drawn twice so it is not thinner than the other sides', () => {
-  // An interior shared edge is drawn by both neighbours; the two coincident copies
-  // reinforce each other so the line keeps full weight even when its boundary
+test('the grid frame (column A left / row 1 top) is reinforced so it is not thinner than the other sides', () => {
+  // An interior shared edge is drawn by both neighbours; the two coincident boxes
+  // reinforce each other so the edge keeps full weight even when its boundary
   // lands on a fractional device pixel (e.g. at 150% zoom). The grid frame has no
-  // neighbour to draw that second copy, so a lone centred line there anti-aliases
-  // to half intensity and looks thinner. The frame cell draws the edge twice to
-  // match. Both copies stay CENTRED (offset -1.5 for thick), never inset.
+  // neighbour to draw that second copy, so a lone box edge there anti-aliases to
+  // half intensity and looks thinner. The frame cell adds a single-edge copy that
+  // coincides with the box edge. Both the box edge and the reinforcer stay CENTRED
+  // (offset -1.5 for thick), never inset.
   const sandbox = createSandbox();
   sandbox.localCells = { A1: { style: { borders: { left: thick(), top: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
-  const css = lines(el).map((l) => l.style.cssText || '');
-  const lefts = css.filter((c) => /width:0;\s*left:/.test(c));
-  const tops = css.filter((c) => /height:0;\s*top:/.test(c));
-  assert.strictEqual(lefts.length, 2, 'column A left frame is drawn twice (coincident copies)');
-  assert.strictEqual(tops.length, 2, 'row 1 top frame is drawn twice (coincident copies)');
-  assert.ok(lefts.every((c) => /width:0;\s*left:\s*-1\.5px/.test(c)), 'both left copies stay centred (-1.5px)');
-  assert.ok(tops.every((c) => /height:0;\s*top:\s*-1\.5px/.test(c)), 'both top copies stay centred (-1.5px)');
+
+  assert.strictEqual(boxInset(el, 'left'), -1.5, 'box left edge stays centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'top'), -1.5, 'box top edge stays centred (-1.5px)');
+  const css = reinforcers(el).map((l) => l.style.cssText || '');
+  const reLeft = css.filter((c) => /width:0;\s*left:\s*-1\.5px/.test(c));
+  const reTop = css.filter((c) => /height:0;\s*top:\s*-1\.5px/.test(c));
+  assert.strictEqual(reLeft.length, 1, 'left frame edge reinforced by one coincident centred copy');
+  assert.strictEqual(reTop.length, 1, 'top frame edge reinforced by one coincident centred copy');
 });
 
-test('an interior left/top edge (not on the grid frame) stays centred', () => {
-  // Only the grid's physical frame is inset; an interior cell's left/top still
-  // straddle the boundary, backed by the neighbour's coincident copy.
+test('an interior left/top edge (not on the grid frame) stays centred and unreinforced', () => {
+  // An interior cell's left/top straddle the boundary, backed by the neighbour's
+  // own coincident box — so they need no single-edge reinforcer.
   const sandbox = createSandbox();
   sandbox.localCells = { C3: { style: { borders: { left: thick(), top: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
-  const css = lines(el).map((l) => l.style.cssText || '');
-  const left = css.find((c) => /width:0;\s*left:/.test(c));
-  const top = css.find((c) => /height:0;\s*top:/.test(c));
-  assert.ok(/width:0;\s*left:\s*-1\.5px/.test(left), `interior left must be centred (-1.5px), got: ${left}`);
-  assert.ok(/height:0;\s*top:\s*-1\.5px/.test(top), `interior top must be centred (-1.5px), got: ${top}`);
+
+  assert.strictEqual(boxInset(el, 'left'), -1.5, 'interior left must be centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'top'), -1.5, 'interior top must be centred (-1.5px)');
+  assert.strictEqual(reinforcers(el).length, 0, 'an interior edge is not reinforced (the neighbour draws the second copy)');
 });
 
 const thick = () => ({ color: '#000000', style: 'thick' });
 
 test('a thick border is centred on the boundary, half its width each side', () => {
-  // Borders straddle the boundary (Excel/Sheets behaviour). A 3px thick line
+  // Borders straddle the boundary (Excel/Sheets behaviour). A 3px thick border
   // sits 1.5px each side. The gridline-bearing sides (right/bottom) reference a
-  // padding box GRIDLINE_W (1px) inside the boundary, so their offset is
+  // padding box GRIDLINE_W (1px) inside the boundary, so their inset is
   // -(GRIDLINE_W + w/2) = -2.5px; the borderless sides (left/top) reference a
-  // padding box on the boundary, so their offset is -w/2 = -1.5px. The line is
-  // safe to bleed because the facing neighbour draws its own coincident copy.
+  // padding box on the boundary, so their inset is -w/2 = -1.5px. The box is safe
+  // to bleed because the facing neighbour draws its own coincident box.
   const sandbox = createSandbox();
   sandbox.localCells = { B2: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.B2.style, 'B2');
 
-  const css = lines(el).map((l) => l.style.cssText || '');
-  // The edge-defining offset always immediately follows width:0 (verticals) or
-  // height:0 (horizontals); the values before it (thick: -1.5px) are the
-  // cross-axis corner overruns, not the edge offset.
-  const right = css.find((c) => /width:0;\s*right:/.test(c));
-  const left = css.find((c) => /width:0;\s*left:/.test(c));
-  const bottom = css.find((c) => /height:0;\s*bottom:/.test(c));
-  const top = css.find((c) => /height:0;\s*top:/.test(c));
-  assert.ok(right && bottom && left && top, 'B2 draws all four of its own edges');
+  assert.strictEqual(boxEdgeSet(el).size, 4, 'B2 box draws all four of its own edges');
   // Gridline sides: -(1 + 1.5) = -2.5px. Borderless sides: -1.5px.
-  assert.ok(/width:0;\s*right:\s*-2\.5px/.test(right), `right edge must be centred (-2.5px), got: ${right}`);
-  assert.ok(/height:0;\s*bottom:\s*-2\.5px/.test(bottom), `bottom edge must be centred (-2.5px), got: ${bottom}`);
-  assert.ok(/width:0;\s*left:\s*-1\.5px/.test(left), `left edge must be centred (-1.5px), got: ${left}`);
-  assert.ok(/height:0;\s*top:\s*-1\.5px/.test(top), `top edge must be centred (-1.5px), got: ${top}`);
-  // The old inset edge offsets (-1px on right/bottom, 0 on left/top) must be gone.
-  assert.ok(!/width:0;\s*right:\s*-1px/.test(right) && !/height:0;\s*bottom:\s*-1px/.test(bottom),
-    'right/bottom edges must no longer be inset to -1px');
-  assert.ok(!/width:0;\s*left:\s*0px/.test(left) && !/height:0;\s*top:\s*0px/.test(top),
-    'left/top edges must no longer be inset to 0px');
+  assert.strictEqual(boxInset(el, 'right'), -2.5, 'right edge must be centred (-2.5px)');
+  assert.strictEqual(boxInset(el, 'bottom'), -2.5, 'bottom edge must be centred (-2.5px)');
+  assert.strictEqual(boxInset(el, 'left'), -1.5, 'left edge must be centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'top'), -1.5, 'top edge must be centred (-1.5px)');
+  // Each side is drawn at its full integer width so weights stay distinct.
+  const sides = boxSides(el);
+  ['top', 'right', 'bottom', 'left'].forEach((s) =>
+    assert.ok(/^3px /.test(sides[s]), `${s} drawn at full thick width (3px), got: ${sides[s]}`));
 });
 
-test('overlay lines overrun past BOTH ends to close every corner (#82, #86)', () => {
-  // A line's far-end overrun (bottom on verticals, right on horizontals) lets a
-  // cell's own right+bottom fill its bottom-right corner. The symmetric near-end
-  // overrun (top / left) closes the top-left corner, whose left edge is drawn by
-  // the left neighbour and top edge by the upper neighbour — without it those two
-  // lines met only at a point, leaving the corner open. The overrun reaches the
-  // outline's outer corner, which sits half the perpendicular line's width beyond
-  // the boundary, so for a thick (3px) frame it must be max(GRIDLINE_W, w/2) =
-  // 1.5px — a fixed 1px fell short and chipped a notch out of every corner (#86).
+test('a cell draws ONE box that mitres its corners closed (#82, #86, #80)', () => {
+  // The four edges are a single box element, so CSS mitres the corners flush — a
+  // thick frame closes with no notch (#86, was a fixed-overrun shortfall), and a
+  // cell's own edges share one element so neither can chip the other at a crossing
+  // (#80, was an overlay-line paint-order artefact). C3 (interior) draws all four
+  // edges with no frame reinforcement (that applies only at column A / row 1).
   const sandbox = createSandbox();
-  // C3 (an interior cell) draws all four of its own edges, one each — no frame
-  // doubling, which only applies at column A / row 1.
   sandbox.localCells = { C3: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
-  const css = lines(el).map((l) => l.style.cssText || '');
 
-  const verticals = css.filter((c) => /width:0/.test(c));
-  const horizontals = css.filter((c) => /height:0/.test(c));
-  assert.strictEqual(verticals.length, 2, 'C3 has its left + right vertical lines');
-  assert.strictEqual(horizontals.length, 2, 'C3 has its top + bottom horizontal lines');
-  // Thick: overrun = max(1, 1.5) = 1.5px. Every vertical overruns top AND bottom;
-  // every horizontal overruns left AND right.
-  verticals.forEach((c) => {
-    assert.ok(/top:\s*-1\.5px/.test(c), `vertical must overrun its top end (-1.5px), got: ${c}`);
-    assert.ok(/bottom:\s*-1\.5px/.test(c), `vertical must overrun its bottom end (-1.5px), got: ${c}`);
-  });
-  horizontals.forEach((c) => {
-    assert.ok(/left:\s*-1\.5px/.test(c), `horizontal must overrun its left end (-1.5px), got: ${c}`);
-    assert.ok(/right:\s*-1\.5px/.test(c), `horizontal must overrun its right end (-1.5px), got: ${c}`);
-  });
+  assert.strictEqual(lines(el).length, 1, 'an interior framed cell draws exactly one box');
+  assert.ok(boxOf(el), 'the overlay is a border-box');
+  assert.strictEqual(boxEdgeSet(el).size, 4, 'the box paints all four sides');
 });
 
-test('thin / medium borders keep the 1px overrun; thick overruns its half-width (#86)', () => {
-  // The corner overrun is max(GRIDLINE_W, w/2): it must reach the outline's outer
-  // corner (half the perpendicular line beyond the boundary) without shrinking the
-  // existing 1px gridline-gap overhang for lighter borders.
+test('the box centres each border on its boundary, inset by half the weight (#85, #86)', () => {
+  // In the box model the corner closes by CSS mitre at any weight; what scales
+  // with weight is the centring inset (-half on the near sides). thin = -0.5,
+  // medium = -1, thick = -1.5.
   const sandbox = createSandbox();
-  const overrun = (style) => {
+  const leftInset = (style) => {
     sandbox.localCells = { C3: { style: { borders: { top: { color: '#000', style }, left: { color: '#000', style } } } } };
     const el = makeEl();
     sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
-    const css = lines(el).map((l) => l.style.cssText || '');
-    const vert = css.find((c) => /width:0/.test(c));
-    return /top:\s*(-?[\d.]+)px/.exec(vert)[1]; // cross-axis overrun of the left vertical
+    return boxInset(el, 'left');
   };
-  assert.strictEqual(overrun('thin'), '-1', 'thin (0.5px half) keeps the 1px overrun');
-  assert.strictEqual(overrun('medium'), '-1', 'medium (1px half) keeps the 1px overrun');
-  assert.strictEqual(overrun('thick'), '-1.5', 'thick (1.5px half) overruns to its outer corner');
+  assert.strictEqual(leftInset('thin'), -0.5, 'thin centred (half = 0.5)');
+  assert.strictEqual(leftInset('medium'), -1, 'medium centred (half = 1)');
+  assert.strictEqual(leftInset('thick'), -1.5, 'thick centred (half = 1.5)');
 });
 
-// Classify an overlay by the edge it actually paints. A vertical line (width:0) is
-// left/right per the offset following width:0; a horizontal line (height:0) is
-// top/bottom per the offset following height:0. (The cross-axis span — e.g. the
-// "right:-1px" reach on a horizontal line — is NOT its edge.)
-const edgeOf = (cssText) => {
-  let m = /width:0;\s*(left|right):/.exec(cssText);
-  if (m) return m[1];
-  m = /height:0;\s*(top|bottom):/.exec(cssText);
-  if (m) return m[1];
-  return '?';
-};
-const edgeSet = (el) => new Set(lines(el).map((l) => edgeOf(l.style.cssText || '')));
+const edgeSet = (el) => boxEdgeSet(el);
 
 test('a horizontally merged anchor draws the block\'s far-right edge', () => {
   // Regression (#78): a merged anchor is rendered as one element spanning the
@@ -330,47 +317,27 @@ test('a vertically merged anchor draws the block\'s far-bottom edge', () => {
   assert.ok(e.has('right'), 'and its right edge');
 });
 
-test('a vertical edge paints above a horizontal one at equal weight (#80)', () => {
-  // Regression (#80): overlay lines share one z-index, so paint order is append
-  // order. A horizontal line spans the full track and covers the corner the
-  // perpendicular vertical passes through, so if the horizontal is appended last
-  // it chips a gap out of a differently-coloured vertical at every crossing —
-  // the reported broken right edge / intact left edge asymmetry. A cell's own
-  // edges must be appended horizontal-before-vertical so both verticals sit on
-  // top. A1 (grid corner) owns all four edges, exercising every side at once.
+test('a cell\'s edges share one box, so none can chip another at a crossing (#80)', () => {
+  // Regression (#80): when each edge was a separate overlay line sharing one
+  // z-index, a horizontal line spanning the full track chipped a gap out of a
+  // differently-coloured perpendicular vertical at every crossing (the reported
+  // broken right edge / intact left edge asymmetry), which a deterministic
+  // append order had to work around. With one box per cell the four edges are a
+  // single element and CSS mitres their shared corners — there are no separate
+  // line elements to mis-order, so the chipping cannot occur. Mixed weights still
+  // all live in the one box.
   const sandbox = createSandbox();
-  // C3 (interior) owns all four edges without the frame doubling at column A / row 1.
+  // C3 (interior): thick top/bottom horizontals, thin left/right verticals.
   sandbox.localCells = {
-    C3: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } },
-  };
-  const elA1 = makeEl();
-  sandbox.applyCellBorders(elA1, sandbox.localCells.C3.style, 'C3');
-
-  const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
-  assert.strictEqual(order.length, 4, 'C3 draws all four edges');
-  // Verticals (left/right) must come after horizontals (top/bottom) so they paint
-  // on top — both of them, symmetrically, not just the one appended last.
-  const lastTwo = order.slice(2);
-  assert.ok(lastTwo.every((e) => e === 'left' || e === 'right'),
-    `both verticals must paint last (on top), got order: ${order.join(',')}`);
-});
-
-test('a heavier border paints above a lighter one regardless of axis (#80)', () => {
-  // The primary key is weight: a thick horizontal must sit above a thin vertical
-  // (and vice versa), so a bold separator is never chipped by a hairline crossing.
-  const sandbox = createSandbox();
-  sandbox.localCells = {
-    // C3 (interior): thick top/bottom horizontals, thin left/right verticals.
     C3: { style: { borders: { top: thick(), bottom: thick(), left: thin(), right: thin() } } },
   };
-  const elA1 = makeEl();
-  sandbox.applyCellBorders(elA1, sandbox.localCells.C3.style, 'C3');
-  const order = lines(elA1).map((l) => edgeOf(l.style.cssText || ''));
-  assert.strictEqual(order.length, 4, 'C3 draws all four edges');
-  // The two thick horizontals must paint last (on top) despite being horizontal.
-  const lastTwo = order.slice(2);
-  assert.ok(lastTwo.every((e) => e === 'top' || e === 'bottom'),
-    `the heavier (thick) horizontals must paint on top, got order: ${order.join(',')}`);
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
+
+  assert.strictEqual(lines(el).length, 1, 'every edge is carried by a single box element');
+  const sides = boxSides(el);
+  assert.ok(/^3px /.test(sides.top) && /^3px /.test(sides.bottom), 'thick horizontals present in the box');
+  assert.ok(/^1px /.test(sides.left) && /^1px /.test(sides.right), 'thin verticals present in the box');
 });
 
 // --- applyBordersToSelection face mirroring (#82) ---------------------------
@@ -445,4 +412,44 @@ test('clear does not mirror onto neighbour faces (#82)', () => {
   assert.ok(!cells.C8.style.borders, 'C8 borders cleared');
   assert.strictEqual(colorOf(cells, 'B8', 'right'), '#1a56ff', 'B8 untouched by clear');
   assert.strictEqual(colorOf(cells, 'C7', 'bottom'), '#1a56ff', 'C7 untouched by clear');
+});
+
+// Column letter for a 0-based index (A, B, … Z, AA, …) — mirrors getColLetter.
+const colLetterFor = (c) => {
+  let s = '';
+  c += 1;
+  while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); }
+  return s;
+};
+
+test('rendering a fully-bordered sheet stays within the 1s budget (#88)', () => {
+  // The grid is not virtualised: every render walks all TOTAL_ROWS (1000) rows ×
+  // colCount columns and calls applyCellBorders on each cell — even blank ones,
+  // since a bordered neighbour's edge is drawn into the blank cell beside it. On a
+  // borders-heavy sheet (a fully gridded table) the old renderer emitted ~4 overlay
+  // <div>s per cell (~100k extra nodes for a 1000×26 grid); laying out and painting
+  // that many absolutely-positioned overlays froze opening / switching for seconds
+  // (#88). Collapsing a cell's four edges into ONE box overlay cut that to ~1 node
+  // per cell (~26k, plus a reinforcer per grid-frame cell). This guards the JS half
+  // of the pass against an accidental super-linear regression: the whole-grid border
+  // pass must finish well inside one second. (Browser layout/paint cost is not
+  // measurable here, but it scales with the overlay-node count this fix slashed.)
+  const ROWS = 1000, COLS = 26;
+  const sandbox = createSandbox();
+  const allFour = { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } };
+  const cells = {};
+  for (let r = 1; r <= ROWS; r++)
+    for (let c = 0; c < COLS; c++) cells[`${colLetterFor(c)}${r}`] = { style: allFour };
+  sandbox.localCells = cells;
+
+  const t0 = process.hrtime.bigint();
+  for (let r = 1; r <= ROWS; r++)
+    for (let c = 0; c < COLS; c++) {
+      const id = `${colLetterFor(c)}${r}`;
+      sandbox.applyCellBorders(makeEl(), cells[id].style, id);
+    }
+  const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
+
+  assert.ok(elapsedMs < 1000,
+    `border render pass over ${ROWS * COLS} cells must finish within 1s, took ${elapsedMs.toFixed(0)}ms`);
 });
