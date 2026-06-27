@@ -508,7 +508,8 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
       addEventListener() {},
       createElement(tagName) {
         return createMockElement(tagName);
-      }
+      },
+      createDocumentFragment() { return createMockElement('#fragment'); }
     },
     window: {
       location: { protocol: 'http:', host: 'localhost:3000' },

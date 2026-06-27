@@ -1653,12 +1653,104 @@ const applyCellSpill = (cellEl, cellId) => {
   cellEl.style.zIndex = '1';
 };
 
+// Cell mouse interactions are handled by ONE delegated listener per event type on
+// #grid-root rather than four listeners on every cell. A full render builds
+// TOTAL_ROWS × colCount cells; per-cell listeners meant ~100k addEventListener
+// calls (and as many retained closures) on every rebuild — a large, repeated
+// allocation/GC cost. Delegation resolves the target cell from the event's
+// bubble path, so the listener count is constant regardless of grid size.
+let gridCellDelegationBound = false;
+// Last cell the delegated mouseover acted on, so a drag re-entering the same cell
+// (e.g. moving across its child <a>/border overlays) doesn't re-run the handler.
+let delegatedHoverCellId = null;
+
+const cellElFromEvent = (e) => {
+  const t = e.target;
+  return (t && typeof t.closest === 'function') ? t.closest('[data-cell-id]') : null;
+};
+
+// mousedown: begin range selection, or pick a reference in formula-point mode.
+const onGridCellMouseDown = (e) => {
+  if (isHistoryMode) return; // Disable selection in history mode
+  if (e.button !== 0) return; // Only trigger selection on left mouse click
+  const cellEl = cellElFromEvent(e);
+  if (!cellEl) return;
+  const cellId = cellEl.getAttribute('data-cell-id');
+  // Formula point mode: while editing a formula that expects a reference,
+  // clicking a cell picks it into the formula instead of moving selection.
+  // preventDefault keeps the formula editor focused (no blur / commit).
+  if (formulaPickCapable()) {
+    e.preventDefault();
+    e.stopPropagation();
+    beginFormulaPick(cellId);
+    return;
+  }
+  isSelecting = true;
+  isColumnSelection = false; // a cell click is never a full-column selection
+  selectionStartCellId = cellId;
+  selectionEndCellId = cellId;
+  handleCellSelect(cellId, cellEl);
+};
+
+// mouseover (delegated stand-in for per-cell mouseenter, which doesn't bubble):
+// extend a range-selection or formula-pick drag as the cursor crosses cells.
+const onGridCellMouseOver = (e) => {
+  if (isHistoryMode) return; // Disable selection in history mode
+  if (!fpActive && !isSelecting) { delegatedHoverCellId = null; return; }
+  const cellEl = cellElFromEvent(e);
+  if (!cellEl) return;
+  const cellId = cellEl.getAttribute('data-cell-id');
+  if (cellId === delegatedHoverCellId) return; // same cell, nothing changed
+  delegatedHoverCellId = cellId;
+  if (fpActive) { extendFormulaPick(cellId); return; } // formula range drag
+  if (isSelecting) {
+    selectionEndCellId = cellId;
+    updateRangeSelectionUI();
+  }
+};
+
+// click: a linked cell shows a chip (favicon · URL · copy/edit/remove) instead of
+// navigating immediately. preventDefault cancels the anchor's default navigation;
+// selection still happens via the mousedown handler.
+const onGridCellClick = (e) => {
+  if (isHistoryMode) return;
+  if (formulaPickCapable() || fpActive) return; // don't interrupt reference picking
+  const cellEl = cellElFromEvent(e);
+  if (!cellEl) return;
+  const cellId = cellEl.getAttribute('data-cell-id');
+  const cd = localCells[cellId];
+  if (cd && cd.style && cd.style.link) {
+    e.preventDefault();
+    showLinkPopup(cellId, cellEl);
+  }
+};
+
+// dblclick: enter inline edit on the cell.
+const onGridCellDblClick = (e) => {
+  if (isHistoryMode) return; // Disable editing in history mode
+  const cellEl = cellElFromEvent(e);
+  if (!cellEl) return;
+  handleCellInlineEdit(cellEl.getAttribute('data-cell-id'), cellEl);
+};
+
+// Bind the delegated cell listeners once. #grid-root persists across renders
+// (renderSpreadsheetGrid only replaces its children), so these survive rebuilds.
+const ensureGridCellDelegation = (gridRoot) => {
+  if (gridCellDelegationBound) return;
+  gridRoot.addEventListener('mousedown', onGridCellMouseDown);
+  gridRoot.addEventListener('mouseover', onGridCellMouseOver);
+  gridRoot.addEventListener('click', onGridCellClick);
+  gridRoot.addEventListener('dblclick', onGridCellDblClick);
+  gridCellDelegationBound = true;
+};
+
 /**
  * Dynamically builds and renders the interactive spreadsheet grid inside the DOM.
  */
 const renderSpreadsheetGrid = () => {
   const gridRoot = document.getElementById('grid-root');
   if (!gridRoot) return;
+  ensureGridCellDelegation(gridRoot);
 
   // Column count for this render — grows past A-Z as data extends rightward.
   const colCount = getColCount();
@@ -1681,9 +1773,21 @@ const renderSpreadsheetGrid = () => {
     if (corner) { corner.style.gridColumn = '1'; corner.style.gridRow = '1'; }
   }
 
+  // Column letters for this render, computed once. getColLetter walks a base-26
+  // loop building a string; resolving it here avoids recomputing the same value
+  // TOTAL_ROWS times per column inside the cell loop below.
+  const colLetters = new Array(colCount);
+  for (let c = 0; c < colCount; c++) colLetters[c] = getColLetter(c);
+
+  // Build the whole grid (headers, rows, cells, buffer) into a detached fragment
+  // and attach it in one append at the end, so the browser lays out / reflows
+  // once for the entire grid instead of after each of the ~tens-of-thousands of
+  // element insertions a live-tree append would trigger.
+  const frag = document.createDocumentFragment();
+
   // Render Column Headers (A-Z and beyond as the grid grows)
   for (let c = 0; c < colCount; c++) {
-    const colLetter = getColLetter(c);
+    const colLetter = colLetters[c];
     const colHeader = document.createElement('div');
     colHeader.className = 'grid-header sticky top-0 z-20 cursor-pointer';
     colHeader.innerText = colLetter;
@@ -1744,7 +1848,7 @@ const renderSpreadsheetGrid = () => {
       colHeader.appendChild(resizeHandle);
     }
 
-    gridRoot.appendChild(colHeader);
+    frag.appendChild(colHeader);
   }
 
   const sheetName = activeSheetName || 'Sheet1';
@@ -1788,7 +1892,7 @@ const renderSpreadsheetGrid = () => {
         <div class="unedited-row-gutter"></div>
         <div class="unedited-row-label">有 ${count} 列未修改</div>
       `;
-      gridRoot.appendChild(uneditedBar);
+      frag.appendChild(uneditedBar);
 
       r = endRow; // Skip to the end of collapsed sequence
       continue;
@@ -1817,11 +1921,11 @@ const renderSpreadsheetGrid = () => {
       rowHeader.appendChild(resizeHandle);
     }
 
-    gridRoot.appendChild(rowHeader);
+    frag.appendChild(rowHeader);
 
     // Cells for row (A-Z and any grown columns)
     for (let c = 0; c < colCount; c++) {
-      const colLetter = getColLetter(c);
+      const colLetter = colLetters[c];
       const cellId = `${colLetter}${r}`;
       
       const cellData = isHistoryMode
@@ -1897,53 +2001,8 @@ const renderSpreadsheetGrid = () => {
         cellEl.classList.add('grid-cell-history-highlight');
       }
 
-      // Hook up cell mouse interactions for drag/range selection
-      cellEl.addEventListener('mousedown', (e) => {
-        if (isHistoryMode) return; // Disable selection in history mode
-        if (e.button !== 0) return; // Only trigger selection on left mouse click
-        // Formula point mode: while editing a formula that expects a reference,
-        // clicking a cell picks it into the formula instead of moving selection.
-        // preventDefault keeps the formula editor focused (no blur / commit).
-        if (formulaPickCapable()) {
-          e.preventDefault();
-          e.stopPropagation();
-          beginFormulaPick(cellId);
-          return;
-        }
-        isSelecting = true;
-        isColumnSelection = false; // a cell click is never a full-column selection
-        selectionStartCellId = cellId;
-        selectionEndCellId = cellId;
-        handleCellSelect(cellId, cellEl);
-      });
-
-      cellEl.addEventListener('mouseenter', () => {
-        if (isHistoryMode) return; // Disable selection in history mode
-        if (fpActive) { extendFormulaPick(cellId); return; } // formula range drag
-        if (isSelecting) {
-          selectionEndCellId = cellId;
-          updateRangeSelectionUI();
-        }
-      });
-
-      // Clicking a linked cell shows a chip (favicon · URL · copy/edit/remove)
-      // instead of navigating immediately. preventDefault cancels the anchor's
-      // default navigation; selection still happens via the mousedown handler.
-      cellEl.addEventListener('click', (e) => {
-        if (isHistoryMode) return;
-        if (formulaPickCapable() || fpActive) return; // don't interrupt reference picking
-        const cd = localCells[cellId];
-        if (cd && cd.style && cd.style.link) {
-          e.preventDefault();
-          showLinkPopup(cellId, cellEl);
-        }
-      });
-
-      // Hook up cell double-click interactions for inline edits
-      cellEl.addEventListener('dblclick', (e) => {
-        if (isHistoryMode) return; // Disable editing in history mode
-        handleCellInlineEdit(cellId, cellEl);
-      });
+      // Cell mouse interactions (mousedown/mouseover/click/dblclick) are handled
+      // by delegated listeners on #grid-root — see ensureGridCellDelegation above.
 
       // Merge placement: anchors span their block; covered cells are hidden so
       // the anchor shows through. Everything else gets pinned to its own track so
@@ -1961,7 +2020,7 @@ const renderSpreadsheetGrid = () => {
         }
       }
 
-      gridRoot.appendChild(cellEl);
+      frag.appendChild(cellEl);
       cellElById.set(cellId, cellEl);
     }
   }
@@ -1974,7 +2033,10 @@ const renderSpreadsheetGrid = () => {
   const bottomBuffer = document.createElement('div');
   bottomBuffer.className = 'grid-bottom-buffer';
   if (hasMerges) bottomBuffer.style.gridRow = `${TOTAL_ROWS + 2}`;
-  gridRoot.appendChild(bottomBuffer);
+  frag.appendChild(bottomBuffer);
+
+  // Attach the whole grid in one append (single layout pass — see frag above).
+  gridRoot.appendChild(frag);
 
   // Apply per-sheet column widths / row heights to the freshly built grid.
   applyGridTemplate(gridRoot);

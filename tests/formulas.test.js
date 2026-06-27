@@ -996,6 +996,7 @@ test('Sheets - Switching active sheet dynamically displays correct values and is
           classList: { add() {}, remove() {}, contains() { return false; } }
         };
       },
+      createDocumentFragment() { return this.createElement(); },
       createRange() { return { selectNodeContents() {}, collapse() {} }; },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
     },
@@ -1080,7 +1081,8 @@ test('Sheets - Reordering sheet order updates active indexes', (t) => {
           removeAttribute() {},
           classList: { add() {}, remove() {}, contains() { return false; } }
         };
-      }
+      },
+      createDocumentFragment() { return this.createElement(); }
     },
     window: {
       location: { protocol: 'http:', host: 'localhost:3000' },
@@ -1147,6 +1149,7 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
       querySelector: (sel) => (/\[data-cell-id=|\.w-12\.text-center/.test(sel) ? makeEl() : null),
       addEventListener() {},
       createElement() { return makeEl(); },
+      createDocumentFragment() { return makeEl(); },
       createRange() { return { selectNodeContents() {}, collapse() {} }; },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
     },
