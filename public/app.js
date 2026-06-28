@@ -1549,17 +1549,18 @@ const isRowEdited = (r, sheetName) => {
 const COLUMN_WIDTH = 100;
 
 /**
- * Recomputing a row's overflow spill is expensive: updateCellOverflow reads
- * scrollWidth/clientWidth, which forces a synchronous layout (reflow). Multi-cell
- * formatting (fill colour, borders, …) updates many cells in the same row, and
- * doing a whole-row recompute per cell turns that into O(cells × cols) forced
- * reflows — the source of the lag tracked in issue #73.
+ * Recomputing a row's overflow spill is expensive: it reads scrollWidth/clientWidth,
+ * which forces a synchronous layout (reflow). Multi-cell formatting (fill colour,
+ * borders, …) updates many cells in the same row, and doing a whole-row recompute
+ * per cell turns that into O(cells × cols) forced reflows — the source of the lag
+ * tracked in issue #73.
  *
  * Instead, callers schedule the affected row here; rows are de-duplicated and the
- * recompute runs once per row on the next microtask. A microtask still flushes
- * before the browser paints, so the result is visually synchronous, and computing
- * overflow only after the whole batch has mutated the DOM is also more correct
- * (neighbours are all in their final state).
+ * recompute runs once on the next microtask (see flushPendingOverflow, which itself
+ * batches its reads and writes so the whole flush costs one reflow, not one per
+ * cell — #92). A microtask still flushes before the browser paints, so the result
+ * is visually synchronous, and computing overflow only after the whole batch has
+ * mutated the DOM is also more correct (neighbours are all in their final state).
  */
 // id → cell element for the cells built by the current renderSpreadsheetGrid.
 // Targeted updates (updateGridDOMCell, the overflow flush, the border ring) look
@@ -1581,12 +1582,32 @@ const flushPendingOverflow = () => {
   pendingOverflowRows.clear();
   if (isHistoryMode) return;
   const cols = getColCount();
+  // Re-evaluate spill for every cell across the pending rows (a cleared/edited cell
+  // can change whether its row-mates spill, so the whole row is reconsidered).
+  const candidates = [];
   rows.forEach(row => {
     for (let c = 0; c < cols; c++) {
       const id = `${getColLetter(c)}${row}`;
-      updateCellOverflow(getCellEl(id), id);
+      const el = getCellEl(id);
+      if (el && typeof el.scrollWidth === 'number') candidates.push([id, el]);
     }
   });
+  // Split into read/write phases to avoid layout thrashing. The old per-cell loop
+  // interleaved the clipPath/zIndex resets (writes) with the scrollWidth read, so
+  // each cell forced a fresh full reflow of the non-virtualised 1000-row grid —
+  // ~3ms apiece, ~400ms for a multi-row "clear formatting" (#92). This is the same
+  // thrash #88 fixed on the render path; the interactive flush had been left on the
+  // slow path. Phase 1 (writes): clear any prior spill so stale clips don't linger.
+  candidates.forEach(([, el]) => { el.style.clipPath = ''; el.style.zIndex = ''; });
+  // Phase 2 (reads): a SINGLE batched reflow resolves layout for the whole set.
+  // wrap/clip cells never spill, so they're filtered out here (a non-geometry read).
+  const overflowing = candidates.filter(([id, el]) => {
+    const wrapMode = localCells[id] && localCells[id].style && localCells[id].style.textWrap;
+    if (wrapMode === 'wrap' || wrapMode === 'clip') return false;
+    return el.scrollWidth > el.clientWidth + 1;
+  });
+  // Phase 3 (writes): pure writes + non-geometry reads, so no further reflow.
+  overflowing.forEach(([id, el]) => applyCellSpill(el, id));
 };
 const scheduleRowOverflow = (row) => {
   pendingOverflowRows.add(row);
@@ -1594,31 +1615,6 @@ const scheduleRowOverflow = (row) => {
     overflowFlushScheduled = true;
     queueMicrotask(flushPendingOverflow);
   }
-};
-
-/**
- * Lets a cell whose text is wider than the column spill across consecutive empty
- * neighbour cells (like Google Sheets / Excel) instead of being clipped by them.
- * Text is still clipped at the first neighbour that has content. Spill direction
- * follows text alignment: left/default spills right, right spills left, centre both.
- * @param {HTMLElement} cellEl - The cell DOM element.
- * @param {string} cellId - The cell ID (e.g. "A1").
- */
-const updateCellOverflow = (cellEl, cellId) => {
-  if (!cellEl || typeof cellEl.scrollWidth !== 'number') return;
-
-  // Reset any previous spill styling before re-evaluating.
-  cellEl.style.clipPath = '';
-  cellEl.style.zIndex = '';
-
-  // Cells set to wrap or clip never spill into neighbours.
-  const wrapMode = localCells[cellId] && localCells[cellId].style && localCells[cellId].style.textWrap;
-  if (wrapMode === 'wrap' || wrapMode === 'clip') return;
-
-  // Nothing to do when the content fits within the cell.
-  if (cellEl.scrollWidth <= cellEl.clientWidth + 1) return;
-
-  applyCellSpill(cellEl, cellId);
 };
 
 /**
@@ -2326,9 +2322,14 @@ const updateGridDOMCell = (cellId, value, style) => {
   const isSelected = hasClass ? cellEl.classList.contains('grid-cell-selected') : false;
   const isActive = hasClass ? cellEl.classList.contains('grid-cell-active') : false;
 
-  // Preserve collaborator cursors currently positioned on this cell
-  const cursorBorders = cellEl.querySelectorAll('.active-cell-border');
-  const presenceTags = cellEl.querySelectorAll('.presence-tag');
+  // Preserve collaborator cursors/presence overlays on this cell across the
+  // innerText/innerHTML rewrite below (which would otherwise drop them). Skip the
+  // two lookups entirely when the cell has no element children at all — the common
+  // case — so a multi-cell update (e.g. clearing formatting over a large selection,
+  // #92) doesn't run two querySelectorAll per cell for overlays that aren't there.
+  const hasChildEls = !!cellEl.firstElementChild;
+  const cursorBorders = hasChildEls ? cellEl.querySelectorAll('.active-cell-border') : EMPTY_ELS;
+  const presenceTags = hasChildEls ? cellEl.querySelectorAll('.presence-tag') : EMPTY_ELS;
 
   // Display evaluated cell value (render as anchor element if link exists, otherwise plain text)
   const val = formatCellDisplay(value || '', style);
@@ -3381,14 +3382,22 @@ const clearFormatting = (cellId) => {
   // Render only after every cell is mutated so neighbour-aware edge de-duping
   // reads final state.
   renderIds.forEach(id => {
-    const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
-    updateGridDOMCell(id, getCellValue(id), st);
+    const cell = localCells[id];
+    const st = (cell && cell.style) || EMPTY_STYLE;
+    // Use the cached value, not getCellValue(): clearing formatting can't change
+    // any cell's value, so re-evaluating each cleared formula cell here is wasted.
+    updateGridDOMCell(id, (cell && cell.value) || '', st);
   });
 
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
   }
-  recalculateSheet();
+  // No recalculateSheet(): clearing formatting only strips display styles
+  // (number format, decimals, font, colours, borders, alignment, wrap) — it never
+  // changes a cell's value or formula, so walking every cell and re-evaluating
+  // every formula here was pure waste (a full-sheet recalc on each clear, the same
+  // anti-pattern removed from the border path in #91). Each cleared cell's DOM is
+  // already refreshed above by updateGridDOMCell.
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3883,6 +3892,9 @@ const GRIDLINE_W = 1;
 // Shared read-only stand-in for a blank cell's (absent) style, so applyCellBorders
 // can still be asked to paint a bordered neighbour's edge without allocating.
 const EMPTY_STYLE = Object.freeze({});
+// Shared empty list for the "no overlays to preserve" fast path in updateGridDOMCell
+// (its .forEach is a no-op), so that path allocates nothing per cell.
+const EMPTY_ELS = Object.freeze([]);
 
 /**
  * Returns the border spec for one side of a cell's style, normalising the
@@ -4024,8 +4036,13 @@ const addBorderBox = (cellEl, top, right, bottom, left) => {
 const applyCellBorders = (cellEl, style, cellId) => {
   if (!cellEl) return;
   // Clear any overlay lines / suppressed gridlines from a previous render so
-  // repeated calls on the same element stay idempotent.
-  cellEl.querySelectorAll(':scope > .grid-border-line').forEach((e) => e.remove());
+  // repeated calls on the same element stay idempotent. The querySelectorAll is
+  // worth skipping when the cell has no element children at all (nothing to
+  // remove) — it runs once per cell on every full render and every targeted update
+  // (e.g. clearing formatting over a large selection, #92).
+  if (cellEl.firstElementChild) {
+    cellEl.querySelectorAll(':scope > .grid-border-line').forEach((e) => e.remove());
+  }
   cellEl.style.borderRightColor = '';
   cellEl.style.borderBottomColor = '';
   if (!style) return;
