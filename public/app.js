@@ -1561,6 +1561,18 @@ const COLUMN_WIDTH = 100;
  * overflow only after the whole batch has mutated the DOM is also more correct
  * (neighbours are all in their final state).
  */
+// id → cell element for the cells built by the current renderSpreadsheetGrid.
+// Targeted updates (updateGridDOMCell, the overflow flush, the border ring) look
+// a cell up here in O(1) instead of running a full-document
+// `document.querySelector('[data-cell-id]')`, which made a multi-cell border /
+// format apply quadratic — O(updated-cells × DOM-nodes), the same per-cell scan
+// that froze borders-heavy *loads* before #88, still left on the interactive
+// path. Rebuilt wholesale by each full render; targeted updates mutate cells in
+// place, so the cached element references stay live until the next full render.
+let gridCellIndex = new Map();
+const getCellEl = (cellId) =>
+  gridCellIndex.get(cellId) || document.querySelector(`[data-cell-id="${cellId}"]`);
+
 const pendingOverflowRows = new Set();
 let overflowFlushScheduled = false;
 const flushPendingOverflow = () => {
@@ -1572,7 +1584,7 @@ const flushPendingOverflow = () => {
   rows.forEach(row => {
     for (let c = 0; c < cols; c++) {
       const id = `${getColLetter(c)}${row}`;
-      updateCellOverflow(document.querySelector(`[data-cell-id="${id}"]`), id);
+      updateCellOverflow(getCellEl(id), id);
     }
   });
 };
@@ -1867,12 +1879,15 @@ const renderSpreadsheetGrid = () => {
   const highlightChangesChecked = document.getElementById('highlightChanges')?.checked ?? false;
 
   // id → element for every cell built this render, so the post-render passes
-  // (text-overflow spill, etc.) can look a cell up in O(1) instead of running a
-  // full-document `document.querySelector('[data-cell-id]')` per cell. With a
-  // bordered cell for every entry in localCells, that per-cell DOM scan turned
-  // the overflow pass quadratic and was the real cause of multi-second loads on
-  // borders-heavy sheets (#88).
+  // (text-overflow spill, etc.) and later targeted updates can look a cell up in
+  // O(1) instead of running a full-document `document.querySelector('[data-cell-id]')`
+  // per cell. With a bordered cell for every entry in localCells, that per-cell
+  // DOM scan turned the overflow pass quadratic and was the real cause of
+  // multi-second loads on borders-heavy sheets (#88). This render's map replaces
+  // the persistent gridCellIndex so updateGridDOMCell / the overflow flush share
+  // the same O(1) lookup; a fresh Map drops references to the discarded cells.
   const cellElById = new Map();
+  gridCellIndex = cellElById;
 
   // Render Grid Rows and Cells
   for (let r = 1; r <= TOTAL_ROWS; r++) {
@@ -2303,7 +2318,7 @@ const setFreeze = (rows, cols) => {
  * @param {Object} [style] - Custom styles object.
  */
 const updateGridDOMCell = (cellId, value, style) => {
-  const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
+  const cellEl = getCellEl(cellId);
   if (!cellEl) return;
 
   // Check and preserve whether the cell is currently selected to retain the highlight class
@@ -4239,13 +4254,25 @@ const applyBordersToSelection = (mode) => {
     if (minRow - 1 >= 1) renderIds.add(`${getColLetter(c)}${minRow - 1}`);
     if (maxRow + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${maxRow + 1}`);
   }
+  // A border change touches only the overlay edges — not the cell's text, other
+  // styles, or its text-overflow spill. So refresh just the border overlays on
+  // each affected cell (applyCellBorders) instead of rebuilding the whole cell
+  // via updateGridDOMCell, which rewrites innerText, re-evaluates the value,
+  // resets ~a dozen inline styles, re-appends cursor/presence nodes AND schedules
+  // a full row-overflow recompute (a forced reflow of the 1000-row grid) per
+  // touched row. applyCellBorders is self-contained: it clears its own prior
+  // overlays and gridline suppression first, so calling it directly is idempotent.
   renderIds.forEach((id) => {
+    const el = getCellEl(id);
+    if (!el) return;
     const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
-    updateGridDOMCell(id, getCellValue(id), st);
+    applyCellBorders(el, st, id);
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a border never changes any cell's value, so walking
+  // every cell and re-evaluating every formula here was pure waste — a full-sheet
+  // recalc on each border click on a formula-heavy sheet.
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
