@@ -582,8 +582,9 @@ function handleSocketMessage(event) {
       localSheets[sheet][cellId] = { formula, value, style: style || {} };
       
       if (sheet === activeSheetName) {
-        // Recalculate sheet to propagate dependencies
-        recalculateSheet();
+        // Propagate dependencies once per burst, not once per message — a remote
+        // bulk edit echoes one cell-update per cell (see scheduleRecalc).
+        scheduleRecalc();
         updateGridDOMCell(cellId, getCellValue(cellId), style);
         // Borders are drawn neighbour-aware: every cell draws its own copy of each
         // shared edge, resolved with pick() against the facing neighbour. A remote
@@ -1488,6 +1489,24 @@ const recalculateSheet = () => {
         updateGridDOMCell(coord, newVal, cell.style);
       }
     }
+  });
+};
+
+/**
+ * Coalesces dependency-propagation recalcs. A remote bulk edit arrives as one
+ * `cell-update` message per cell; running a full-sheet recalc on every message is
+ * O(messages × formula cells). Each message still applies its own state + DOM cell
+ * update immediately (cheap, per-cell), but the sheet-wide recalc that propagates
+ * dependencies is debounced so a burst of incoming updates triggers a SINGLE recalc
+ * on the next microtask — mirroring scheduleRowOverflow / flushPendingOverflow.
+ */
+let recalcScheduled = false;
+const scheduleRecalc = () => {
+  if (recalcScheduled) return;
+  recalcScheduled = true;
+  queueMicrotask(() => {
+    recalcScheduled = false;
+    recalculateSheet();
   });
 };
 
