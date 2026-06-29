@@ -145,23 +145,31 @@ test('workbook repository - state read/write, existence, timestamps, delete', as
   assert.strictEqual(await workbook.getWorkbookUpdatedAt('missing'), null);
 });
 
-test('versions repository - insert, list newest-first, fetch state', async () => {
+test('versions repository - insert, list newest-first, fetch state (per file)', async () => {
   const { versions } = repo;
 
-  assert.deepStrictEqual(await versions.listVersions(), [], 'no versions initially');
+  assert.deepStrictEqual(await versions.listVersions('default'), [], 'no versions initially');
 
-  await versions.insertVersion(JSON.stringify({ sheets: { Sheet1: { A1: { value: 'v1' } } } }), 'alice');
-  await versions.insertVersion(JSON.stringify({ sheets: { Sheet1: { A1: { value: 'v2' } } } }), 'bob');
+  await versions.insertVersion(JSON.stringify({ sheets: { Sheet1: { A1: { value: 'v1' } } } }), 'alice', 'default');
+  await versions.insertVersion(JSON.stringify({ sheets: { Sheet1: { A1: { value: 'v2' } } } }), 'bob', 'default');
+  // A version for a different file must not leak into 'default'.
+  await versions.insertVersion(JSON.stringify({ sheets: { Sheet1: { A1: { value: 'other' } } } }), 'carol', 'file-xyz');
 
-  const list = await versions.listVersions();
-  assert.strictEqual(list.length, 2);
+  const list = await versions.listVersions('default');
+  assert.strictEqual(list.length, 2, 'only this file\'s versions are listed');
   assert.strictEqual(list[0].id, 2, 'newest first (id DESC)');
   assert.strictEqual(list[0].created_by, 'bob');
   assert.strictEqual(list[0].state, undefined, 'list metadata omits the state payload');
 
-  const state = await versions.getVersionState(1);
+  const otherList = await versions.listVersions('file-xyz');
+  assert.strictEqual(otherList.length, 1, 'other file has its own version history');
+  assert.strictEqual(otherList[0].created_by, 'carol');
+
+  const state = await versions.getVersionState(1, 'default');
   assert.strictEqual(state.sheets.Sheet1.A1.value, 'v1');
-  assert.strictEqual(await versions.getVersionState(99999), undefined, 'missing version => undefined');
+  // A version id is only fetchable through its own file.
+  assert.strictEqual(await versions.getVersionState(3, 'default'), undefined, 'cross-file id => undefined');
+  assert.strictEqual(await versions.getVersionState(99999, 'default'), undefined, 'missing version => undefined');
 });
 
 test('shares repository - upsert, role changes, listings, and deletes', async () => {

@@ -24,7 +24,7 @@ function makeRequest(url, method, body = null, headers = {}) {
     const options = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port,
-      path: parsedUrl.pathname,
+      path: parsedUrl.pathname + parsedUrl.search,
       method: method,
       headers: {
         'Content-Type': 'application/json',
@@ -336,6 +336,90 @@ test('Backend Autosave Engine - periodic version snapshots on cell edit', async 
     // Kill the spawned test server process.
     child.kill();
     // Wait a short moment for the process to exit completely.
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await db.cleanup();
+  }
+});
+
+test('Backend Autosave Engine - snapshots non-default workbooks, scoped per file', async (t) => {
+  // --- Arrange ---
+  // Regression test for version history being hard-wired to the 'default' workbook:
+  // editing a real drive file must now produce a snapshot listed under that file
+  // (and only that file).
+  const PORT = '31276';
+  const db = await createTestDb('autosave-perfile');
+
+  // A 24-hex file id (the shape isValidFileId accepts), owned by the test-login
+  // user ('Test User' => identity 'test user') so the connection may edit it.
+  const fileId = 'a1b2c3d4e5f6a7b8c9d0e1f2';
+  await db.seedFile(fileId, 'My Spreadsheet', 'test user');
+  await db.seedWorkbookState(fileId, {
+    sheets: { Sheet1: {} },
+    sheetOrder: ['Sheet1'],
+    sheetColors: {},
+    hiddenSheets: []
+  });
+
+  const child = spawn('node', ['server.js'], {
+    env: {
+      ...process.env,
+      PORT,
+      NODE_ENV: 'test',
+      DATABASE_URL: db.url,
+      AUTOSAVE_CHECK_INTERVAL: '50',
+      AUTOSAVE_INACTIVITY_LIMIT: '50',
+      AUTOSAVE_ACTIVE_LIMIT: '300000'
+    }
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 1500));
+
+  let cookie = '';
+  let wsClient = null;
+
+  try {
+    const loginRes = await makeRequest(`http://localhost:${PORT}/auth/test-login`, 'POST', { username: 'Test User' });
+    assert.strictEqual(loginRes.statusCode, 200, 'Login should succeed');
+    const setCookie = loginRes.headers['set-cookie'];
+    cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+
+    // Connect scoped to the drive file via ?file=<id>.
+    wsClient = new WebSocket(`ws://localhost:${PORT}/?file=${fileId}`, {
+      headers: { Cookie: cookie }
+    });
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // --- Act ---
+    wsClient.send(JSON.stringify({
+      type: 'cell-edit',
+      payload: { cellId: 'A1', formula: '', value: 'File-scoped edit', style: {}, sheetName: 'Sheet1' }
+    }));
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // --- Assert ---
+    // The edit produced a snapshot listed under this file.
+    const listRes = await makeRequest(`http://localhost:${PORT}/api/versions?file=${fileId}`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(listRes.statusCode, 200, 'GET /api/versions?file should succeed');
+    assert.ok(Array.isArray(listRes.data), 'Versions should be returned as an array');
+    assert.strictEqual(listRes.data.length, 1, 'Editing the file should create exactly one snapshot');
+    assert.strictEqual(listRes.data[0].created_by, 'Test User', 'Snapshot creator should match the editor');
+
+    // The snapshot holds the edited state.
+    const verId = listRes.data[0].id;
+    const verDetailRes = await makeRequest(`http://localhost:${PORT}/api/versions/${verId}?file=${fileId}`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(verDetailRes.statusCode, 200, 'GET /api/versions/:id?file should succeed');
+    assert.strictEqual(verDetailRes.data.sheets.Sheet1.A1.value, 'File-scoped edit', 'Snapshot should hold the edited state');
+
+    // Isolation: the snapshot must NOT leak into the legacy 'default' workbook.
+    const defaultListRes = await makeRequest(`http://localhost:${PORT}/api/versions`, 'GET', null, { Cookie: cookie });
+    assert.strictEqual(defaultListRes.statusCode, 200, 'GET /api/versions (default) should succeed');
+    assert.strictEqual(defaultListRes.data.length, 0, 'Default workbook should have no versions from the file edit');
+
+  } finally {
+    if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+      wsClient.close();
+    }
+    child.kill();
     await new Promise(resolve => setTimeout(resolve, 500));
     await db.cleanup();
   }
