@@ -11,6 +11,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 // One throwaway database for the whole file: these tests only exercise auth routing
 // and don't assert on cross-test DB state, so spawned servers share it via the
@@ -33,7 +34,7 @@ test('Accessing / redirects to /login if unauthenticated', async (t) => {
   });
 
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // --- Act ---
@@ -66,7 +67,7 @@ test('Accessing /index.html redirects to /', async (t) => {
   });
 
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // --- Act ---
@@ -102,7 +103,7 @@ test('Google Login - redirects to Google OIDC authorization URL if credentials e
   });
 
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // --- Act ---
@@ -144,7 +145,7 @@ test('Google Login - serves mock Google Sign-In page if unconfigured', async (t)
   const child = spawn('node', ['server.js'], { env: cleanEnv });
 
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // --- Act ---
@@ -178,7 +179,7 @@ test('Access to /api/me returns 401 Unauthorized when unauthenticated', async (t
   const child = spawn('node', ['server.js'], { env: { ...process.env, PORT } });
   
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // --- Act ---
@@ -209,7 +210,7 @@ test('Access to /api/me returns authenticated user details', async (t) => {
   const child = spawn('node', ['server.js'], { env: { ...process.env, PORT, NODE_ENV: 'test' } });
   
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // Authenticate and get cookie by calling the test login endpoint.
@@ -269,7 +270,7 @@ test('GET /logout terminates session and clears cookies', async (t) => {
   const child = spawn('node', ['server.js'], { env: { ...process.env, PORT, NODE_ENV: 'test' } });
   
   // Give the server 1 second to start listening on the port.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await waitForServer(PORT);
 
   try {
     // Authenticate and get cookie by calling the test login endpoint.
