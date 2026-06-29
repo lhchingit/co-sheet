@@ -43,6 +43,29 @@
   });
 
   /**
+   * Localized string lookup with a safe fallback for non-browser/test sandboxes
+   * where the i18n module may not be present.
+   * @param {string} key - Locale dictionary key.
+   * @param {string} fallback - Value to use when i18n is unavailable.
+   * @returns {string}
+   */
+  const translate = (key, fallback) => {
+    const i18n = root.CoSheet && root.CoSheet.i18n;
+    return (i18n && typeof i18n.t === 'function') ? i18n.t(key) : fallback;
+  };
+
+  /**
+   * Sets the preview bar's title text (the selected version's timestamp, or an
+   * empty/empty-state string when nothing is selected). No-op if the element is
+   * absent.
+   * @param {string} text - The text to display.
+   */
+  const setHistoryTitle = (text) => {
+    const el = document.getElementById('history-title-date');
+    if (el) el.innerText = text;
+  };
+
+  /**
    * Localized date formatter for version grouping.
    * @param {string|Date} dateStr - Timestamp.
    * @returns {string} The group header.
@@ -193,10 +216,7 @@
 
       const selectedVersionInfo = versionsList[index];
       if (selectedVersionInfo) {
-        const titleDateEl = document.getElementById('history-title-date');
-        if (titleDateEl) {
-          titleDateEl.innerText = formatVersionTime(selectedVersionInfo.created_at);
-        }
+        setHistoryTitle(formatVersionTime(selectedVersionInfo.created_at));
       }
 
       const restoreBtn = document.getElementById('history-restore-btn');
@@ -268,6 +288,10 @@
         mainContent.classList.add('mr-[320px]');
       }
 
+      // Clear any stale title from a previous session before the list loads, so
+      // a hidden version is never misrepresented while the fetch is in flight.
+      setHistoryTitle('');
+
       try {
         const res = await fetch('/api/versions');
         if (res.status === 401) {
@@ -281,11 +305,13 @@
         } else {
           selectedVersionState = null;
           previousVersionState = null;
+          setHistoryTitle(translate('history.noVersions', '尚無版本紀錄'));
           pushState();
           renderGrid();
         }
       } catch (err) {
         console.error('Failed to fetch version history:', err);
+        setHistoryTitle(translate('history.noVersions', '尚無版本紀錄'));
       }
     } else {
       if (normalHeader) normalHeader.classList.remove('hidden');
