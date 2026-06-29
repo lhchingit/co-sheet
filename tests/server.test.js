@@ -11,6 +11,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 // One throwaway database for the whole file (these tests only check page serving).
 let db;
@@ -31,7 +32,7 @@ test('HTTP Server returns 200 OK for login page', async (t) => {
   });
 
   // Wait 1 second (1000ms) for the Express server to boot up and start listening on port 31234.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await waitForServer(31234);
 
   try {
     // --- Act ---
@@ -58,7 +59,7 @@ test('HTTP Server serves app.js statically without authentication', async (t) =>
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT }
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await waitForServer(31234);
 
   try {
     // --- Act ---
@@ -82,7 +83,7 @@ test('HTTP Server serves the spreadsheet editor at /sheet containing grid-root a
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT, NODE_ENV: 'test' }
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await waitForServer(31234);
 
   try {
     // 1. Login to get session cookie
