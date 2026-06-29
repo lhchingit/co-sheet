@@ -772,6 +772,23 @@ function connectSocket() {
 
 connectSocket();
 
+// Elements currently carrying a selection-highlight class. updateRangeSelectionUI
+// is the sole adder of these classes (updateGridDOMCell only re-applies them to an
+// already-tracked element it mutates in place), so this list is authoritative: we
+// clear by walking it instead of running four whole-document querySelectorAll
+// sweeps per drag tick. Turns the clear from O(grid) into O(previous selection)
+// (see #96).
+let highlightedEls = [];
+const clearSelectionHighlights = () => {
+  for (let i = 0; i < highlightedEls.length; i++) {
+    const el = highlightedEls[i];
+    if (el && el.classList) {
+      el.classList.remove('grid-cell-selected', 'grid-cell-active', 'active-header', 'header-selected');
+    }
+  }
+  highlightedEls.length = 0;
+};
+
 /**
  * Resets range selection variables and clears selection UI components.
  */
@@ -781,10 +798,7 @@ const clearRangeSelection = () => {
   isColumnSelection = false;
   const overlay = document.getElementById('selection-range-overlay');
   if (overlay) overlay.remove();
-  document.querySelectorAll('.grid-cell-selected').forEach(el => el.classList.remove('grid-cell-selected'));
-  document.querySelectorAll('.grid-cell-active').forEach(el => el.classList.remove('grid-cell-active'));
-  document.querySelectorAll('.grid-header.active-header').forEach(el => el.classList.remove('active-header'));
-  document.querySelectorAll('.grid-header.header-selected').forEach(el => el.classList.remove('header-selected'));
+  clearSelectionHighlights();
 };
 
 // ─── Merged cells ────────────────────────────────────────────────────────────
@@ -926,26 +940,32 @@ const updateRangeSelectionUI = () => {
     }
   }
 
-  // Clear previous highlighted cells and active headers
-  document.querySelectorAll('.grid-cell-selected').forEach(el => el.classList.remove('grid-cell-selected'));
-  document.querySelectorAll('.grid-cell-active').forEach(el => el.classList.remove('grid-cell-active'));
-  document.querySelectorAll('.grid-header.active-header').forEach(el => el.classList.remove('active-header'));
-  document.querySelectorAll('.grid-header.header-selected').forEach(el => el.classList.remove('header-selected'));
+  // Clear previous highlighted cells and active headers — walk the tracked set
+  // rather than scanning the whole grid four times (see clearSelectionHighlights).
+  clearSelectionHighlights();
 
-  // Highlight cells and headers in range
+  // Highlight cells and headers in range. Lookups go through the O(1) render
+  // indexes (getColHeaderEl / getRowHeaderEl / getCellEl), and each highlighted
+  // element is recorded so the next clear is O(this selection), not O(grid).
   for (let c = minColIndex; c <= maxColIndex; c++) {
     const colLetter = getColLetter(c);
-    const colHeader = document.querySelector(`[data-col-id="${colLetter}"]`);
+    const colHeader = getColHeaderEl(colLetter);
     // A column-header selection gives the column header a solid-blue highlight
     // and leaves the row headers un-highlighted; a normal range lightly
     // highlights both the spanned column and row headers.
-    if (colHeader) colHeader.classList.add(isColumnSelection ? 'header-selected' : 'active-header');
+    if (colHeader) {
+      colHeader.classList.add(isColumnSelection ? 'header-selected' : 'active-header');
+      highlightedEls.push(colHeader);
+    }
 
     for (let r = minRow; r <= maxRow; r++) {
       const cellId = `${colLetter}${r}`;
       if (c === minColIndex) {
-        const rowHeader = document.querySelector(`[data-row-id="${r}"]`);
-        if (rowHeader) rowHeader.classList.add('active-header');
+        const rowHeader = getRowHeaderEl(r);
+        if (rowHeader) {
+          rowHeader.classList.add('active-header');
+          highlightedEls.push(rowHeader);
+        }
       }
 
       // The primary active cell (first cell clicked) gets a thick border;
@@ -954,7 +974,7 @@ const updateRangeSelectionUI = () => {
       // anchor reflects the blue tint and a colored one keeps its background,
       // just like the rest of the range; a single-cell selection keeps the
       // border only and leaves the cell its natural color.
-      const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
+      const cellEl = getCellEl(cellId);
       if (cellEl) {
         if (cellId === activeCellId) {
           cellEl.classList.add('grid-cell-active');
@@ -962,6 +982,7 @@ const updateRangeSelectionUI = () => {
         } else {
           cellEl.classList.add('grid-cell-selected');
         }
+        highlightedEls.push(cellEl);
       }
     }
   }
@@ -988,7 +1009,7 @@ const updateRangeSelectionUI = () => {
   // header heights rather than read off the bottom-right cell, because that cell
   // may be a display:none merge-covered cell with no layout box.
   const minColLetter = getColLetter(minColIndex);
-  const topLeftEl = document.querySelector(`[data-cell-id="${minColLetter}${minRow}"]`);
+  const topLeftEl = getCellEl(`${minColLetter}${minRow}`);
   if (topLeftEl && typeof topLeftEl.offsetLeft === 'number') {
     left = topLeftEl.offsetLeft;
     top = topLeftEl.offsetTop;
@@ -997,7 +1018,7 @@ const updateRangeSelectionUI = () => {
     width = w;
     let h = 0;
     for (let r = minRow; r <= maxRow; r++) {
-      const rh = document.querySelector(`[data-row-id="${r}"]`);
+      const rh = getRowHeaderEl(r);
       h += (rh && typeof rh.offsetHeight === 'number' && rh.offsetHeight) ? rh.offsetHeight : 21;
     }
     height = h;
@@ -1593,6 +1614,17 @@ let gridCellIndex = new Map();
 const getCellEl = (cellId) =>
   gridCellIndex.get(cellId) || document.querySelector(`[data-cell-id="${cellId}"]`);
 
+// Row/column header element indexes, populated by the same render that builds
+// gridCellIndex. The selection highlighter touches a header per row and per
+// column on every drag tick; an O(1) lookup keeps that off the full-document
+// querySelector path (see #96), matching getCellEl for the cell grid.
+let gridRowHeaderIndex = new Map();
+let gridColHeaderIndex = new Map();
+const getRowHeaderEl = (row) =>
+  gridRowHeaderIndex.get(row) || document.querySelector(`[data-row-id="${row}"]`);
+const getColHeaderEl = (colLetter) =>
+  gridColHeaderIndex.get(colLetter) || document.querySelector(`[data-col-id="${colLetter}"]`);
+
 const pendingOverflowRows = new Set();
 let overflowFlushScheduled = false;
 const flushPendingOverflow = () => {
@@ -1779,6 +1811,13 @@ const renderSpreadsheetGrid = () => {
   if (!gridRoot) return;
   ensureGridCellDelegation(gridRoot);
 
+  // Fresh header indexes for this render — reset before the headers below are
+  // built (the column headers are created further down) so getRowHeaderEl /
+  // getColHeaderEl resolve against this render's elements. The cell index is
+  // reset just before the cell loop. See #96.
+  gridRowHeaderIndex = new Map();
+  gridColHeaderIndex = new Map();
+
   // Column count for this render — grows past A-Z as data extends rightward.
   const colCount = getColCount();
 
@@ -1822,6 +1861,7 @@ const renderSpreadsheetGrid = () => {
     if (hasMerges) { colHeader.style.gridColumn = `${c + 2}`; colHeader.style.gridRow = '1'; }
     // Store column identifier for selection highlighting
     colHeader.setAttribute('data-col-id', colLetter);
+    gridColHeaderIndex.set(colLetter, colHeader);
     // Clicking a column header selects the entire column: the cells fill with
     // the selection colour, the active anchor is the top cell, and the header
     // is highlighted in solid blue.
@@ -1934,6 +1974,7 @@ const renderSpreadsheetGrid = () => {
     rowHeader.innerText = r;
     // Store row identifier for selection highlighting
     rowHeader.setAttribute('data-row-id', r);
+    gridRowHeaderIndex.set(r, rowHeader);
     // With explicit placement on, pin the row header to the gutter / its row track.
     if (hasMerges) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
 
