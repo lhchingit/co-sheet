@@ -34,7 +34,8 @@ test('OIDC metadata endpoint serves openid-configuration JSON', async (t) => {
   });
 
   // Wait 1 second (1000ms) for the Express server to boot up and start listening on port 31235.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31235/login');
 
   try {
     // --- Act ---
@@ -74,7 +75,8 @@ test('OIDC JWKS endpoint returns the mock public key', async (t) => {
   });
 
   // Wait 1 second (1000ms) for the Express server to boot.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31235/login');
 
   try {
     // --- Act ---
@@ -104,7 +106,8 @@ test('OIDC authorization endpoint rejects non-local redirect_uri', async (t) => 
   });
 
   // Wait 1 second (1000ms) for the Express server to boot.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31235/login');
 
   try {
     // --- Act & Assert ---
@@ -139,7 +142,8 @@ test('OIDC full authentication flow works successfully', async (t) => {
   });
 
   // Wait 1 second (1000ms) for the Express server to boot.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31235/login');
 
   try {
     // Generate a mock code matching the server's expected format (base64 of JSON { username })
@@ -205,7 +209,8 @@ test('OIDC edge cases: protocol restriction, invalid token, and invalid code val
   });
 
   // Wait 1 second (1000ms) for the Express server to boot.
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31235/login');
 
   try {
     // --- Act & Assert: Part 1 - Protocol restriction validation ---
@@ -326,7 +331,8 @@ test('Mock OIDC endpoints return 404 when disabled', async (t) => {
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: '31237', MOCK_OIDC_ENABLED: 'false' }
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31237/login');
 
   try {
     const discovery = await fetch('http://localhost:31237/oidc/.well-known/openid-configuration');
@@ -379,7 +385,8 @@ test('Google endpoints return 404 when disabled', async (t) => {
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: '31238', GOOGLE_LOGIN_ENABLED: 'off' }
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Poll until the server is listening instead of a fixed sleep that races CI.
+  await fetchWithRetry('http://localhost:31238/login');
 
   try {
     // /auth/google must not start the flow or serve the mock page; it 404s.
