@@ -2480,7 +2480,7 @@ const trackEdit = (fileId, editor) => {
 
 // Configuration thresholds loaded from environment variables with defaults.
 const AUTOSAVE_CHECK_INTERVAL = parseInt(process.env.AUTOSAVE_CHECK_INTERVAL || '10000', 10);
-const AUTOSAVE_INACTIVITY_LIMIT = parseInt(process.env.AUTOSAVE_INACTIVITY_LIMIT || '60000', 10);
+const AUTOSAVE_INACTIVITY_LIMIT = parseInt(process.env.AUTOSAVE_INACTIVITY_LIMIT || '15000', 10);
 const AUTOSAVE_ACTIVE_LIMIT = parseInt(process.env.AUTOSAVE_ACTIVE_LIMIT || '300000', 10);
 
 // Setup the periodic check interval for the autosave engine.
