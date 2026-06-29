@@ -236,6 +236,7 @@
   "history.restore": "還原這個版本",
   "history.title": "版本紀錄",
   "history.allVersions": "所有版本",
+  "history.noVersions": "尚無版本紀錄",
   "history.highlightChanges": "醒目顯示變更",
   "history.showUnedited": "顯示未修改的資料列",
   "status.allSaved": "所有變更都已儲存",

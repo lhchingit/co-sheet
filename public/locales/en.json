@@ -236,6 +236,7 @@
   "history.restore": "Restore this version",
   "history.title": "Version history",
   "history.allVersions": "All versions",
+  "history.noVersions": "No version history",
   "history.highlightChanges": "Highlight changes",
   "history.showUnedited": "Show unedited rows",
   "status.allSaved": "All changes saved",
