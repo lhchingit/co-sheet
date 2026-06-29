@@ -3271,7 +3271,9 @@ const toggleFormat = (cellId, property) => {
   });
   
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3304,7 +3306,9 @@ const toggleBorder = (cellId) => {
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3339,7 +3343,9 @@ const changeCellColor = (cellId, hex) => {
   });
   
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3374,7 +3380,9 @@ const changeCellTextColor = (cellId, hex) => {
   });
   
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3498,7 +3506,9 @@ const setCellNumberFormat = (cellId, numberFormat) => {
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
   }
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3626,7 +3636,9 @@ const adjustCellDecimals = (cellId, delta) => {
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
   }
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3668,7 +3680,9 @@ const setCellTextWrap = (cellId, mode) => {
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
   }
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3835,7 +3849,9 @@ const setCellFont = (cellId, fontName) => {
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -3909,7 +3925,8 @@ const setCellFontSize = (cellId, size) => {
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): font size is display-only and never changes a value
+  // (see #98). The selection still needs re-measuring for the new cell height.
   // Re-measure the selection frame so it matches the new (taller/shorter) cells.
   updateRangeSelectionUI();
   if (activeCellId) {
@@ -4389,7 +4406,9 @@ const setCellAlignment = (cellId, alignment) => {
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -4429,7 +4448,9 @@ const setCellVerticalAlignment = (cellId, alignment) => {
   });
 
   recordHistoryAction({ type: 'multi', changes: historyChanges });
-  recalculateSheet();
+  // No recalculateSheet(): a style change never alters a cell value — formulas
+  // read referenced cells' values, not their styles — so a recalc here only
+  // re-derives identical values. (Same reasoning as clearFormatting; see #98.)
   if (activeCellId) {
     updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
   }
@@ -4463,7 +4484,8 @@ const changeCellLink = (cellId, url) => {
     }));
   }
   updateGridDOMCell(cellId, getCellValue(cellId), cell.style);
-  recalculateSheet();
+  // No recalculateSheet(): setting/clearing a link is display-only and never
+  // changes a cell value (see #98).
   updateToolbarFormattingStates(cell.style);
 };
 
