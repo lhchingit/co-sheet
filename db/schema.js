@@ -27,15 +27,23 @@ export async function applySchema(db) {
     )
   `);
 
-  // Provision workbook_versions table for version history tracking
+  // Provision workbook_versions table for version history tracking. `file_id`
+  // scopes each snapshot to its workbook; the legacy single-document behavior maps
+  // to the 'default' file id.
   await db.query(`
     CREATE TABLE IF NOT EXISTS workbook_versions (
       id SERIAL PRIMARY KEY,
+      file_id TEXT NOT NULL DEFAULT 'default',
       state JSONB NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       created_by TEXT NOT NULL
     )
   `);
+  // Idempotent migration for databases provisioned before version history was
+  // per-file: existing rows belong to the legacy 'default' workbook.
+  await db.query(`ALTER TABLE workbook_versions ADD COLUMN IF NOT EXISTS file_id TEXT NOT NULL DEFAULT 'default'`);
+  // Speeds up the per-file, newest-first listing the version-history sidebar issues.
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_workbook_versions_file_id ON workbook_versions (file_id, id DESC)`);
 
   // Provision files table backing the file-management interface. Each row is a
   // workbook whose cell data lives in workbook_state under the same key as files.id.

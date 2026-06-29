@@ -2180,7 +2180,13 @@ app.post('/api/cells', ensureAuthenticated, async (req, res) => {
  */
 app.get('/api/versions', ensureAuthenticated, async (req, res) => {
   try {
-    const rows = await versionsRepo.listVersions();
+    // Scope to the requested workbook (?file=<id>); absent/invalid => the legacy
+    // 'default' workbook. The caller must be able to view that file.
+    const fileId = (typeof req.query.file === 'string' && isValidFileId(req.query.file)) ? req.query.file : 'default';
+    if (!(await canViewFile(req.user, fileId))) {
+      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view this file' });
+    }
+    const rows = await versionsRepo.listVersions(fileId);
     const versions = rows.map(row => ({
       id: row.id,
       created_at: row.created_at,
@@ -2204,7 +2210,11 @@ app.get('/api/versions/:id', ensureAuthenticated, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: 'bad_request', message: 'Invalid version ID' });
     }
-    const versionState = await versionsRepo.getVersionState(id);
+    const fileId = (typeof req.query.file === 'string' && isValidFileId(req.query.file)) ? req.query.file : 'default';
+    if (!(await canViewFile(req.user, fileId))) {
+      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to view this file' });
+    }
+    const versionState = await versionsRepo.getVersionState(id, fileId);
     if (versionState === undefined) {
       return res.status(404).json({ error: 'not_found', message: 'Version not found' });
     }
@@ -2233,7 +2243,13 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
     if (isNaN(id)) {
       return res.status(400).json({ error: 'bad_request', message: 'Invalid version ID' });
     }
-    const versionState = await versionsRepo.getVersionState(id);
+    // Scope to the requested workbook (?file=<id>); restoring is an edit, so the
+    // caller must have modify access to that file.
+    const fileId = (typeof req.query.file === 'string' && isValidFileId(req.query.file)) ? req.query.file : 'default';
+    if (!(await canModifyFile(req.user, fileId))) {
+      return res.status(403).json({ error: 'forbidden', message: 'You do not have permission to edit this file' });
+    }
+    const versionState = await versionsRepo.getVersionState(id, fileId);
     if (versionState === undefined) {
       return res.status(404).json({ error: 'not_found', message: 'Version not found' });
     }
@@ -2253,8 +2269,8 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       }
     }
 
-    // Overwrite the active spreadsheet state in memory
-    sheetState = setupCellsProxy({
+    // Rebuild the restored workbook state.
+    const restored = setupCellsProxy({
       sheets,
       sheetOrder: Array.isArray(targetState.sheetOrder) ? targetState.sheetOrder : Object.keys(sheets),
       sheetColors: (targetState.sheetColors && typeof targetState.sheetColors === 'object') ? targetState.sheetColors : Object.create(null),
@@ -2264,40 +2280,37 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       colCounts: sanitizeColCounts(targetState.colCounts)
     });
 
-    // Save the updated state to the active workbook_state database
-    await saveState();
+    // Install it into the correct workbook binding and persist to that file's key.
+    // The default workbook lives in the global `sheetState`; other files are cached
+    // in the `workbooks` map.
+    if (fileId === 'default') {
+      sheetState = restored;
+      await saveState();
+    } else {
+      workbooks.set(fileId, restored);
+      await saveWorkbook(fileId, restored);
+    }
 
-    // Log the restoration event in the version history table
+    // Log the restoration event in this file's version history.
     const creator = req.user ? req.user.username : 'anonymous';
-    await versionsRepo.insertVersion(JSON.stringify(sheetState), creator);
+    await versionsRepo.insertVersion(JSON.stringify(restored), creator, fileId);
 
-    // Broadcast the restored init state to all active connected WebSocket clients
+    // Broadcast the restored init state to the clients viewing THIS file only.
     const initPayload = {
       type: 'init',
       payload: {
-        sheets: sheetState.sheets,
-        sheetOrder: sheetState.sheetOrder,
-        sheetColors: sheetState.sheetColors,
-        hiddenSheets: sheetState.hiddenSheets,
-        colWidths: sheetState.colWidths,
-        rowHeights: sheetState.rowHeights,
-        colCounts: sheetState.colCounts,
-        cells: sheetState.cells,
-        users: Array.from(activeUsers.entries()).map(([uid, info]) => ({
-          userId: uid,
-          username: info.username,
-          color: info.color,
-          activeCell: info.activeCell,
-          activeSheet: info.activeSheet || 'Sheet1'
-        }))
+        sheets: restored.sheets,
+        sheetOrder: restored.sheetOrder,
+        sheetColors: restored.sheetColors,
+        hiddenSheets: restored.hiddenSheets,
+        colWidths: restored.colWidths,
+        rowHeights: restored.rowHeights,
+        colCounts: restored.colCounts,
+        cells: restored.cells,
+        users: presenceForFile(fileId)
       }
     };
-
-    for (const [uid, info] of activeUsers) {
-      if (info.ws.readyState === WebSocket.OPEN) {
-        info.ws.send(JSON.stringify(initPayload));
-      }
-    }
+    localBroadcast(fileId, initPayload);
 
     res.json({ success: true });
   } catch (err) {
@@ -2440,11 +2453,30 @@ const activeUsers = new Map();
 // wsId -> { username, color, activeCell, activeSheet, fileId }
 const remoteUsers = new Map();
 
-// Autosave state tracking variables for periodic workbook version snapshots.
-let pendingChanges = false;
-const currentEditors = new Set();
-let lastEditTime = Date.now();
-let lastVersionTime = Date.now();
+// Autosave bookkeeping, tracked per workbook (file id). Each edited file gets an
+// entry; the periodic engine snapshots whichever files have pending changes once a
+// threshold is met. The legacy 'default' workbook is tracked under 'default' like
+// any other file.
+/** @type {Map<string, { pending: boolean, editors: Set<string>, lastEditTime: number, lastVersionTime: number }>} */
+const autosaveByFile = new Map();
+
+/**
+ * Mark a file dirty for the autosave engine, creating its tracking entry on the
+ * first edit.
+ * @param {string} fileId
+ * @param {string} editor
+ */
+const trackEdit = (fileId, editor) => {
+  const now = Date.now();
+  let entry = autosaveByFile.get(fileId);
+  if (!entry) {
+    entry = { pending: false, editors: new Set(), lastEditTime: now, lastVersionTime: now };
+    autosaveByFile.set(fileId, entry);
+  }
+  entry.pending = true;
+  entry.editors.add(editor);
+  entry.lastEditTime = now;
+};
 
 // Configuration thresholds loaded from environment variables with defaults.
 const AUTOSAVE_CHECK_INTERVAL = parseInt(process.env.AUTOSAVE_CHECK_INTERVAL || '10000', 10);
@@ -2452,46 +2484,48 @@ const AUTOSAVE_INACTIVITY_LIMIT = parseInt(process.env.AUTOSAVE_INACTIVITY_LIMIT
 const AUTOSAVE_ACTIVE_LIMIT = parseInt(process.env.AUTOSAVE_ACTIVE_LIMIT || '300000', 10);
 
 // Setup the periodic check interval for the autosave engine.
-// In each tick, if there are pending changes, we check if the inactivity limit or active limit is met.
+// On each tick, snapshot every file with pending changes whose inactivity or
+// active-work threshold has been reached.
 const autosaveInterval = setInterval(async () => {
-  if (pendingChanges) {
-    const now = Date.now();
+  const now = Date.now();
+  for (const [fileId, entry] of autosaveByFile) {
+    if (!entry.pending) continue;
 
     // Verify if either inactivity or active work time threshold is reached.
-    const isInactive = now - lastEditTime >= AUTOSAVE_INACTIVITY_LIMIT;
-    const isActiveLimitReached = now - lastVersionTime >= AUTOSAVE_ACTIVE_LIMIT;
+    const isInactive = now - entry.lastEditTime >= AUTOSAVE_INACTIVITY_LIMIT;
+    const isActiveLimitReached = now - entry.lastVersionTime >= AUTOSAVE_ACTIVE_LIMIT;
+    if (!isInactive && !isActiveLimitReached) continue;
 
-    if (isInactive || isActiveLimitReached) {
-      try {
-        // Construct the editors string using comma and space separator.
-        const editorsString = currentEditors.size > 0 ? Array.from(currentEditors).join(', ') : 'anonymous';
+    try {
+      // Construct the editors string using comma and space separator.
+      const editorsString = entry.editors.size > 0 ? Array.from(entry.editors).join(', ') : 'anonymous';
 
-        // In multi-instance mode every instance that saw a local edit would
-        // otherwise snapshot independently, producing duplicate version-history
-        // entries. A short-lived distributed lock lets a single instance win the
-        // snapshot for this window (always granted in local mode).
-        const gotLock = await bus.acquireLock('autosave:default', Math.max(1000, AUTOSAVE_CHECK_INTERVAL - 500));
-        if (!gotLock) {
-          // Another instance is snapshotting; clear our local pending flag so we
-          // don't spin, and let its snapshot stand.
-          pendingChanges = false;
-          currentEditors.clear();
-          lastVersionTime = now;
-          return;
-        }
-
-        // Create a new version snapshot in workbook_versions database table.
-        await versionsRepo.insertVersion(JSON.stringify(sheetState), editorsString);
-        
-        autosaveLog.info(`Created version snapshot. Editors: ${editorsString}`);
-
-        // Reset tracking variables upon successful snapshot creation.
-        pendingChanges = false;
-        currentEditors.clear();
-        lastVersionTime = now;
-      } catch (err) {
-        autosaveLog.error({ err }, 'Error creating version snapshot');
+      // In multi-instance mode every instance that saw a local edit would
+      // otherwise snapshot independently, producing duplicate version-history
+      // entries. A short-lived distributed lock (keyed per file) lets a single
+      // instance win the snapshot for this window (always granted in local mode).
+      const gotLock = await bus.acquireLock(`autosave:${fileId}`, Math.max(1000, AUTOSAVE_CHECK_INTERVAL - 500));
+      if (!gotLock) {
+        // Another instance is snapshotting this file; clear our local pending flag
+        // so we don't spin, and let its snapshot stand.
+        entry.pending = false;
+        entry.editors.clear();
+        entry.lastVersionTime = now;
+        continue;
       }
+
+      // Snapshot this file's current live state under its own id.
+      const workbook = await getWorkbook(fileId);
+      await versionsRepo.insertVersion(JSON.stringify(workbook), editorsString, fileId);
+
+      autosaveLog.info(`Created version snapshot for ${fileId}. Editors: ${editorsString}`);
+
+      // Reset tracking for this file upon successful snapshot creation.
+      entry.pending = false;
+      entry.editors.clear();
+      entry.lastVersionTime = now;
+    } catch (err) {
+      autosaveLog.error({ err }, `Error creating version snapshot for ${fileId}`);
     }
   }
 }, AUTOSAVE_CHECK_INTERVAL);
@@ -2844,12 +2878,9 @@ wss.on('connection', async (ws, req) => {
       // file may still move their cursor (presence) but cannot change state.
       if (!canEdit) return;
 
-      // Autosave/version snapshots currently track the default workbook only.
-      if (fileId === 'default') {
-        pendingChanges = true;
-        currentEditors.add(username);
-        lastEditTime = Date.now();
-      }
+      // Mark this workbook dirty for the autosave engine. Every editable file is
+      // version-tracked under its own id (not just the legacy 'default' workbook).
+      trackEdit(fileId, username);
 
       // Apply locally (mutate cache + persist + fan out to local sockets). When it
       // actually changed state, relay the op so every other instance applies the

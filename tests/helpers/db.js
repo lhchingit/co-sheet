@@ -151,10 +151,10 @@ class TestDb {
   }
 
   /** Insert a workbook_versions snapshot; returns its generated id. */
-  async seedVersion(state, createdBy) {
+  async seedVersion(state, createdBy, fileId = 'default') {
     const r = await this.pool.query(
-      'INSERT INTO workbook_versions (state, created_by) VALUES ($1, $2) RETURNING id',
-      [JSON.stringify(state), createdBy]
+      'INSERT INTO workbook_versions (file_id, state, created_by) VALUES ($1, $2, $3) RETURNING id',
+      [fileId, JSON.stringify(state), createdBy]
     );
     return r.rows[0].id;
   }

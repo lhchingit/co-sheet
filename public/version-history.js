@@ -27,6 +27,21 @@
   // after every state mutation, before a grid re-render.
   /** @type {(s: { mode: boolean, selected: any, previous: any }) => void} */
   let syncState = () => {};
+  // Resolve the id of the workbook currently open in the editor, so version-history
+  // API calls are scoped to it. Returns null for the legacy 'default' workbook.
+  /** @type {() => (string|null)} */
+  let getFileId = () => null;
+
+  /**
+   * Build a version-history API URL, scoping it to the current workbook via the
+   * ?file=<id> query parameter when one is open (absent => the 'default' workbook).
+   * @param {string} path - The base path, e.g. '/api/versions' or '/api/versions/3'.
+   * @returns {string}
+   */
+  const versionsApiUrl = (path) => {
+    const fileId = getFileId();
+    return fileId ? `${path}?file=${encodeURIComponent(fileId)}` : path;
+  };
 
   // ---------------------------------------------------------------------------
   // Module-private state.
@@ -196,7 +211,7 @@
    */
   const selectVersion = async (versionId) => {
     try {
-      const res = await fetch(`/api/versions/${versionId}`);
+      const res = await fetch(versionsApiUrl(`/api/versions/${versionId}`));
       if (res.status === 401) {
         window.location.href = '/login';
         return;
@@ -208,7 +223,7 @@
 
       if (index !== -1 && index + 1 < versionsList.length) {
         const prevVersion = versionsList[index + 1];
-        const prevRes = await fetch(`/api/versions/${prevVersion.id}`);
+        const prevRes = await fetch(versionsApiUrl(`/api/versions/${prevVersion.id}`));
         previousVersionState = await prevRes.json();
       } else {
         previousVersionState = null;
@@ -242,7 +257,7 @@
   const restoreVersion = async () => {
     if (!selectedVersionState || !selectedVersionState.id) return;
     try {
-      const res = await fetch(`/api/versions/${selectedVersionState.id}/restore`, {
+      const res = await fetch(versionsApiUrl(`/api/versions/${selectedVersionState.id}/restore`), {
         method: 'POST'
       });
       if (res.status === 401) {
@@ -293,7 +308,7 @@
       setHistoryTitle('');
 
       try {
-        const res = await fetch('/api/versions');
+        const res = await fetch(versionsApiUrl('/api/versions'));
         if (res.status === 401) {
           window.location.href = '/login';
           return;
@@ -367,12 +382,13 @@
 
   /**
    * Wire the module to the host app and bind its UI events.
-   * @param {{ renderGrid?: () => void, renderSheetTabs?: () => void, syncState?: (s: { mode: boolean, selected: any, previous: any }) => void }} [ctx]
+   * @param {{ renderGrid?: () => void, renderSheetTabs?: () => void, syncState?: (s: { mode: boolean, selected: any, previous: any }) => void, getFileId?: () => (string|null) }} [ctx]
    */
   const init = (ctx = {}) => {
     if (typeof ctx.renderGrid === 'function') renderGrid = ctx.renderGrid;
     if (typeof ctx.renderSheetTabs === 'function') renderSheetTabs = ctx.renderSheetTabs;
     if (typeof ctx.syncState === 'function') syncState = ctx.syncState;
+    if (typeof ctx.getFileId === 'function') getFileId = ctx.getFileId;
     bindEvents();
   };
 

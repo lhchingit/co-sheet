@@ -8774,6 +8774,8 @@ window.CoSheet.history.init({
     selectedVersionState = s.selected;
     previousVersionState = s.previous;
   },
+  // Scope version-history API calls to the workbook currently open in the editor.
+  getFileId: () => currentFileId,
 });
 
 // ---------------------------------------------------------------------------
