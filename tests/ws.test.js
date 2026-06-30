@@ -388,6 +388,79 @@ test('WebSocket - Client disconnect broadcasts user-leave event to remaining cli
   }
 });
 
+test('WebSocket - Heartbeat reaps a silently-dropped connection and broadcasts user-leave', async (t) => {
+  // --- Arrange ---
+  // A client that stops responding (half-open TCP, laptop sleep) does NOT trigger
+  // the server's `close` handler, so its presence tag would linger and appear as a
+  // duplicate once the same person reconnects under a new wsId (#107). The ping/pong
+  // heartbeat must detect the dead socket and terminate it, which fires `close` and
+  // broadcasts `user-leave`. Use a short heartbeat so the test stays fast.
+  const PORT = '31306';
+  const db = await createTestDb('ws-heartbeat');
+
+  const child = spawn('node', ['server.js'], {
+    env: { ...process.env, PORT: PORT, NODE_ENV: 'test', DATABASE_URL: db.url, WS_HEARTBEAT_MS: '200' }
+  });
+  child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  let wsDead, wsObserver;
+  try {
+    // wsDead never answers pings (autoPong: false) and never sends a close frame,
+    // simulating a connection that dropped without the server noticing.
+    wsDead = new WebSocket(`ws://localhost:${PORT}/`, { autoPong: false });
+    wsObserver = new WebSocket(`ws://localhost:${PORT}/`);
+
+    const observerMessages = [];
+    wsObserver.on('message', (data) => {
+      observerMessages.push(JSON.parse(data));
+    });
+
+    await Promise.all([
+      new Promise((resolve) => wsDead.on('open', resolve)),
+      new Promise((resolve) => wsObserver.on('open', resolve))
+    ]);
+
+    // Let the observer learn the dead client's wsId from the join cursor-update.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const joinMsg = observerMessages.find(m => m.type === 'cursor-update');
+    const deadUserId = joinMsg ? joinMsg.payload.userId : null;
+
+    // --- Act ---
+    // Do NOT close wsDead; let it go silent. The heartbeat should terminate it after
+    // it misses a ping round (~2 * WS_HEARTBEAT_MS).
+    const userLeaveMessage = await new Promise((resolve, reject) => {
+      const check = () => {
+        const found = observerMessages.find(m => m.type === 'user-leave');
+        if (found) resolve(found);
+        else setTimeout(check, 50);
+      };
+      check();
+      setTimeout(() => reject(new Error('Timeout waiting for heartbeat-driven user-leave')), 3000);
+    });
+
+    // --- Assert ---
+    assert.strictEqual(userLeaveMessage.type, 'user-leave');
+    if (deadUserId) {
+      assert.strictEqual(userLeaveMessage.payload.userId, deadUserId);
+    } else {
+      assert.ok(userLeaveMessage.payload.userId);
+    }
+  } finally {
+    if (wsDead && (wsDead.readyState === WebSocket.OPEN || wsDead.readyState === WebSocket.CONNECTING)) {
+      try { wsDead.terminate(); } catch (e) { /* already gone */ }
+    }
+    if (wsObserver && wsObserver.readyState === WebSocket.OPEN) {
+      wsObserver.close();
+      await new Promise(resolve => wsObserver.on('close', resolve));
+    }
+    child.kill();
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await db.cleanup();
+  }
+});
+
 test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-specific cursors', async (t) => {
   // --- Arrange ---
   const wsUrl = 'ws://localhost:31305';

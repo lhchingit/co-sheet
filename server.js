@@ -2360,6 +2360,28 @@ const unsign = (val, secret) => {
 // Initialize WebSocket server instance.
 const wss = new WebSocketServer({ noServer: true });
 
+// Heartbeat: the `ws` library does not detect a half-open / abruptly-dropped TCP
+// connection on its own, so a client that vanishes (network blip, laptop sleep,
+// Cloud Run instance recycle) can linger in `activeUsers` long after it has already
+// reconnected under a fresh wsId — leaving every other user staring at a stale,
+// duplicate presence tag for the same person. Periodically ping every socket and
+// terminate any that didn't answer the previous round. terminate() fires `close`,
+// which removes the entry and broadcasts `user-leave`, clearing the stale tag for
+// everyone (locally and across instances via the bus).
+const HEARTBEAT_INTERVAL_MS = Number(process.env.WS_HEARTBEAT_MS) || 30000;
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (e) { /* socket already closing */ }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+// Don't let the heartbeat keep the event loop alive during tests/shutdown.
+heartbeatInterval.unref();
+
 // Cross-instance message bus. In single-instance / local mode (no REDIS_URL) this
 // is a no-op and the server behaves exactly as before. init() runs in `ready`.
 const bus = createRealtimeBus({ redisUrl: process.env.REDIS_URL, cluster: REDIS_CLUSTER });
@@ -2385,6 +2407,7 @@ const ready = (async () => {
       if (typeof autosaveInterval !== 'undefined') {
         clearInterval(autosaveInterval);
       }
+      clearInterval(heartbeatInterval);
       bus.close().catch(() => { /* best-effort */ });
     });
 
@@ -2792,6 +2815,12 @@ wss.on('connection', async (ws, req) => {
 
   // Store user connection state details in our memory map (scoped by file id).
   activeUsers.set(wsId, { ws, username, color, activeCell: null, fileId });
+
+  // Heartbeat liveness: mark alive now and on every pong. The interval above pings
+  // each socket and terminates any still marked dead from the previous round, so a
+  // silently-dropped connection is reaped instead of leaving a stale presence tag.
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
   // 1. Send the initialization payload ('init') for THIS connection's workbook only.
   ws.send(JSON.stringify({
