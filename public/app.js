@@ -2158,6 +2158,12 @@ const renderSpreadsheetGrid = () => {
   // active sheet's filter state across re-renders and sheet switches.
   window.CoSheet.sortFilter.updateToolbarButton();
 
+  // Re-apply remote collaborators' cursor/presence tags: the innerHTML rebuild
+  // above discarded the borders appended to individual cells, so without this a
+  // peer's name tag disappears on every full re-render (e.g. a remote resize or
+  // sheet change) until they next move their cursor.
+  renderRemoteCursors();
+
   // The content height/width just changed; resync the synthetic scrollbars.
   if (gridScrollbarLayout) gridScrollbarLayout();
 };
@@ -3240,6 +3246,25 @@ const renderCursorBorder = (user) => {
 const removeCursorBorder = (userId) => {
   const el = document.getElementById(`cursor-${userId}`);
   if (el) el.remove();
+};
+
+/**
+ * Re-renders every known remote collaborator's cursor/presence tag for the active
+ * sheet. A full renderSpreadsheetGrid() rebuilds gridRoot from scratch, discarding
+ * the presence borders appended to individual cells, so they must be re-applied
+ * afterwards — otherwise a peer's name tag silently vanishes on any full re-render
+ * (e.g. a remote column/row resize or sheet add/delete) and only reappears the next
+ * time that peer moves their cursor. Skipped in history mode, which shows a past
+ * snapshot rather than the live collaborative grid.
+ */
+const renderRemoteCursors = () => {
+  if (isHistoryMode) return;
+  Object.keys(remoteCursors).forEach(id => {
+    const cursor = remoteCursors[id];
+    if (cursor && cursor.activeCell && cursor.activeSheet === activeSheetName) {
+      renderCursorBorder(cursor);
+    }
+  });
 };
 
 /**
@@ -7050,13 +7075,8 @@ const switchSheet = (sheetName) => {
     }));
   }
 
-  // Render remote collaborator cursors for the active sheet
-  Object.keys(remoteCursors).forEach(id => {
-    const cursor = remoteCursors[id];
-    if (cursor.activeSheet === activeSheetName) {
-      renderCursorBorder(cursor);
-    }
-  });
+  // (Remote collaborator cursors for the now-active sheet were already re-rendered
+  // by renderSpreadsheetGrid() above, which calls renderRemoteCursors().)
 
   // Reset the formatting bar only when nothing got selected (A1 missing); a
   // restore or the A1 fallback already synced the toolbar to its cell's style.
