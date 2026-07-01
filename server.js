@@ -40,6 +40,7 @@ import { isExternalOidcUserinfoSkipped } from './services/oidc-profile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtime-bus.js';
 import { parseXlsx } from './services/xlsx-import.js';
 import { logger, component } from './services/logger.js';
+import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware } from './services/metrics.js';
 
 // Per-subsystem child loggers. Each tags its lines with a `component` field so
 // logs can be filtered by area; the default `logger` covers the REST handlers.
@@ -382,6 +383,13 @@ app.use(express.json());
 
 // Middleware to parse urlencoded bodies, typical of form submissions.
 app.use(express.urlencoded({ extended: true }));
+
+// When Prometheus metrics are enabled (METRICS_PORT set), record the latency and
+// outcome of every request. Registered early so it wraps all routes; the actual
+// /metrics endpoint is served on a separate port (see startMetricsServer below).
+if (isMetricsEnabled()) {
+  app.use(httpMetricsMiddleware);
+}
 
 // ---------------------------------------------------------------------------
 // Health / probe endpoints for Kubernetes (and other orchestrators).
@@ -2316,6 +2324,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // Server instance declaration for HTTP/WebSocket handling.
 let server;
 
+// Separate HTTP server exposing Prometheus /metrics on METRICS_PORT (null unless enabled).
+let metricsServer = null;
+
 /**
  * Unsigns a signed cookie value using the provided secret key.
  * Used to securely verify session ID from the WebSocket upgrade request.
@@ -2394,6 +2405,10 @@ const ready = (async () => {
       }
       clearInterval(heartbeatInterval);
       bus.close().catch(() => { /* best-effort */ });
+      if (metricsServer) {
+        metricsServer.close();
+        metricsServer = null;
+      }
     });
 
     // Attach Upgrade handler to the HTTP server for WebSocket handshakes.
@@ -2441,6 +2456,21 @@ const ready = (async () => {
     });
     logger.info(`Server running on port ${PORT}`);
     registerStrategies();
+
+    // Start the Prometheus metrics server (no-op unless METRICS_PORT is set). The
+    // runtime gauges are sampled lazily at scrape time via these providers, so they
+    // always reflect current WS/presence/dependency state without a background timer.
+    metricsServer = startMetricsServer({
+      getWsConnectionCount: () => wss.clients.size,
+      getActiveUserCount: () => activeUsers.size,
+      checkDb: async () => {
+        try { await pool.query('SELECT 1'); return true; } catch (e) { return false; }
+      },
+      checkRedis: async () => {
+        try { return await bus.ping(); } catch (e) { return false; }
+      },
+    });
+
     // Startup is fully done: schema provisioned, state loaded, bus connected,
     // server listening, strategies registered. Probes can now report ready.
     startupComplete = true;
