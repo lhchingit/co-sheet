@@ -27,6 +27,7 @@ FILE_ID=<24-hex-id> k6 run loadtest/cosheet-ws.js
 | `SESSION_SEC` | `60`                    | How long each VU holds its socket before closing.    |
 | `VUS`         | unset                   | With `DURATION`, hold this many constant sockets instead of ramping. |
 | `DURATION`    | unset                   | With `VUS`, the constant-load run length (e.g. `30s`, `5m`). |
+| `RECONNECT_BACKOFF` | `1`               | Seconds a VU waits after a **failed** handshake before retrying. Prevents a saturated server from being stampeded by instant reconnects (which inflates failure counts and skews the ceiling). No effect on the happy path; set `0` to disable. |
 
 One k6 VU == one user == one open socket. By default the script ramps 100 → 500 → 1000
 over ~5.5 min. For a quick smoke test or any fixed-load run, set `VUS` and `DURATION`
@@ -38,6 +39,30 @@ NO_AUTH=1 BASE_URL=http://localhost:3100 VUS=50 DURATION=20s SESSION_SEC=18 k6 r
 ```
 
 To change the ramp profile itself, edit the `stages` in the script's `scenario`.
+
+## Finding the ceiling (recommended method)
+
+A single big ramp tells you *whether* a target is over the line, but its metrics are
+cumulative, so it can't cleanly say *where* the knee is. To pin it, run a **stepped
+sweep** — several independent constant-load runs at increasing concurrency, each long
+enough to reach steady state (~40s) — and read `init` p95 + handshake failures per
+level. Hold `SESSION_SEC` well above `DURATION` so every VU keeps one socket open for
+the whole window (steady N concurrent):
+
+```bash
+for N in 100 200 300 400 500 750 1000; do
+  echo "== $N VUs =="
+  NO_AUTH=1 BASE_URL=http://localhost:3100 FILE_ID=default \
+    VUS=$N DURATION=40s SESSION_SEC=120 \
+    k6 run --summary-trend-stats 'med,p(95),max' loadtest/cosheet-ws.js 2>&1 \
+    | grep -E 'cosheet_init_ms|handshake'
+done
+```
+
+The knee is the first level where `cosheet_init_ms` p95 crosses ~1s and handshake
+failures appear. (For reference, on one single-instance/one-core box with Redis off,
+cursor-only load knees at ~300 concurrent users on a single shared document — but that
+figure is hardware-specific; run it on your own target.)
 
 ## What to watch
 
