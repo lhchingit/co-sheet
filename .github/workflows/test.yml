@@ -33,6 +33,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Non-blocking: surfaces ESLint findings in the run summary but never fails
+      # the job (continue-on-error). The codebase currently lints with 0 errors and
+      # a batch of informational warnings; flip this to blocking once those are
+      # burned down and the team wants lint to gate merges.
+      - name: Lint (non-blocking)
+        continue-on-error: true
+        run: |
+          echo "## 🔍 ESLint" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm run lint 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run tests with coverage
         id: tests
         env:
