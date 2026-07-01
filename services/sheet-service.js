@@ -2,7 +2,7 @@
 import { isValidSheetName, isValidHexColor } from './validators.js';
 
 /**
- * @file services/sheetService.js
+ * @file services/sheet-service.js
  * @description Transport-agnostic sheet operations (add / delete / copy / rename /
  * color / hide / unhide / reorder). Each function validates its inputs and mutates
  * the in-memory workbook state in place, returning a result object describing the

@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * @file realtimeBus.js
+ * @file services/realtime-bus.js
  * @description Cross-instance message bus for the collaborative editor.
  *
  * Single-instance deployments need nothing here: the WebSocket server fans out

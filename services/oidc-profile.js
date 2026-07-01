@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * @file services/oidcProfile.js
+ * @file services/oidc-profile.js
  * @description Pure decision helper for whether the external ("Local OIDC")
  * provider's userinfo endpoint should be skipped. Kept side-effect free so it can
  * be unit-tested; server.js turns a positive decision into `skipUserProfile: true`

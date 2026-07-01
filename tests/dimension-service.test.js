@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { resizeColumn, resizeRow, setColCount, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimensionService.js';
+import { resizeColumn, resizeRow, setColCount, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimension-service.js';
 
 /** Build a minimal workbook with the given sheet names. */
 const makeWb = (...names) => {

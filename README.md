@@ -74,8 +74,8 @@ co-sheet-1/
 │   ├── versions.js        # workbook_versions (autosave/restore snapshots)
 │   └── workbook.js        # workbook_state (persisted cell/sheet state)
 ├── services/              # Business logic shared by the REST routes and the WebSocket handler
-│   ├── cellService.js     # Cell payload validation + the canonical cell write
-│   ├── sheetService.js    # Sheet operations (add/delete/copy/rename/color/hide/unhide/reorder)
+│   ├── cell-service.js    # Cell payload validation + the canonical cell write
+│   ├── sheet-service.js   # Sheet operations (add/delete/copy/rename/color/hide/unhide/reorder)
 │   └── validators.js      # Shared pure validators (sheet name, hex color)
 ├── package.json
 ├── tsconfig*.json         # Opt-in TypeScript type-checking config (no emit, no build)

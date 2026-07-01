@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * @file services/oidcTls.js
+ * @file services/oidc-tls.js
  * @description Pure decision helpers for outbound TLS certificate verification of
  * the external ("Local OIDC") provider. Kept transport-agnostic and side-effect
  * free so it can be unit-tested; server.js turns a positive decision into an

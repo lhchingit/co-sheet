@@ -2,7 +2,7 @@
 import { isValidSheetName } from './validators.js';
 
 /**
- * @file services/cellService.js
+ * @file services/cell-service.js
  * @description Transport-agnostic cell-edit logic shared by the REST endpoint
  * (POST /api/cells) and the WebSocket `cell-edit` handler. Owns payload validation
  * and the in-memory cell write (sheet resolution + the canonical cell shape).

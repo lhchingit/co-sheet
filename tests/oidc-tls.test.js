@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { isOidcTlsVerifyDisabled, oidcUsesHttps, shouldSkipOidcTls } from '../services/oidcTls.js';
+import { isOidcTlsVerifyDisabled, oidcUsesHttps, shouldSkipOidcTls } from '../services/oidc-tls.js';
 
 const HTTPS_ENV = { OIDC_TOKEN_URL: 'https://idp.lan/token' };
 const HTTP_ENV = { OIDC_TOKEN_URL: 'http://idp.lan/token' };

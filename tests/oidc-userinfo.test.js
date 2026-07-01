@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { isExternalOidcUserinfoSkipped } from '../services/oidcProfile.js';
+import { isExternalOidcUserinfoSkipped } from '../services/oidc-profile.js';
 
 test('isExternalOidcUserinfoSkipped: OFF by default (fetch userinfo)', () => {
   assert.strictEqual(isExternalOidcUserinfoSkipped({}), false);
