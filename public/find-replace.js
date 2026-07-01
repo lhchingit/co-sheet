@@ -31,8 +31,8 @@
 
   // Last match the search landed on. Tracked across Find-Next presses; currently
   // write-only (kept to preserve intent and future "find previous" behavior).
-  let lastFoundCellId = null;
-  let lastFoundSheetName = null;
+  let _lastFoundCellId = null;
+  let _lastFoundSheetName = null;
 
   /**
    * Helper to check if a cell matches the search string based on options.
@@ -162,8 +162,8 @@
       const idx = (startIdx + i) % searchSpace.length;
       const { sheetName, cellId } = searchSpace[idx];
       if (matchesCell(cellId, sheetName, findStr, matchCase, matchEntire, useRegex, searchFormulas, searchLinks)) {
-        lastFoundCellId = cellId;
-        lastFoundSheetName = sheetName;
+        _lastFoundCellId = cellId;
+        _lastFoundSheetName = sheetName;
 
         // Auto-switch sheet and select cell upon finding match
         if (sheetName !== activeSheetName) {

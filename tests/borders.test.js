@@ -348,7 +348,6 @@ test('a cell\'s edges share one box, so none can chip another at a crossing (#80
 // right/bottom. applyBordersToSelection now mirrors each set side onto the
 // neighbour's opposite face so the owner paints the applied spec.
 const blueThin = () => ({ color: '#1a56ff', style: 'thin' });
-const redThin = () => ({ color: '#ff0000', style: 'thin' });
 const colorOf = (cells, id, side) =>
   (cells[id] && cells[id].style && cells[id].style.borders && cells[id].style.borders[side]
     ? cells[id].style.borders[side].color : null);

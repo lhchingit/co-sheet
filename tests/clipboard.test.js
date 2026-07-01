@@ -6,8 +6,6 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import fs from 'fs';
-import path from 'path';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
 
@@ -33,12 +31,12 @@ function createMockElement(initialStyle = {}) {
     appendChild() {},
     setAttribute() {},
     removeAttribute() {},
-    addEventListener(event, cb) {},
+    addEventListener(_event, _cb) {},
     blur() {}
   };
 }
 
-test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', (t) => {
+test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', () => {
   // --- Arrange ---
   const code = readAppBundle();
   const documentListeners = {};

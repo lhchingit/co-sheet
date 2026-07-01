@@ -331,21 +331,6 @@ async function getSharedUserIds(fileId) {
 }
 
 /**
- * Set of file ids that have been shared with a given user.
- * @param {string|null} userId
- * @returns {Promise<Set<string>>}
- */
-async function getSharedFileIds(userId) {
-  if (!userId) return new Set();
-  try {
-    const rows = await sharesRepo.listSharedFileIds(userId);
-    return new Set(rows.map((x) => x.file_id));
-  } catch (e) {
-    return new Set();
-  }
-}
-
-/**
  * Map of file id -> share role for every file shared with a given user. Keys give
  * drive visibility; values ('editor'/'viewer') give modify rights.
  * @param {string|null} userId
@@ -2320,7 +2305,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public'), {
-  setHeaders: (res, filePath) => {
+  setHeaders: (res, _filePath) => {
     // Disable caching to guarantee immediate client updates during testing/development.
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -2414,7 +2399,6 @@ const ready = (async () => {
     // Attach Upgrade handler to the HTTP server for WebSocket handshakes.
     server.on('upgrade', (request, socket, head) => {
       // Extract and parse session cookie for security
-      let sessionUser = null;
       const cookieHeader = request.headers.cookie;
 
       if (cookieHeader) {

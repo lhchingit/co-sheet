@@ -44,7 +44,7 @@ async function loginAndRegister(port, username) {
   return cookie;
 }
 
-test('File sharing - search users, share, and shared visibility without edit rights', async (t) => {
+test('File sharing - search users, share, and shared visibility without edit rights', async () => {
   // --- Arrange ---
   const db = await createTestDb('share');
   const PORT = '31500';

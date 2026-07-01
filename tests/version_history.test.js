@@ -63,7 +63,7 @@ function makeRequest(url, method, body = null, headers = {}) {
   });
 }
 
-test('Database - workbook_versions insert and query round-trip', async (t) => {
+test('Database - workbook_versions insert and query round-trip', async () => {
   // --- Arrange ---
   // Provision an isolated database and exercise the workbook_versions table with the
   // exact SQL shape the app's data layer (db/versions.js) uses.
@@ -104,7 +104,7 @@ test('Database - workbook_versions insert and query round-trip', async (t) => {
   }
 });
 
-test('Version History API Endpoints - retrieve and restore', async (t) => {
+test('Version History API Endpoints - retrieve and restore', async () => {
   // --- Arrange ---
   // Define environment variables and port for the spawned test server.
   const PORT = '31270';
@@ -245,7 +245,7 @@ test('Version History API Endpoints - retrieve and restore', async (t) => {
   }
 });
 
-test('Backend Autosave Engine - periodic version snapshots on cell edit', async (t) => {
+test('Backend Autosave Engine - periodic version snapshots on cell edit', async () => {
   // --- Arrange ---
   // Define custom environment settings and port for the spawned test server.
   const PORT = '31275';
@@ -341,7 +341,7 @@ test('Backend Autosave Engine - periodic version snapshots on cell edit', async 
   }
 });
 
-test('Backend Autosave Engine - snapshots non-default workbooks, scoped per file', async (t) => {
+test('Backend Autosave Engine - snapshots non-default workbooks, scoped per file', async () => {
   // --- Arrange ---
   // Regression test for version history being hard-wired to the 'default' workbook:
   // editing a real drive file must now produce a snapshot listed under that file
@@ -449,7 +449,7 @@ test('Version History Markup - index.html has history mode elements', () => {
   assert.ok(htmlContent.includes('.unedited-row-bar'), 'index.html should contain unedited-row-bar CSS class');
 });
 
-test('Frontend Version History Logic - toggle, list, change highlights, row collapsing, and restore', async (t) => {
+test('Frontend Version History Logic - toggle, list, change highlights, row collapsing, and restore', async () => {
   // --- Arrange ---
   const code = readAppBundle();
 
@@ -526,14 +526,7 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
   };
 
   // Mock global fetch
-  let fetchCallCount = 0;
-  let lastFetchUrl = '';
-  let lastFetchOptions = null;
-  const mockFetch = async (url, options = null) => {
-    fetchCallCount++;
-    lastFetchUrl = url;
-    lastFetchOptions = options;
-
+  const mockFetch = async (url, _options = null) => {
     if (url === '/api/versions') {
       return {
         status: 200,

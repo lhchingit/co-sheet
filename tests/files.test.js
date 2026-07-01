@@ -45,7 +45,7 @@ async function loginAndGetCookie(port, username = 'Drive User') {
   return Array.isArray(setCookie) ? setCookie[0] : setCookie;
 }
 
-test('Files API - CRUD, unique URL, and per-file workbook isolation', async (t) => {
+test('Files API - CRUD, unique URL, and per-file workbook isolation', async () => {
   // --- Arrange ---
   const db = await createTestDb('files');
   const PORT = '31420';
@@ -118,7 +118,7 @@ test('Files API - CRUD, unique URL, and per-file workbook isolation', async (t) 
   }
 });
 
-test('Files API - copy duplicates workbook data into an independent file', async (t) => {
+test('Files API - copy duplicates workbook data into an independent file', async () => {
   // --- Arrange ---
   const db = await createTestDb('files-copy');
   const PORT = '31421';

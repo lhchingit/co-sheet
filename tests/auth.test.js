@@ -25,7 +25,7 @@ after(async () => {
   if (db) await db.cleanup();
 });
 
-test('Accessing / redirects to /login if unauthenticated', async (t) => {
+test('Accessing / redirects to /login if unauthenticated', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31250) to prevent address-in-use errors.
   const PORT = '31250';
@@ -58,7 +58,7 @@ test('Accessing / redirects to /login if unauthenticated', async (t) => {
   }
 });
 
-test('Accessing /index.html redirects to /', async (t) => {
+test('Accessing /index.html redirects to /', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31251) to prevent address-in-use errors.
   const PORT = '31251';
@@ -89,7 +89,7 @@ test('Accessing /index.html redirects to /', async (t) => {
   }
 });
 
-test('Google Login - redirects to Google OIDC authorization URL if credentials exist', async (t) => {
+test('Google Login - redirects to Google OIDC authorization URL if credentials exist', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31252) with mocked Google credentials.
   const PORT = '31252';
@@ -129,7 +129,7 @@ test('Google Login - redirects to Google OIDC authorization URL if credentials e
   }
 });
 
-test('Google Login - serves mock Google Sign-In page if unconfigured', async (t) => {
+test('Google Login - serves mock Google Sign-In page if unconfigured', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31253) without Google credentials.
   const PORT = '31253';
@@ -172,7 +172,7 @@ test('Google Login - serves mock Google Sign-In page if unconfigured', async (t)
   }
 });
 
-test('Access to /api/me returns 401 Unauthorized when unauthenticated', async (t) => {
+test('Access to /api/me returns 401 Unauthorized when unauthenticated', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31254) to prevent address-in-use errors.
   const PORT = '31254';
@@ -203,7 +203,7 @@ test('Access to /api/me returns 401 Unauthorized when unauthenticated', async (t
   }
 });
 
-test('Access to /api/me returns authenticated user details', async (t) => {
+test('Access to /api/me returns authenticated user details', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31255) to prevent address-in-use errors.
   const PORT = '31255';
@@ -263,7 +263,7 @@ test('Access to /api/me returns authenticated user details', async (t) => {
   }
 });
 
-test('GET /logout terminates session and clears cookies', async (t) => {
+test('GET /logout terminates session and clears cookies', async () => {
   // --- Arrange ---
   // Start the server process on a unique port (31256) to prevent address-in-use errors.
   const PORT = '31256';
