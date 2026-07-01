@@ -338,7 +338,7 @@ const parseStyles = (xml, resolveColor) => {
   // Fonts.
   const fonts = [];
   {
-    const re = /<font\b[^>]*>([\s\S]*?)<\/font>|<font\b[^>]*\/>/g; let m;
+    const re = /<font\b[^>]*>([\s\S]*?)<\/font>|<font\b[^>]*\/>/g;
     const block = section('fonts');
     re.lastIndex = 0;
     let mm;

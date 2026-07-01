@@ -7,8 +7,6 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import fs from 'fs';
-import path from 'path';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
 
@@ -43,7 +41,6 @@ function createMockElement() {
  * @returns {Object} The sandbox context containing the evaluated app.js variables and functions.
  */
 function createSandbox() {
-  const appJsPath = path.resolve('public/app.js');
   const code = readAppBundle();
   
   // Mock browser globals required for app.js initialization
@@ -124,7 +121,7 @@ function createSandbox() {
   return sandbox;
 }
 
-test('Formula Parser - Standard non-formula cell values are returned as-is', (t) => {
+test('Formula Parser - Standard non-formula cell values are returned as-is', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -141,7 +138,7 @@ test('Formula Parser - Standard non-formula cell values are returned as-is', (t)
   assert.strictEqual(val2, 'Text Value');
 });
 
-test('Formula Parser - SUM evaluates range sum correctly', (t) => {
+test('Formula Parser - SUM evaluates range sum correctly', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -158,7 +155,7 @@ test('Formula Parser - SUM evaluates range sum correctly', (t) => {
   assert.strictEqual(val, '60');
 });
 
-test('Formula Parser - AVERAGE evaluates range average correctly', (t) => {
+test('Formula Parser - AVERAGE evaluates range average correctly', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -175,7 +172,7 @@ test('Formula Parser - AVERAGE evaluates range average correctly', (t) => {
   assert.strictEqual(val, '20');
 });
 
-test('Formula Parser - Basic math operations evaluate correctly', (t) => {
+test('Formula Parser - Basic math operations evaluate correctly', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -196,7 +193,7 @@ test('Formula Parser - Basic math operations evaluate correctly', (t) => {
   assert.strictEqual(sandbox.getCellValue('B5'), '22.5');
 });
 
-test('Formula Parser - Division by zero returns #DIV/0!', (t) => {
+test('Formula Parser - Division by zero returns #DIV/0!', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -212,7 +209,7 @@ test('Formula Parser - Division by zero returns #DIV/0!', (t) => {
   assert.strictEqual(val, '#DIV/0!');
 });
 
-test('Formula Parser - Recursive evaluation works and deep recursion returns #ERR!', (t) => {
+test('Formula Parser - Recursive evaluation works and deep recursion returns #ERR!', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   
@@ -236,7 +233,7 @@ test('Formula Parser - Recursive evaluation works and deep recursion returns #ER
   assert.strictEqual(circularChain, '#REF!');
 });
 
-test('Formula Parser - Invalid formulas return #ERR!', (t) => {
+test('Formula Parser - Invalid formulas return #ERR!', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localCells = {
@@ -251,7 +248,7 @@ test('Formula Parser - Invalid formulas return #ERR!', (t) => {
   assert.strictEqual(sandbox.getCellValue('A3'), '#NAME?');
 });
 
-test('Cross-sheet - quoted sheet name range resolves from another sheet', (t) => {
+test('Cross-sheet - quoted sheet name range resolves from another sheet', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   // Note: not overriding localCells keeps the activeSheet-bound proxy intact, so
@@ -275,7 +272,7 @@ test('Cross-sheet - quoted sheet name range resolves from another sheet', (t) =>
   assert.strictEqual(val, '60');
 });
 
-test('Cross-sheet - unquoted sheet name single-cell reference resolves', (t) => {
+test('Cross-sheet - unquoted sheet name single-cell reference resolves', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localSheets = {
@@ -288,7 +285,7 @@ test('Cross-sheet - unquoted sheet name single-cell reference resolves', (t) => 
   assert.strictEqual(sandbox.getCellValue('A1'), '84');
 });
 
-test('Cross-sheet - referenced formula keeps its own sheet as the base', (t) => {
+test('Cross-sheet - referenced formula keeps its own sheet as the base', () => {
   // --- Arrange ---
   // Sheet1!C1 = A1 + B1 — those unqualified refs must resolve within Sheet1 even
   // though C1 is reached from Sheet2.
@@ -310,7 +307,7 @@ test('Cross-sheet - referenced formula keeps its own sheet as the base', (t) => 
   assert.strictEqual(sandbox.getCellValue('D1'), '12');
 });
 
-test('Cross-sheet - chained cross-sheet references resolve transitively', (t) => {
+test('Cross-sheet - chained cross-sheet references resolve transitively', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localSheets = {
@@ -324,7 +321,7 @@ test('Cross-sheet - chained cross-sheet references resolve transitively', (t) =>
   assert.strictEqual(sandbox.getCellValue('A1'), '35');
 });
 
-test('Cross-sheet - reference to an unknown sheet is treated as blank', (t) => {
+test('Cross-sheet - reference to an unknown sheet is treated as blank', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.localSheets = {
@@ -336,7 +333,7 @@ test('Cross-sheet - reference to an unknown sheet is treated as blank', (t) => {
   assert.strictEqual(sandbox.getCellValue('A1'), '0');
 });
 
-test('Cross-sheet - buildRangeRef qualifies picks made on a foreign sheet', (t) => {
+test('Cross-sheet - buildRangeRef qualifies picks made on a foreign sheet', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.activeSheetName = 'Sheet 1'; // the sheet the user picked on
@@ -351,7 +348,7 @@ test('Cross-sheet - buildRangeRef qualifies picks made on a foreign sheet', (t) 
   assert.strictEqual(single, "'Sheet 1'!B1");
 });
 
-test('Cross-sheet - buildRangeRef leaves same-sheet picks unqualified', (t) => {
+test('Cross-sheet - buildRangeRef leaves same-sheet picks unqualified', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
   sandbox.activeSheetName = 'Sheet2';
@@ -361,7 +358,7 @@ test('Cross-sheet - buildRangeRef leaves same-sheet picks unqualified', (t) => {
   assert.strictEqual(sandbox.buildRangeRef('E3', 'E5'), 'E3:E5');
 });
 
-test('Cross-sheet - formatSheetPrefix quotes only when needed', (t) => {
+test('Cross-sheet - formatSheetPrefix quotes only when needed', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
 
@@ -372,7 +369,7 @@ test('Cross-sheet - formatSheetPrefix quotes only when needed', (t) => {
   assert.strictEqual(sandbox.formatSheetPrefix("Bob's"), "'Bob''s'!");
 });
 
-test('Cross-sheet - parseFormulaRefs captures the sheet qualifier', (t) => {
+test('Cross-sheet - parseFormulaRefs captures the sheet qualifier', () => {
   // --- Arrange ---
   const sandbox = createSandbox();
 
@@ -387,9 +384,8 @@ test('Cross-sheet - parseFormulaRefs captures the sheet qualifier', (t) => {
   assert.strictEqual(refs, 'Sheet 1|E3|E5 ; Sheet2|B2|B2 ; null|A1|A1');
 });
 
-test('Toolbar - Formatting buttons toggle style on active cell', (t) => {
+test('Toolbar - Formatting buttons toggle style on active cell', () => {
   // --- Arrange ---
-  const appJsPath = path.resolve('public/app.js');
   const code = readAppBundle();
 
   // Track event listeners and active states
@@ -655,7 +651,7 @@ test('Toolbar - Formatting buttons toggle style on active cell', (t) => {
  * and that pressing the Backspace key clears the cell content.
  * Follows the Arrange-Act-Assert (AAA) pattern.
  */
-test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears cell', (t) => {
+test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears cell', () => {
   // --- Arrange ---
   // Read the latest app.js content to execute inside the VM context
   const code = readAppBundle();
@@ -703,7 +699,7 @@ test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears c
       addEventListener(event, cb) {
         documentListeners[event] = cb;
       },
-      createElement(tagName) {
+      createElement(_tagName) {
         return {
           className: '',
           innerHTML: '',
@@ -811,7 +807,7 @@ test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears c
   assert.strictEqual(sandbox.localCells['A1'].value, '');
 });
 
-test('Undo/Redo - Editing cell and triggering Undo/Redo buttons reverts and restores values', (t) => {
+test('Undo/Redo - Editing cell and triggering Undo/Redo buttons reverts and restores values', () => {
   // --- Arrange ---
   const code = readAppBundle();
   const documentListeners = {};
@@ -850,7 +846,7 @@ test('Undo/Redo - Editing cell and triggering Undo/Redo buttons reverts and rest
             },
             setAttribute(name, val) { this.attributes[name] = val; },
             removeAttribute(name) { delete this.attributes[name]; },
-            addEventListener(event, cb) {}
+            addEventListener(_event, _cb) {}
           };
         }
         // Returns mock elements for sheet-tabs-container and add-sheet-btn if requested
@@ -943,7 +939,7 @@ test('Undo/Redo - Editing cell and triggering Undo/Redo buttons reverts and rest
   assert.strictEqual(sandbox.localCells['A1'].value, 'New Value');
 });
 
-test('Sheets - Switching active sheet dynamically displays correct values and isolates changes', (t) => {
+test('Sheets - Switching active sheet dynamically displays correct values and isolates changes', () => {
   // --- Arrange ---
   const code = readAppBundle();
   const documentListeners = {};
@@ -968,7 +964,7 @@ test('Sheets - Switching active sheet dynamically displays correct values and is
     },
     activeSheetName: 'Sheet1',
     document: {
-      getElementById(id) {
+      getElementById(_id) {
         return {
           innerHTML: '',
           attributes: {},
@@ -1043,7 +1039,7 @@ test('Sheets - Switching active sheet dynamically displays correct values and is
   assert.strictEqual(sandbox.activeSheetName, 'Sheet2');
 });
 
-test('Sheets - Reordering sheet order updates active indexes', (t) => {
+test('Sheets - Reordering sheet order updates active indexes', () => {
   // --- Arrange ---
   // Load client-side code from public/app.js
   const code = readAppBundle();
@@ -1057,7 +1053,7 @@ test('Sheets - Reordering sheet order updates active indexes', (t) => {
     activeSheetName: 'Sheet1',
     sheetOrder: ['Sheet1', 'Sheet2'],
     document: {
-      getElementById(id) {
+      getElementById(_id) {
         return {
           innerHTML: '',
           attributes: {},
@@ -1126,7 +1122,7 @@ test('Sheets - Reordering sheet order updates active indexes', (t) => {
   assert.strictEqual(sandbox.activeSheetName, 'Sheet2');
 });
 
-test('Sheets - Switching restores each sheet\'s last selection and formula bar', (t) => {
+test('Sheets - Switching restores each sheet\'s last selection and formula bar', () => {
   // --- Arrange ---
   const code = readAppBundle();
 
@@ -1221,7 +1217,7 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
   assert.strictEqual(formulaBar.value, 'banana');
 });
 
-test('Selection - Selecting a cell highlights the corresponding row and column header indexes', (t) => {
+test('Selection - Selecting a cell highlights the corresponding row and column header indexes', () => {
   // --- Arrange ---
   // Read code of app.js to run in a mock sandboxed vm context
   const code = readAppBundle();
@@ -1301,9 +1297,8 @@ test('Selection - Selecting a cell highlights the corresponding row and column h
   assert.ok(mockRowHeader.classList.classes.includes('active-header'));
 });
 
-test('Toolbar - Dropdown menu closure conflict resolution', (t) => {
+test('Toolbar - Dropdown menu closure conflict resolution', () => {
   // --- Arrange ---
-  const appJsPath = path.resolve('public/app.js');
   const code = readAppBundle();
 
   // Track mock elements and event listeners for alignment dropdowns
@@ -1395,7 +1390,7 @@ test('Toolbar - Dropdown menu closure conflict resolution', (t) => {
   assert.ok(mockElements['toolbar-valign-menu'].classList.contains('hidden'));
 });
 
-test('Toolbar - Vertical alignment dropdown option click applies style format and updates active UI icon', (t) => {
+test('Toolbar - Vertical alignment dropdown option click applies style format and updates active UI icon', () => {
   // --- Arrange ---
   const code = readAppBundle();
 
@@ -1536,7 +1531,7 @@ test('Toolbar - Vertical alignment dropdown option click applies style format an
   assert.strictEqual(mockValignIcon.textContent, 'vertical_align_top');
 });
 
-test('Toolbar - Zoom selector controls, preset click, and manual input validation', (t) => {
+test('Toolbar - Zoom selector controls, preset click, and manual input validation', () => {
   // --- Arrange ---
   const code = readAppBundle();
 
@@ -1743,7 +1738,7 @@ test('Toolbar - Zoom selector controls, preset click, and manual input validatio
  * and pressing Enter in the formula bar updates the cell state and evaluates it.
  * Follows the Arrange-Act-Assert (AAA) pattern.
  */
-test('Formula Bar - Selecting a cell updates input value and pressing Enter updates cell state', (t) => {
+test('Formula Bar - Selecting a cell updates input value and pressing Enter updates cell state', () => {
   // --- Arrange ---
   // Read the latest app.js content to execute inside the VM context
   const code = readAppBundle();
@@ -1854,7 +1849,7 @@ test('Formula Bar - Selecting a cell updates input value and pressing Enter upda
   assert.strictEqual(wsSentPayload.payload.value, '50');
 });
 
-test('Range Selection & Composite Undo/Redo - Toggle format applies to range and reverts correctly', (t) => {
+test('Range Selection & Composite Undo/Redo - Toggle format applies to range and reverts correctly', () => {
   // --- Arrange ---
   const code = readAppBundle();
   let wsSentPayloads = [];
@@ -1906,7 +1901,7 @@ test('Range Selection & Composite Undo/Redo - Toggle format applies to range and
             },
             setAttribute(name, val) { this.attributes[name] = val; },
             removeAttribute(name) { delete this.attributes[name]; },
-            addEventListener(event, cb) {}
+            addEventListener(_event, _cb) {}
           };
         }
         if (id === 'add-sheet-btn' || id === 'sheet-tabs-container') {
@@ -1922,7 +1917,7 @@ test('Range Selection & Composite Undo/Redo - Toggle format applies to range and
         }
         return null;
       },
-      addEventListener(event, cb) {},
+      addEventListener(_event, _cb) {},
       createElement() {
         return { style: {}, appendChild() {}, remove() {} };
       },
@@ -2020,7 +2015,7 @@ test('Range Selection & Composite Undo/Redo - Toggle format applies to range and
   assert.strictEqual(sandbox.localCells['B2'].style.bold, true);
 });
 
-test('Range Selection & Composite Undo/Redo - Clear cell and formatting applies to range and reverts correctly', (t) => {
+test('Range Selection & Composite Undo/Redo - Clear cell and formatting applies to range and reverts correctly', () => {
   // --- Arrange ---
   const code = readAppBundle();
   let wsSentPayloads = [];
@@ -2072,7 +2067,7 @@ test('Range Selection & Composite Undo/Redo - Clear cell and formatting applies 
             },
             setAttribute(name, val) { this.attributes[name] = val; },
             removeAttribute(name) { delete this.attributes[name]; },
-            addEventListener(event, cb) {}
+            addEventListener(_event, _cb) {}
           };
         }
         if (id === 'add-sheet-btn' || id === 'sheet-tabs-container') {
@@ -2088,7 +2083,7 @@ test('Range Selection & Composite Undo/Redo - Clear cell and formatting applies 
         }
         return null;
       },
-      addEventListener(event, cb) {},
+      addEventListener(_event, _cb) {},
       createElement() {
         return { style: {}, appendChild() {}, remove() {} };
       },
@@ -2218,7 +2213,7 @@ test('Range Selection & Composite Undo/Redo - Clear cell and formatting applies 
  * preserves the visual selection highlight class ('grid-cell-selected')
  * on the target cell while correctly updating the cell styles in state and DOM.
  */
-test('Range Selection & DOM Update - Applying format preserves selection highlight and applies colors', (t) => {
+test('Range Selection & DOM Update - Applying format preserves selection highlight and applies colors', () => {
   // --- Arrange ---
   // Read client-side application code from public/app.js
   const code = readAppBundle();
@@ -2261,7 +2256,7 @@ test('Range Selection & DOM Update - Applying format preserves selection highlig
             classList: { add() {}, remove() {}, contains() { return false; } },
             setAttribute(name, val) { this.attributes[name] = val; },
             removeAttribute(name) { delete this.attributes[name]; },
-            addEventListener(event, cb) {}
+            addEventListener(_event, _cb) {}
           };
         }
         return null;
@@ -2272,7 +2267,7 @@ test('Range Selection & DOM Update - Applying format preserves selection highlig
         if (selector === '[data-cell-id="A1"]') return mockCellEl;
         return null;
       },
-      addEventListener(event, cb) {},
+      addEventListener(_event, _cb) {},
       createElement() {
         return { style: {}, appendChild() {}, remove() {} };
       },
@@ -2341,7 +2336,7 @@ test('Range Selection & DOM Update - Applying format preserves selection highlig
  * Verifies that copy/cut/paste works relative to active cell
  * and respects history undo/redo stacks.
  */
-test('Edit Menu & Clipboard - Copy, Cut, and Paste correctly duplicates values and styles', (t) => {
+test('Edit Menu & Clipboard - Copy, Cut, and Paste correctly duplicates values and styles', () => {
   // --- Arrange ---
   const code = readAppBundle();
   const createMockCell = () => ({
@@ -2370,7 +2365,7 @@ test('Edit Menu & Clipboard - Copy, Cut, and Paste correctly duplicates values a
     selectionEndCellId: 'B1',
     alert: () => {},
     document: {
-      getElementById(id) {
+      getElementById(_id) {
         return {
           attributes: {},
           classList: { add() {}, remove() {}, contains() { return false; } },
@@ -2490,7 +2485,7 @@ test('Edit Menu & Clipboard - Copy, Cut, and Paste correctly duplicates values a
  * Integration test case: Edit Menu & Search Replace
  * Verifies that find, replace, and replace all works correctly.
  */
-test('Edit Menu & Search Replace - Find, Replace, and Replace All modify values appropriately', (t) => {
+test('Edit Menu & Search Replace - Find, Replace, and Replace All modify values appropriately', () => {
   // --- Arrange ---
   const code = readAppBundle();
   const mockInputs = {

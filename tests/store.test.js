@@ -101,7 +101,7 @@ async function waitForCell(db, cellId, timeoutMs = 2000) {
   throw new Error(`Timeout waiting for cell ${cellId} to persist`);
 }
 
-test('Sheet cell state is correctly loaded from and saved to the database', async (t) => {
+test('Sheet cell state is correctly loaded from and saved to the database', async () => {
   // --- Arrange ---
   const db = await createTestDb('store');
 
@@ -185,7 +185,7 @@ test('Sheet cell state is correctly loaded from and saved to the database', asyn
   }
 });
 
-test('Access to /api/cells requires authentication when not authenticated', async (t) => {
+test('Access to /api/cells requires authentication when not authenticated', async () => {
   // --- Arrange ---
   // Spawn the server in test mode, but do not log in.
   const db = await createTestDb('store-auth');
@@ -210,7 +210,7 @@ test('Access to /api/cells requires authentication when not authenticated', asyn
   }
 });
 
-test('POST /api/cells validates cell ID, prototype keys, and strict payload schema', async (t) => {
+test('POST /api/cells validates cell ID, prototype keys, and strict payload schema', async () => {
   // --- Arrange ---
   // Spawn the server in test mode.
   const db = await createTestDb('store-validate');
@@ -417,7 +417,7 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
   }
 });
 
-test('State - loadState initializes default sheet metadata and migrates legacy formats', async (t) => {
+test('State - loadState initializes default sheet metadata and migrates legacy formats', async () => {
   // --- Arrange ---
   // Read the server.js source code to extract the loadState function for execution.
   const code = fs.readFileSync(path.resolve('server.js'), 'utf8');
@@ -445,7 +445,7 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
     __dirname: path.resolve('.'),
     Object: Object,
     pool: {
-      async query(sql, params) {
+      async query(sql, _params) {
         if (/SELECT\s+state/i.test(sql)) {
           if (fs.existsSync(tempStorePath)) {
             const data = fs.readFileSync(tempStorePath, 'utf8');
@@ -459,7 +459,7 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
     // loadState now reads through the db/workbook repository rather than calling
     // pool.query directly, so the sandbox supplies a matching stub.
     workbookRepo: {
-      async getWorkbookState(key) {
+      async getWorkbookState(_key) {
         if (fs.existsSync(tempStorePath)) {
           const data = fs.readFileSync(tempStorePath, 'utf8');
           return JSON.parse(data);

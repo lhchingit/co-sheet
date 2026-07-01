@@ -48,9 +48,10 @@ export default [
       globals: { ...globals.node },
     },
     rules: {
-      // Signal intent: allow deliberately-unused args prefixed with _ (e.g. Express
-      // (req, res, next) middleware signatures) and caught errors we don't inspect.
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+      // Signal intent with a leading _: deliberately-unused args (e.g. Express
+      // (req, res, next) signatures, API-shaped mock methods) and vars kept on
+      // purpose are ignored; caught errors we don't inspect are allowed too.
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
 
@@ -69,7 +70,7 @@ export default [
       },
     },
     rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
 
@@ -85,7 +86,7 @@ export default [
       // public/*.js expose and consume each other's top-level functions as browser
       // globals; without a module system that's not something no-undef can see.
       'no-undef': 'off',
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
 ];

@@ -62,7 +62,7 @@ async function wsSendOnce(port, fileId, message, cookie) {
   await new Promise((r) => { ws.on('close', r); setTimeout(r, 300); });
 }
 
-test('File access control - ownership, one-file quota, and edit/rename/delete gating', async (t) => {
+test('File access control - ownership, one-file quota, and edit/rename/delete gating', async () => {
   // --- Arrange ---
   const db = await createTestDb('access');
   const PORT = '31480';

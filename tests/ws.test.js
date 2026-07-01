@@ -83,7 +83,7 @@ async function loginAndGetCookie(port, username) {
   return Array.isArray(setCookie) ? setCookie[0] : setCookie;
 }
 
-test('WebSocket - Client receives init payload on connect', async (t) => {
+test('WebSocket - Client receives init payload on connect', async () => {
   // --- Arrange ---
   const PORT = '31301';
   const db = await createTestDb('ws-init');
@@ -133,7 +133,7 @@ test('WebSocket - Client receives init payload on connect', async (t) => {
   }
 });
 
-test('WebSocket - Active cursor presence and cursor-move events are broadcasted to other clients', async (t) => {
+test('WebSocket - Active cursor presence and cursor-move events are broadcasted to other clients', async () => {
   // --- Arrange ---
   const PORT = '31302';
   const db = await createTestDb('ws-cursor');
@@ -215,7 +215,7 @@ test('WebSocket - Active cursor presence and cursor-move events are broadcasted 
   }
 });
 
-test('WebSocket - Cell-edit events are processed, saved to store, and broadcasted to other clients', async (t) => {
+test('WebSocket - Cell-edit events are processed, saved to store, and broadcasted to other clients', async () => {
   // --- Arrange ---
   const PORT = '31303';
   const db = await createTestDb('ws-celledit');
@@ -305,7 +305,7 @@ test('WebSocket - Cell-edit events are processed, saved to store, and broadcaste
   }
 });
 
-test('WebSocket - Client disconnect broadcasts user-leave event to remaining clients', async (t) => {
+test('WebSocket - Client disconnect broadcasts user-leave event to remaining clients', async () => {
   // --- Arrange ---
   const PORT = '31304';
   const db = await createTestDb('ws-leave');
@@ -388,7 +388,7 @@ test('WebSocket - Client disconnect broadcasts user-leave event to remaining cli
   }
 });
 
-test('WebSocket - Heartbeat reaps a silently-dropped connection and broadcasts user-leave', async (t) => {
+test('WebSocket - Heartbeat reaps a silently-dropped connection and broadcasts user-leave', async () => {
   // --- Arrange ---
   // A client that stops responding (half-open TCP, laptop sleep) does NOT trigger
   // the server's `close` handler, so its presence tag would linger and appear as a
@@ -461,7 +461,7 @@ test('WebSocket - Heartbeat reaps a silently-dropped connection and broadcasts u
   }
 });
 
-test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-specific cursors', async (t) => {
+test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-specific cursors', async () => {
   // --- Arrange ---
   const wsUrl = 'ws://localhost:31305';
   const db = await createTestDb('ws-sheets');
@@ -527,7 +527,7 @@ test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-spec
  * modifications (delete, copy, rename, color, hide, reorder) and broadcasts them correctly.
  * Follows the AAA pattern.
  */
-test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reorder', async (t) => {
+test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reorder', async () => {
   // --- Arrange ---
   // Define WebSocket URL and clean up any pre-existing test files on port 31306
   const wsUrl = 'ws://localhost:31306';

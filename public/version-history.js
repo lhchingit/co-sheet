@@ -285,7 +285,6 @@
 
     const normalHeader = document.querySelector('header');
     const utilityShelf = document.querySelector('aside:not(#history-sidebar)');
-    const bottomFooter = document.querySelector('footer');
     const mainContent = document.querySelector('main');
 
     const historyTopBar = document.getElementById('history-top-bar');

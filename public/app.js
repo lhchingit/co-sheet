@@ -12,7 +12,7 @@
 // i18n.js) loaded before this file; each publishes onto window.CoSheet. Re-bind
 // them to local names so the rest of app.js continues to use bare identifiers.
 // ---------------------------------------------------------------------------
-const { escapeHtml, getColLetter, getColNumber, parseCellCoord, parseCoordinates } = window.CoSheet.utils;
+const { escapeHtml, getColLetter, parseCellCoord, parseCoordinates } = window.CoSheet.utils;
 const { evaluateFormula } = window.CoSheet.formula;
 const { t, getLang, translatePage, loadLocales } = window.CoSheet.i18n;
 // Sandboxed test environment decoration and safety fallbacks
@@ -113,7 +113,7 @@ if (typeof document !== 'undefined' && document) {
 
   // Decorate document.createElement if it's missing or incomplete
   const origCreateElement = document.createElement;
-  document.createElement = function(tagName) {
+  document.createElement = function(_tagName) {
     let el = {};
     if (typeof origCreateElement === 'function') {
       try { el = origCreateElement.apply(this, arguments) || {}; } catch(e) {}
@@ -123,7 +123,7 @@ if (typeof document !== 'undefined' && document) {
 
   // Decorate document.getElementById to return safely decorated elements
   const origGetElementById = document.getElementById;
-  document.getElementById = function(id) {
+  document.getElementById = function(_id) {
     let el = null;
     if (typeof origGetElementById === 'function') {
       try { el = origGetElementById.apply(this, arguments); } catch(e) {}
@@ -187,7 +187,7 @@ let localCells = new Proxy({}, {
   has(target, prop) {
     return !!(localSheets[activeSheetName] && prop in localSheets[activeSheetName]);
   },
-  ownKeys(target) {
+  ownKeys(_target) {
     return localSheets[activeSheetName] ? Reflect.ownKeys(localSheets[activeSheetName]) : [];
   },
   getOwnPropertyDescriptor(target, prop) {
@@ -255,12 +255,6 @@ const getColWidth = (colLetter, sheetName = activeSheetName) => {
   const m = colWidths[sheetName];
   const w = m && m[colLetter];
   return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
-};
-/** Resolved height (px) of a row number on the active sheet. */
-const getRowHeight = (row, sheetName = activeSheetName) => {
-  const m = rowHeights[sheetName];
-  const h = m && m[row];
-  return (typeof h === 'number' && isFinite(h)) ? h : DEFAULT_ROW_HEIGHT;
 };
 /** Whether the active sheet has any custom (non-default) row heights. */
 const sheetHasCustomRowHeights = (sheetName = activeSheetName) => {
@@ -557,7 +551,7 @@ function handleSocketMessage(event) {
 
     // Dynamic cursor presence update from other peers
     if (type === 'cursor-update') {
-      const { userId, username, color, activeCell, activeSheet } = payload;
+      const { userId, activeCell, activeSheet } = payload;
       removeCursorBorder(userId);
       const sheet = activeSheet || 'Sheet1';
       payload.activeSheet = sheet;
@@ -3308,6 +3302,7 @@ const toggleFormat = (cellId, property) => {
  * Compatibility wrapper to toggle border styling for selection range.
  * @param {string} cellId - The target cell ID.
  */
+// eslint-disable-next-line no-unused-vars -- retained wrapper; no in-app caller, but exercised by the format-recalc test suite.
 const toggleBorder = (cellId) => {
   const selectedIds = getSelectedCellIds();
   const cellIds = selectedIds.includes(cellId) ? selectedIds : [cellId];
@@ -6821,9 +6816,9 @@ const showDeleteSheetDialog = (sheetName, onConfirm) => {
  * Renders and displays the context actions menu for a sheet tab.
  * @param {string} sheetName - The sheet name to target.
  * @param {number} x - Click x coordinate.
- * @param {number} y - Click y coordinate.
+ * @param {number} _y - Click y coordinate (unused; menu anchors on x only).
  */
-const showSheetContextMenu = (sheetName, x, y) => {
+const showSheetContextMenu = (sheetName, x, _y) => {
   // Dismiss any existing context menus first
   const existing = document.getElementById('sheet-context-menu');
   if (existing) existing.remove();

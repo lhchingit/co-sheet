@@ -23,7 +23,7 @@ after(async () => {
   if (db) await db.cleanup();
 });
 
-test('HTTP Server returns 200 OK for login page', async (t) => {
+test('HTTP Server returns 200 OK for login page', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31234) to avoid port conflicts with running servers.
   // We pass the PORT environment variable to the child process.
@@ -53,7 +53,7 @@ test('HTTP Server returns 200 OK for login page', async (t) => {
   }
 });
 
-test('HTTP Server serves app.js statically without authentication', async (t) => {
+test('HTTP Server serves app.js statically without authentication', async () => {
   // --- Arrange ---
   const PORT = '31234';
   const child = spawn('node', ['server.js'], {
@@ -77,7 +77,7 @@ test('HTTP Server serves app.js statically without authentication', async (t) =>
   }
 });
 
-test('HTTP Server serves the spreadsheet editor at /sheet containing grid-root and app.js link when authenticated', async (t) => {
+test('HTTP Server serves the spreadsheet editor at /sheet containing grid-root and app.js link when authenticated', async () => {
   // --- Arrange ---
   const PORT = '31234';
   const child = spawn('node', ['server.js'], {

@@ -25,7 +25,7 @@ after(async () => {
   if (db) await db.cleanup();
 });
 
-test('OIDC metadata endpoint serves openid-configuration JSON', async (t) => {
+test('OIDC metadata endpoint serves openid-configuration JSON', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31235) to avoid port conflicts.
   // We pass the PORT environment variable to the child process.
@@ -67,7 +67,7 @@ test('OIDC metadata endpoint serves openid-configuration JSON', async (t) => {
   }
 });
 
-test('OIDC JWKS endpoint returns the mock public key', async (t) => {
+test('OIDC JWKS endpoint returns the mock public key', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31235) to avoid port conflicts.
   const child = spawn('node', ['server.js'], {
@@ -98,7 +98,7 @@ test('OIDC JWKS endpoint returns the mock public key', async (t) => {
   }
 });
 
-test('OIDC authorization endpoint rejects non-local redirect_uri', async (t) => {
+test('OIDC authorization endpoint rejects non-local redirect_uri', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31235) to avoid port conflicts.
   const child = spawn('node', ['server.js'], {
@@ -134,7 +134,7 @@ test('OIDC authorization endpoint rejects non-local redirect_uri', async (t) => 
   }
 });
 
-test('OIDC full authentication flow works successfully', async (t) => {
+test('OIDC full authentication flow works successfully', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31235) to avoid port conflicts.
   const child = spawn('node', ['server.js'], {
@@ -201,7 +201,7 @@ test('OIDC full authentication flow works successfully', async (t) => {
   }
 });
 
-test('OIDC edge cases: protocol restriction, invalid token, and invalid code validation', async (t) => {
+test('OIDC edge cases: protocol restriction, invalid token, and invalid code validation', async () => {
   // --- Arrange ---
   // Start the server process on a custom port (31235) to avoid port conflicts.
   const child = spawn('node', ['server.js'], {
@@ -297,7 +297,7 @@ async function fetchLoginPage(extraEnv) {
   }
 }
 
-test('Login page shows the Mock OIDC button by default (non-production)', async (t) => {
+test('Login page shows the Mock OIDC button by default (non-production)', async () => {
   // NODE_ENV=test (set at the top of this file) is not production, so the mock
   // button should be present without any explicit flag.
   const html = await fetchLoginPage({ MOCK_OIDC_ENABLED: '' });
@@ -307,7 +307,7 @@ test('Login page shows the Mock OIDC button by default (non-production)', async 
   assert.ok(html.includes('Sign in with Google'));
 });
 
-test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async (t) => {
+test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async () => {
   const html = await fetchLoginPage({ MOCK_OIDC_ENABLED: 'false' });
   assert.ok(!html.includes('Sign in with Mock OIDC'));
   // The other login options remain intact.
@@ -315,17 +315,17 @@ test('Login page hides the Mock OIDC button when MOCK_OIDC_ENABLED=false', async
   assert.ok(html.includes('Sign in with Google'));
 });
 
-test('Login page hides the Mock OIDC button in production by default', async (t) => {
+test('Login page hides the Mock OIDC button in production by default', async () => {
   const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: '' });
   assert.ok(!html.includes('Sign in with Mock OIDC'));
 });
 
-test('Login page shows the Mock OIDC button in production when explicitly enabled', async (t) => {
+test('Login page shows the Mock OIDC button in production when explicitly enabled', async () => {
   const html = await fetchLoginPage({ NODE_ENV: 'production', MOCK_OIDC_ENABLED: 'true' });
   assert.ok(html.includes('Sign in with Mock OIDC'));
 });
 
-test('Mock OIDC endpoints return 404 when disabled', async (t) => {
+test('Mock OIDC endpoints return 404 when disabled', async () => {
   // Boot with the mock provider disabled and confirm the provider/login routes are
   // unreachable, not merely hidden on the login page.
   const child = spawn('node', ['server.js'], {
@@ -356,7 +356,7 @@ test('Mock OIDC endpoints return 404 when disabled', async (t) => {
   }
 });
 
-test('Login page shows the Google button by default', async (t) => {
+test('Login page shows the Google button by default', async () => {
   // Google is the primary production sign-in, so it is enabled without any flag.
   const html = await fetchLoginPage({ GOOGLE_LOGIN_ENABLED: '' });
   assert.ok(html.includes('Sign in with Google'));
@@ -365,13 +365,13 @@ test('Login page shows the Google button by default', async (t) => {
   assert.ok(html.includes('Sign in with Mock OIDC'));
 });
 
-test('Login page still shows the Google button in production by default', async (t) => {
+test('Login page still shows the Google button in production by default', async () => {
   // Unlike the mock provider, Google stays enabled in production unless turned off.
   const html = await fetchLoginPage({ NODE_ENV: 'production', GOOGLE_LOGIN_ENABLED: '' });
   assert.ok(html.includes('Sign in with Google'));
 });
 
-test('Login page hides the Google button when GOOGLE_LOGIN_ENABLED=false', async (t) => {
+test('Login page hides the Google button when GOOGLE_LOGIN_ENABLED=false', async () => {
   const html = await fetchLoginPage({ GOOGLE_LOGIN_ENABLED: 'false' });
   assert.ok(!html.includes('Sign in with Google'));
   // The other login options remain intact.
@@ -379,7 +379,7 @@ test('Login page hides the Google button when GOOGLE_LOGIN_ENABLED=false', async
   assert.ok(html.includes('Sign in with Mock OIDC'));
 });
 
-test('Google endpoints return 404 when disabled', async (t) => {
+test('Google endpoints return 404 when disabled', async () => {
   // Boot with Google login disabled and confirm the sign-in routes are unreachable,
   // not merely hidden on the login page.
   const child = spawn('node', ['server.js'], {

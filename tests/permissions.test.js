@@ -56,7 +56,7 @@ async function loginAndRegister(port, username) {
   return { cookie, me: me.data };
 }
 
-test('Permissions - RBAC roles, env super admin bootstrap, and role-change guardrails', async (t) => {
+test('Permissions - RBAC roles, env super admin bootstrap, and role-change guardrails', async () => {
   // --- Arrange ---
   const db = await createTestDb('perms');
   const PORT = '31460';

@@ -47,7 +47,7 @@ async function loginAndRegister(port, username) {
 
 const rowFor = (list, id) => (Array.isArray(list) ? list.find((f) => f.id === id) : null);
 
-test('File starring - per-user favourites, view-access gating, and starred flag', async (t) => {
+test('File starring - per-user favourites, view-access gating, and starred flag', async () => {
   // --- Arrange ---
   const db = await createTestDb('star');
   const PORT = '31490';
