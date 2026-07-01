@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 
 /**
- * @file file_star.test.js
+ * @file file-star.test.js
  * @description Integration tests for per-user file starring (PUT /api/files/:id/star).
  * Starring is a personal favourite: it requires only view access, is tracked
  * separately per user (Alice starring a file does not star it for Bob), and is

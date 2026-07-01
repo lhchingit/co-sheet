@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 
 /**
- * @file realtime_multi_instance.test.js
+ * @file realtime-multi-instance.test.js
  * @description Integration tests for cross-instance realtime fan-out via Redis.
  *
  * These spin up TWO server processes sharing one Redis and one PostgreSQL database
@@ -14,7 +14,7 @@ process.env.NODE_ENV = 'test';
  * `npm test`. If you invoke `node --test` directly the suite skips itself unless
  * REDIS_URL is set, e.g. (after `docker compose up -d redis`):
  *
- *   REDIS_URL=redis://localhost:6379 node --test tests/realtime_multi_instance.test.js
+ *   REDIS_URL=redis://localhost:6379 node --test tests/realtime-multi-instance.test.js
  */
 
 import test from 'node:test';

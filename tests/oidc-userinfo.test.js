@@ -1,5 +1,5 @@
 /**
- * @file oidc_userinfo.test.js
+ * @file oidc-userinfo.test.js
  * @description Unit tests for the OIDC_SKIP_USERINFO decision helper that controls
  * whether the external ("Local OIDC") provider's userinfo endpoint is skipped (for
  * providers that don't expose one).

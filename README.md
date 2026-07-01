@@ -188,7 +188,7 @@ starts throwaway PostgreSQL and Redis containers via [Testcontainers](https://te
 exposes them as `DATABASE_URL` / `REDIS_URL`, then runs `node --test`. Each test carves out its own
 isolated database on the PostgreSQL server (see `tests/helpers/db.js`), so there is no shared,
 mutable store. Because `REDIS_URL` is provided, the cross-instance realtime fan-out tests
-(`tests/realtime_multi_instance.test.js`) run rather than skip. **Docker must be running**; no
+(`tests/realtime-multi-instance.test.js`) run rather than skip. **Docker must be running**; no
 other setup is needed.
 
 ```bash
