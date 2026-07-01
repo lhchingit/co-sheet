@@ -154,6 +154,7 @@ cp .env.example .env
 | `DATABASE_URL`       | PostgreSQL connection URI.                                                   |
 | `REDIS_URL`          | Redis connection URI (or comma-separated seed nodes). Enables a Redis-backed session store and the realtime pub/sub bus for multi-replica deployments. Unset → single-instance in-memory mode. |
 | `REDIS_CLUSTER`      | Set `true` when `REDIS_URL` points at a cluster-mode Redis (slot-aware client). |
+| `METRICS_PORT`       | Expose Prometheus metrics at `GET /metrics` on this dedicated port (separate from the app port, so it can be firewalled to the monitoring network). Unset → metrics disabled with zero overhead. Series: default Node/process metrics, `http_request_duration_seconds`, `ws_active_connections`, `active_users`, `db_up`, `redis_up`. |
 | `GOOGLE_CLIENT_ID`   | Google OAuth 2.0 client ID (OIDC).                                           |
 | `GOOGLE_CLIENT_SECRET`| Google OAuth 2.0 client secret.                                            |
 | `GOOGLE_LOGIN_ENABLED`| Toggle "Sign in with Google" (enabled by default). Set `false`/`0`/`no`/`off` to remove the button and make the `/auth/google` routes return 404. |
