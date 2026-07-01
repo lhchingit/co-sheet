@@ -3,7 +3,7 @@ import zlib from 'zlib';
 import { SHEET_NAME_REGEX } from './validators.js';
 
 /**
- * @file services/xlsxImport.js
+ * @file services/xlsx-import.js
  * @description Dependency-free .xlsx (Office Open XML) reader. Parses an uploaded
  * workbook Buffer into co-sheet's workbook shape: ordered sheets of cells (value +
  * formula + style), per-sheet column widths / row heights, sheet tab colors, and
@@ -38,7 +38,7 @@ const MAX_VALUE_LEN = 200;
 const MAX_FORMULA_LEN = 200;
 // Defensive overall ceiling so a hostile/huge sheet can't exhaust memory.
 const MAX_TOTAL_CELLS = 200000;
-// Column-width / row-height clamp (px), mirroring services/dimensionService.js.
+// Column-width / row-height clamp (px), mirroring services/dimension-service.js.
 const MIN_TRACK = 20;
 const MAX_TRACK = 2000;
 

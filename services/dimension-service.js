@@ -2,7 +2,7 @@
 import { isValidSheetName } from './validators.js';
 
 /**
- * @file services/dimensionService.js
+ * @file services/dimension-service.js
  * @description Transport-agnostic column-width / row-height operations. Sizes are
  * stored per sheet on the workbook as `wb.colWidths` / `wb.rowHeights`, each a map
  * keyed by sheet name → { [colLetter|rowNumber]: pixels }. Each function validates

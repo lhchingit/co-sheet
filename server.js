@@ -32,13 +32,13 @@ import * as workbookRepo from './db/workbook.js';
 
 // Service layer: transport-agnostic business logic shared by the REST routes and
 // the WebSocket handler.
-import * as cellService from './services/cellService.js';
-import * as sheetService from './services/sheetService.js';
-import * as dimensionService from './services/dimensionService.js';
-import { shouldSkipOidcTls } from './services/oidcTls.js';
-import { isExternalOidcUserinfoSkipped } from './services/oidcProfile.js';
-import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtimeBus.js';
-import { parseXlsx } from './services/xlsxImport.js';
+import * as cellService from './services/cell-service.js';
+import * as sheetService from './services/sheet-service.js';
+import * as dimensionService from './services/dimension-service.js';
+import { shouldSkipOidcTls } from './services/oidc-tls.js';
+import { isExternalOidcUserinfoSkipped } from './services/oidc-profile.js';
+import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtime-bus.js';
+import { parseXlsx } from './services/xlsx-import.js';
 import { logger, component } from './services/logger.js';
 
 // Per-subsystem child loggers. Each tags its lines with a `component` field so
@@ -509,7 +509,7 @@ const isExternalOidcConfigured = () => Boolean(
 /**
  * Build the HTTPS agent to hand the 'oidc-sso' strategy, or undefined to use the
  * default (verifying) agent. Returns an insecure agent only when OIDC_TLS_VERIFY
- * is disabled AND a configured endpoint is HTTPS (see services/oidcTls.js). This
+ * is disabled AND a configured endpoint is HTTPS (see services/oidc-tls.js). This
  * exists because a self-hosted OIDC server on the LAN often uses a self-signed
  * certificate whose CA is not installed in the machine's trust store, which would
  * otherwise fail token/userinfo calls with UNABLE_TO_VERIFY_LEAF_SIGNATURE /
@@ -1716,7 +1716,7 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
  * Creates a new file from an uploaded .xlsx workbook. The raw file bytes are the
  * request body (Content-Type: application/octet-stream); the display name comes
  * from the `?name=` query. Imports cell values and sheet structure only (styles
- * and formulas are dropped — see services/xlsxImport.js). The per-role file quota
+ * and formulas are dropped — see services/xlsx-import.js). The per-role file quota
  * is enforced *before* parsing, so an over-quota user gets a clean 403 without the
  * upload being processed. Protected with ensureAuthenticated middleware.
  */
