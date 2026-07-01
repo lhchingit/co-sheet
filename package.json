@@ -9,6 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "node tests/run-integration.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
     "build:css": "tailwindcss -c tailwind/editor.config.cjs -i tailwind/base.css -o public/styles-editor.css --minify && tailwindcss -c tailwind/drive.config.cjs -i tailwind/base.css -o public/styles-drive.css --minify && tailwindcss -c tailwind/login.config.cjs -i tailwind/base.css -o public/styles-login.css --minify"
@@ -26,11 +28,14 @@
     "ws": "^8.17.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@tailwindcss/container-queries": "^0.1.1",
     "@tailwindcss/forms": "^0.5.11",
     "@testcontainers/postgresql": "^12.0.3",
     "@testcontainers/redis": "^12.0.3",
     "@types/node": "^25.9.3",
+    "eslint": "^9.39.4",
+    "globals": "^17.7.0",
     "tailwindcss": "^3.4.19",
     "testcontainers": "^12.0.3",
     "typescript": "^6.0.3"

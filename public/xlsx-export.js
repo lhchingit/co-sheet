@@ -58,7 +58,7 @@
 
   // Excel worksheet names cannot exceed 31 chars or contain []:*?/\ characters.
   const sanitizeSheetName = (name, fallbackIndex) => {
-    let n = String(name == null ? '' : name).replace(/[\[\]:*?/\\]/g, ' ').trim();
+    let n = String(name == null ? '' : name).replace(/[[\]:*?/\\]/g, ' ').trim();
     if (!n) n = `Sheet${fallbackIndex}`;
     return n.slice(0, 31);
   };

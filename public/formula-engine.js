@@ -549,6 +549,7 @@ const FORMULA_FUNCS = {
   LOWER: (a, c) => strAt(a, c, 0).toLowerCase(),
   PROPER: (a, c) => strAt(a, c, 0).replace(/\b\w/g, ch => ch.toUpperCase()).replace(/\B\w/g, ch => ch.toLowerCase()),
   TRIM: (a, c) => strAt(a, c, 0).replace(/\s+/g, ' ').trim(),
+  // eslint-disable-next-line no-control-regex -- Excel's CLEAN removes control chars 0x00-0x1F by design.
   CLEAN: (a, c) => strAt(a, c, 0).replace(/[\x00-\x1F]/g, ''),
   CHAR: (a, c) => String.fromCharCode(numAt(a, c, 0)),
   CODE: (a, c) => { const s = strAt(a, c, 0); return s.length ? s.charCodeAt(0) : mkErr('#VALUE!'); },
