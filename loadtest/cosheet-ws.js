@@ -20,7 +20,7 @@
 // See loadtest/README.md for what to watch and the known caveats.
 import ws from 'k6/ws';
 import http from 'k6/http';
-import { check } from 'k6';
+import { check, sleep } from 'k6';
 import { Trend, Counter } from 'k6/metrics';
 
 const BASE        = __ENV.BASE_URL    || 'http://localhost:3000';
@@ -28,6 +28,11 @@ const WS_BASE     = BASE.replace(/^http/, 'ws');
 const FILE        = __ENV.FILE_ID     || 'default';   // 'default' => no auth needed
 const SESSION_SEC = Number(__ENV.SESSION_SEC || 60);
 const NO_AUTH     = !!__ENV.NO_AUTH;
+// Seconds a VU waits after a FAILED handshake before looping to reconnect. Without
+// this, a saturated server sends every rejected client into an immediate reconnect
+// loop — a thundering herd that both accelerates the collapse and inflates the
+// failure counts, so you can't read the real ceiling. Default 1s; set 0 to disable.
+const RECONNECT_BACKOFF = Number(__ENV.RECONNECT_BACKOFF === undefined ? 1 : __ENV.RECONNECT_BACKOFF);
 
 const initLatency = new Trend('cosheet_init_ms', true);   // connect -> 'init' received
 const cellRecv    = new Counter('cosheet_cell_updates_recv');
@@ -100,5 +105,9 @@ export default function () {
     });
   });
 
-  check(res, { 'handshake 101': (r) => r && r.status === 101 });
+  const ok = check(res, { 'handshake 101': (r) => r && r.status === 101 });
+
+  // Back off after a failed handshake so rejected clients don't stampede the server
+  // with instant reconnects (see RECONNECT_BACKOFF). No effect on the happy path.
+  if (!ok && RECONNECT_BACKOFF > 0) sleep(RECONNECT_BACKOFF);
 }
