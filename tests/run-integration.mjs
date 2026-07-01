@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
  * the Node test runner against them. Each test carves out its own database on the
  * PostgreSQL server (see tests/helpers/db.js), so the suite exercises real SQL
  * end-to-end with no mock. With Redis present, the cross-instance realtime fan-out
- * tests (tests/realtime_multi_instance.test.js) run instead of skipping.
+ * tests (tests/realtime-multi-instance.test.js) run instead of skipping.
  *
  * Usage:
  *   node tests/run-integration.mjs [node --test flags] [test files]

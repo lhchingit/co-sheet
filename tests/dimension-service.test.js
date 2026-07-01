@@ -1,5 +1,5 @@
 /**
- * @file dimensionService.test.js
+ * @file dimension-service.test.js
  * @description Unit tests for the transport-agnostic column-width / row-height
  * service: input validation, clamping, lazy per-sheet bucket creation, and the
  * { ok: false } no-op contract.

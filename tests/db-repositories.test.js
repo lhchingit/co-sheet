@@ -1,5 +1,5 @@
 /**
- * @file db_repositories.test.js
+ * @file db-repositories.test.js
  * @description Direct integration tests for the db/ repository layer. The rest of the
  * suite drives these functions indirectly through spawned server processes, where
  * `--experimental-test-coverage` cannot see them; here we import each repository

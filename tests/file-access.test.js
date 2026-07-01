@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 
 /**
- * @file file_access.test.js
+ * @file file-access.test.js
  * @description Integration tests for file-level access control: the one-file
  * creation quota for regular users (admins/super admins unlimited), file
  * ownership (creator becomes owner), and the rule that only the owner, admins,

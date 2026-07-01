@@ -1,5 +1,5 @@
 /**
- * @file oidc_tls.test.js
+ * @file oidc-tls.test.js
  * @description Unit tests for the Local-OIDC TLS-verification decision helpers:
  * the OIDC_TLS_VERIFY parsing and the HTTPS-endpoint gate that together decide
  * whether the server skips outbound certificate verification.

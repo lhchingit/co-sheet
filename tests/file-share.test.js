@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 
 /**
- * @file file_share.test.js
+ * @file file-share.test.js
  * @description Integration tests for file sharing with roles: a file's owner
  * searches the user database, shares the file (default role = editor), and those
  * users then see the file in their drive. Editors can modify; viewers are read-only.
