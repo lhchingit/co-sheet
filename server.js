@@ -2804,8 +2804,11 @@ bus.onMessage(handleBusMessage);
 
 // Handle incoming WebSocket connection requests.
 wss.on('connection', async (ws, req) => {
-  // Generate a unique identifier for the connection socket.
-  const wsId = Math.random().toString(36).substring(2, 9);
+  // Generate a unique identifier for the connection socket. Use a CSPRNG
+  // (crypto.randomBytes) rather than Math.random(): this id is surfaced to other
+  // clients as a presence/user handle and used to key connection state, so it must
+  // not be predictable. Matches the id scheme used elsewhere for file ids.
+  const wsId = crypto.randomBytes(9).toString('hex');
 
   // Determine username: Use the authenticated passport session user if present, or fallback to mock name.
   const sessionUser = req.sessionUser;
