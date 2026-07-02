@@ -39,6 +39,7 @@ import { shouldSkipOidcTls } from './services/oidc-tls.js';
 import { isExternalOidcUserinfoSkipped } from './services/oidc-profile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtime-bus.js';
 import { parseXlsx } from './services/xlsx-import.js';
+import { createRateLimiters } from './services/rate-limit.js';
 import { logger, component } from './services/logger.js';
 import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware } from './services/metrics.js';
 
@@ -56,6 +57,20 @@ const __dirname = path.dirname(__filename);
 
 // Initialize the Express application instance.
 const app = express();
+
+// Trust the reverse proxy in front of the app (Cloud Run, a load balancer, nginx)
+// so req.ip / req.protocol reflect the real client instead of the proxy. This is
+// required for the auth rate limiter to key by the true client IP — without it every
+// request appears to come from the proxy and the whole fleet shares one bucket.
+// TRUST_PROXY accepts a hop count (e.g. 1 for Cloud Run), a boolean, or an Express
+// trust-proxy string (subnet/preset). Default: disabled, for local/dev correctness.
+const TRUST_PROXY = process.env.TRUST_PROXY;
+if (TRUST_PROXY) {
+  if (/^(1|true|yes|on)$/i.test(TRUST_PROXY)) app.set('trust proxy', 1);
+  else if (/^(0|false|no|off)$/i.test(TRUST_PROXY)) app.set('trust proxy', false);
+  else if (/^\d+$/.test(TRUST_PROXY)) app.set('trust proxy', Number(TRUST_PROXY));
+  else app.set('trust proxy', TRUST_PROXY);
+}
 
 // Determine the port number: default to 3000 unless overridden by the PORT environment variable.
 const PORT = process.env.PORT || 3000;
@@ -513,6 +528,31 @@ passport.serializeUser((user, done) => {
 passport.deserializeUser((obj, done) => {
   done(null, obj);
 });
+
+// Rate limiting for auth + write routes. The counter store is shared across app
+// instances via Redis when configured, so limits are enforced globally (not per
+// replica); a dedicated connection keeps limiter traffic off the session client.
+// Enabled in production by default (RATE_LIMIT_ENABLED overrides) — the middleware is
+// always mounted but stays inert elsewhere, so local dev and tests are unaffected.
+const RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED
+  ? /^(1|true|yes|on)$/i.test(process.env.RATE_LIMIT_ENABLED)
+  : process.env.NODE_ENV === 'production';
+let rateLimitRedisClient = null;
+if (redisConfig && RATE_LIMIT_ENABLED) {
+  rateLimitRedisClient = await createRedisClient(redisConfig);
+  rateLimitRedisClient.on('error', (e) => logger.error({ err: e }, 'rate-limit redis error'));
+  await rateLimitRedisClient.connect();
+}
+const { authLimiter, writeLimiter } = createRateLimiters({
+  redisClient: rateLimitRedisClient,
+  cluster: !!(redisConfig && redisConfig.cluster),
+  enabled: RATE_LIMIT_ENABLED
+});
+// Mounted before the route definitions below so they wrap those handlers. authLimiter
+// guards the login / OIDC / OAuth endpoints (brute force); writeLimiter guards the
+// state-changing /api routes (writeLimiter itself skips read-only GET/HEAD).
+app.use(['/login', '/logout', '/auth', '/oidc'], authLimiter);
+app.use('/api', writeLimiter);
 
 
 
