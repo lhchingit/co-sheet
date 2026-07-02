@@ -66,6 +66,21 @@ const PORT = process.env.PORT || 3000;
 // cluster-mode-disabled) — those work with the default single-node client.
 const REDIS_CLUSTER = /^(1|true|yes|on)$/i.test(process.env.REDIS_CLUSTER || '');
 
+// Secret used to sign the session ID cookie (and to verify that signature during
+// the WebSocket upgrade). Read from SESSION_SECRET. In production it MUST be set:
+// a shared, committed value would let anyone who can read the source forge a
+// session cookie for any user, so fail fast when it is missing. Outside production
+// fall back to a fixed development value so local runs and tests need no extra
+// setup. Rotating this value invalidates all existing sessions.
+const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'SESSION_SECRET must be set in production — it signs the session cookie.'
+    );
+  }
+  return 'co-sheet-dev-session-secret';
+})();
+
 // Generate RSA key pair for signing mock JWTs at server startup
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
@@ -480,7 +495,7 @@ if (redisConfig) {
 
 // Configure express-session middleware with secure false cookie configuration.
 app.use(session({
-  secret: 'co-sheet-secret-key-123',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   store: sessionStore,
@@ -2424,7 +2439,7 @@ const ready = (async () => {
           if (cookieVal.startsWith('s:')) {
             const signedVal = cookieVal.slice(2);
             // Unsign the session cookie using the session secret
-            const sessionId = unsign(signedVal, 'co-sheet-secret-key-123');
+            const sessionId = unsign(signedVal, SESSION_SECRET);
             if (sessionId) {
               // Look up session data in the shared sessionStore
               sessionStore.get(sessionId, (err, sessionData) => {
