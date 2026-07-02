@@ -32,6 +32,9 @@ alternate) and styled with a Material Design 3 light theme.
 - **File access control & sharing** — the creator owns a file; regular users may own at most
   one file (admins/super admins unlimited). Only the owner and admins can edit/rename/delete.
   Owners can search the user directory and share a file (view-only) with other users.
+- **Rate limiting** — brute-force / abuse protection on the auth and state-changing API
+  routes. Counters are shared across replicas via Redis when configured (per-process in
+  memory otherwise); enabled automatically in production.
 - **Version history** — periodic autosave snapshots with browse-and-restore.
 - **Internationalization** — runtime locale switching via `data-i18n` attributes and a `t()`
   helper; `zh-TW` (default) and `en`.
@@ -151,6 +154,9 @@ cp .env.example .env
 |----------------------|-----------------------------------------------------------------------------|
 | `PORT`               | HTTP port (default `3000`).                                                  |
 | `BASE_URL`           | Public base URL; required in production for OAuth callbacks.                 |
+| `SESSION_SECRET`     | Secret that signs the session cookie. **Required in production** (the server refuses to start without it); a built-in dev value is used when unset outside production. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Rotating it logs everyone out. |
+| `TRUST_PROXY`        | Trust the reverse proxy in front of the app (Cloud Run / LB / nginx) so `req.ip` is the real client, not the proxy. Set to a hop count (`1` for Cloud Run), a boolean, or an Express trust-proxy string. **Required for correct per-IP auth rate limiting in production** — without it the whole fleet shares one bucket. Unset → no proxy (local dev). |
+| `RATE_LIMIT_ENABLED` | Rate limiting for the auth and write routes (brute-force / abuse protection). Enabled automatically under `NODE_ENV=production`; disabled elsewhere so dev/tests are unthrottled. Set `true`/`false` to override. Counters are shared across replicas when `REDIS_URL` is set, else per-process in memory. |
 | `DATABASE_URL`       | PostgreSQL connection URI.                                                   |
 | `REDIS_URL`          | Redis connection URI (or comma-separated seed nodes). Enables a Redis-backed session store and the realtime pub/sub bus for multi-replica deployments. Unset → single-instance in-memory mode. |
 | `REDIS_CLUSTER`      | Set `true` when `REDIS_URL` points at a cluster-mode Redis (slot-aware client). |
