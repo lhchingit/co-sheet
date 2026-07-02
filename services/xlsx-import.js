@@ -649,7 +649,11 @@ const rewriteSheetRefs = (formula, renameMap) => {
  * @returns {{ sheets: Array<{ name: string, cells: Record<string, {formula:string,value:string,style:object}>, colWidths: Record<string,number>, rowHeights: Record<string,number>, tabColor: string|null, filter: {colIndex:number,hidden:string[]}|null }> }}
  */
 export function parseXlsx(buf) {
-  if (!buf || buf.length < 4) throw tagged('Empty upload', 'empty');
+  // Validate the input is a real Buffer before any byte-level access. Callers pass
+  // request-derived data, which could be tampered into a non-Buffer type (object /
+  // array); a Buffer.isBuffer guard both prevents type-confusion on the subsequent
+  // .length / .readUInt32LE / .subarray calls and keeps this exported API robust.
+  if (!Buffer.isBuffer(buf) || buf.length < 4) throw tagged('Empty upload', 'empty');
 
   // Legacy binary .xls is an OLE2 compound file (magic D0 CF 11 E0).
   if (buf.readUInt32LE(0) === 0xe011cfd0) throw tagged('Legacy .xls is not supported', 'legacy_xls');
