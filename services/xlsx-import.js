@@ -649,11 +649,12 @@ const rewriteSheetRefs = (formula, renameMap) => {
  * @returns {{ sheets: Array<{ name: string, cells: Record<string, {formula:string,value:string,style:object}>, colWidths: Record<string,number>, rowHeights: Record<string,number>, tabColor: string|null, filter: {colIndex:number,hidden:string[]}|null }> }}
  */
 export function parseXlsx(buf) {
-  // Validate the input is a real Buffer before any byte-level access. Callers pass
-  // request-derived data, which could be tampered into a non-Buffer type (object /
-  // array / string); this Buffer.isBuffer guard both prevents type-confusion on the
-  // subsequent .length / .readUInt32LE / .subarray calls and keeps this exported API
-  // robust. Kept as its own statement so it fully dominates the length check below.
+  // Validate the input's type before any byte-level access. Callers pass
+  // request-derived data, which could be tampered into a different type (a string
+  // or array with a numeric `length`, or any other non-Buffer object). Reject the
+  // string/array shapes explicitly, then require an actual Buffer, so the later
+  // .length / .readUInt32LE / .subarray calls cannot be confused by a spoofed type.
+  if (typeof buf === 'string' || Array.isArray(buf)) throw tagged('Empty upload', 'empty');
   if (!Buffer.isBuffer(buf)) throw tagged('Empty upload', 'empty');
   if (buf.length < 4) throw tagged('Empty upload', 'empty');
 
