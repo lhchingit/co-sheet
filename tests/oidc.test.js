@@ -287,7 +287,10 @@ async function fetchWithRetry(url, options, timeoutMs = 15000) {
  */
 async function fetchLoginPage(extraEnv) {
   const child = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: '31236', ...extraEnv }
+    // Supply a SESSION_SECRET: some of these cases boot with NODE_ENV=production,
+    // where the server (correctly) refuses to start without one. extraEnv can
+    // still override it.
+    env: { ...process.env, PORT: '31236', SESSION_SECRET: 'test-session-secret', ...extraEnv }
   });
   try {
     const res = await fetchWithRetry('http://localhost:31236/login');
