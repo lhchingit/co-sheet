@@ -1,6 +1,11 @@
 // @ts-check
 import { isValidSheetName } from './validators.js';
 
+// Canonical cell-id shape: columns A–ZZ, rows 1–999. Shared by the payload validator
+// and the write site so the "cellId is a safe property name" invariant is asserted
+// exactly where it is used as an object key.
+const CELL_ID_REGEX = /^[A-Z]{1,2}[1-9][0-9]{0,2}$/;
+
 /**
  * @file services/cell-service.js
  * @description Transport-agnostic cell-edit logic shared by the REST endpoint
@@ -31,8 +36,7 @@ export const validateCellPayload = (cellId, formula, value, style) => {
   }
 
   // Enforce cell ID schema format (columns A-ZZ, rows 1-999).
-  const cellIdRegex = /^[A-Z]{1,2}[1-9][0-9]{0,2}$/;
-  if (!cellIdRegex.test(cellId)) {
+  if (!CELL_ID_REGEX.test(cellId)) {
     return { valid: false, message: 'Invalid cellId format' };
   }
 
@@ -171,6 +175,14 @@ export const writeCellValue = (workbook, { cellId, formula, value, style, sheetN
   const validation = validateCellPayload(cellId, formula, value, style);
   if (!validation.valid) {
     return { ok: false, message: validation.message || 'Invalid cell payload' };
+  }
+
+  // Re-assert the cell-id shape at the write site. validateCellPayload already
+  // guarantees it, but restating the check where cellId is used as an object key keeps
+  // the "safe property name" invariant local (and lets static analysis see it): the id
+  // can only be A1-style, never a prototype-polluting name like `__proto__`.
+  if (!CELL_ID_REGEX.test(cellId)) {
+    return { ok: false, message: 'Invalid cellId format' };
   }
 
   if (sheetName !== undefined) {

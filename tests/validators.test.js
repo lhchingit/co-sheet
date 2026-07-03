@@ -17,6 +17,9 @@ test('isValidSheetName accepts 2-30 letters/digits/spaces and rejects everything
   assert.strictEqual(isValidSheetName('A'), false, 'too short (<2)');
   assert.strictEqual(isValidSheetName('x'.repeat(31)), false, 'too long (>30)');
   assert.strictEqual(isValidSheetName('Bad/Name'), false, 'punctuation rejected');
+  assert.strictEqual(isValidSheetName('__proto__'), false, 'reserved key rejected (also blocked by regex)');
+  assert.strictEqual(isValidSheetName('constructor'), false, 'reserved key rejected despite being all letters');
+  assert.strictEqual(isValidSheetName('prototype'), false, 'reserved key rejected despite being all letters');
   assert.strictEqual(isValidSheetName(''), false);
   assert.strictEqual(isValidSheetName(123), false, 'non-string rejected');
   assert.strictEqual(isValidSheetName(null), false);
