@@ -505,7 +505,7 @@ const FORMULA_FUNCS = {
   MAX: (a, c) => { const ns = collectNumbers(a, c); return ns.length ? Math.max(...ns) : 0; },
   MIN: (a, c) => { const ns = collectNumbers(a, c); return ns.length ? Math.min(...ns) : 0; },
   MEDIAN: (a, c) => { const ns = collectNumbers(a, c).sort((x, y) => x - y); if (!ns.length) return mkErr('#NUM!'); const m = Math.floor(ns.length / 2); return ns.length % 2 ? ns[m] : (ns[m - 1] + ns[m]) / 2; },
-  MODE: (a, c) => { const ns = collectNumbers(a, c); const cnt = {}; let best = null, bestC = 0; for (const n of ns) { cnt[n] = (cnt[n] || 0) + 1; if (cnt[n] > bestC) { bestC = cnt[n]; best = n; } } return bestC > 1 ? best : mkErr('#N/A'); },
+  MODE: (a, c) => { const ns = collectNumbers(a, c); const cnt = new Map(); let best = null, bestC = 0; for (const n of ns) { const k = (cnt.get(n) || 0) + 1; cnt.set(n, k); if (k > bestC) { bestC = k; best = n; } } return bestC > 1 ? best : mkErr('#N/A'); },
   LARGE: (a, c) => { const ns = collectNumbers([a[0]], c).sort((x, y) => y - x); const k = numAt(a, c, 1); return (k >= 1 && k <= ns.length) ? ns[k - 1] : mkErr('#NUM!'); },
   SMALL: (a, c) => { const ns = collectNumbers([a[0]], c).sort((x, y) => x - y); const k = numAt(a, c, 1); return (k >= 1 && k <= ns.length) ? ns[k - 1] : mkErr('#NUM!'); },
   STDEV: (a, c) => stdev(collectNumbers(a, c), true),

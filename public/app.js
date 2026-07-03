@@ -142,6 +142,29 @@ if (typeof queueMicrotask === 'undefined') {
   globalThis.queueMicrotask = (fn) => { fn(); };
 }
 
+// Guarded dynamic-property helpers. Several of the state maps below are keyed by a
+// sheet name, cell id, or user id that originates from a peer's WebSocket message.
+// Even though these containers are prototype-less (Object.create(null)), route every
+// keyed write through these helpers so a crafted key can never be used to pollute
+// Object.prototype or shadow object internals — the three reserved names are rejected
+// and can never be a legitimate sheet name (server-validated), cell id, or user id.
+// The comparisons are inlined at each write (not factored into a predicate) so the
+// guard is local to the sink.
+function setKey(obj, key, value) {
+  if (obj && key !== '__proto__' && key !== 'constructor' && key !== 'prototype') obj[key] = value;
+  return obj ? obj[key] : undefined;
+}
+function deleteKey(obj, key) {
+  if (obj && key !== '__proto__' && key !== 'constructor' && key !== 'prototype') delete obj[key];
+}
+// Ensure obj[key] exists (creating it via factory) and return it. A reserved key
+// yields a throwaway object so downstream writes stay harmless.
+function ensureKey(obj, key, factory) {
+  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return factory();
+  if (!obj[key]) obj[key] = factory();
+  return obj[key];
+}
+
 // Global state variables
 let localSheets = Object.create(null);
 let activeSheetName = 'Sheet1';
@@ -165,23 +188,19 @@ const DEFAULT_COLS = 26;        // A-Z
 const MAX_COLS = 26 + 26 * 26;  // up to ZZ (702 columns)
 
 // Initialize with a default sheet
-localSheets[activeSheetName] = Object.create(null);
+setKey(localSheets, activeSheetName, Object.create(null));
 
 // Define a localCells proxy for backward compatibility with existing codebase functions
 let localCells = new Proxy({}, {
   get(target, prop) {
-    if (!localSheets[activeSheetName]) localSheets[activeSheetName] = Object.create(null);
-    return localSheets[activeSheetName][prop];
+    return ensureKey(localSheets, activeSheetName, () => Object.create(null))[prop];
   },
   set(target, prop, value) {
-    if (!localSheets[activeSheetName]) localSheets[activeSheetName] = Object.create(null);
-    localSheets[activeSheetName][prop] = value;
+    setKey(ensureKey(localSheets, activeSheetName, () => Object.create(null)), prop, value);
     return true;
   },
   deleteProperty(target, prop) {
-    if (localSheets[activeSheetName]) {
-      delete localSheets[activeSheetName][prop];
-    }
+    deleteKey(localSheets[activeSheetName], prop);
     return true;
   },
   has(target, prop) {
@@ -295,7 +314,7 @@ const getColCount = (sheetName = activeSheetName) => {
  */
 const setActiveColCount = (count) => {
   const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, count));
-  if (n > DEFAULT_COLS) colCounts[activeSheetName] = n; else delete colCounts[activeSheetName];
+  if (n > DEFAULT_COLS) setKey(colCounts, activeSheetName, n); else deleteKey(colCounts, activeSheetName);
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'set-col-count', payload: { sheetName: activeSheetName, count: n } }));
   }
@@ -509,7 +528,7 @@ function handleSocketMessage(event) {
       }
 
       if (!localSheets[activeSheetName]) {
-        localSheets[activeSheetName] = Object.create(null);
+        setKey(localSheets, activeSheetName, Object.create(null));
       }
 
       // Restore any persisted value filters so they paint on the first render.
@@ -540,7 +559,7 @@ function handleSocketMessage(event) {
           if (user.activeCell) {
             const sheet = user.activeSheet || 'Sheet1';
             user.activeSheet = sheet;
-            remoteCursors[user.userId] = user;
+            setKey(remoteCursors, user.userId, user);
             if (sheet === activeSheetName) {
               renderCursorBorder(user);
             }
@@ -557,12 +576,12 @@ function handleSocketMessage(event) {
       payload.activeSheet = sheet;
       
       if (activeCell) {
-        remoteCursors[userId] = payload;
+        setKey(remoteCursors, userId, payload);
         if (sheet === activeSheetName) {
           renderCursorBorder(payload);
         }
       } else {
-        delete remoteCursors[userId];
+        deleteKey(remoteCursors, userId);
       }
     }
 
@@ -570,10 +589,8 @@ function handleSocketMessage(event) {
     if (type === 'cell-update') {
       const { cellId, formula, value, style, sheetName } = payload;
       const sheet = sheetName || 'Sheet1';
-      if (!localSheets[sheet]) {
-        localSheets[sheet] = Object.create(null);
-      }
-      localSheets[sheet][cellId] = { formula, value, style: style || {} };
+      const cellMap = ensureKey(localSheets, sheet, () => Object.create(null));
+      setKey(cellMap, cellId, { formula, value, style: style || {} });
       
       if (sheet === activeSheetName) {
         // Propagate dependencies once per burst, not once per message — a remote
@@ -607,7 +624,7 @@ function handleSocketMessage(event) {
     if (type === 'add-sheet') {
       const { sheetName, sheetOrder: newOrder, cells } = payload;
       if (!localSheets[sheetName]) {
-        localSheets[sheetName] = cells ? Object.assign(Object.create(null), cells) : Object.create(null);
+        setKey(localSheets, sheetName, cells ? Object.assign(Object.create(null), cells) : Object.create(null));
       }
       if (newOrder) sheetOrder = newOrder;
       else if (!sheetOrder.includes(sheetName)) sheetOrder.push(sheetName);
@@ -617,10 +634,10 @@ function handleSocketMessage(event) {
     // Handle sheet deletion broadcast
     if (type === 'delete-sheet') {
       const { sheetName } = payload;
-      delete localSheets[sheetName];
+      deleteKey(localSheets, sheetName);
       sheetOrder = sheetOrder.filter(s => s !== sheetName);
       hiddenSheets = hiddenSheets.filter(s => s !== sheetName);
-      if (sheetColors[sheetName]) delete sheetColors[sheetName];
+      if (sheetColors[sheetName]) deleteKey(sheetColors, sheetName);
       
       if (activeSheetName === sheetName) {
         const nextVisible = sheetOrder.find(s => !hiddenSheets.includes(s)) || 'Sheet1';
@@ -633,14 +650,14 @@ function handleSocketMessage(event) {
     // Handle sheet rename broadcast
     if (type === 'rename-sheet') {
       const { oldName, newName } = payload;
-      localSheets[newName] = localSheets[oldName];
-      delete localSheets[oldName];
-      
+      setKey(localSheets, newName, localSheets[oldName]);
+      deleteKey(localSheets, oldName);
+
       sheetOrder = sheetOrder.map(s => s === oldName ? newName : s);
       hiddenSheets = hiddenSheets.map(s => s === oldName ? newName : s);
       if (sheetColors[oldName]) {
-        sheetColors[newName] = sheetColors[oldName];
-        delete sheetColors[oldName];
+        setKey(sheetColors, newName, sheetColors[oldName]);
+        deleteKey(sheetColors, oldName);
       }
       
       if (activeSheetName === oldName) {
@@ -654,9 +671,9 @@ function handleSocketMessage(event) {
     if (type === 'color-sheet') {
       const { sheetName, color } = payload;
       if (color === null) {
-        delete sheetColors[sheetName];
+        deleteKey(sheetColors, sheetName);
       } else {
-        sheetColors[sheetName] = color;
+        setKey(sheetColors, sheetName, color);
       }
       renderSheetTabs();
     }
@@ -694,9 +711,9 @@ function handleSocketMessage(event) {
       const { dimension, sheetName, col, row, size } = payload;
       const sheet = sheetName || 'Sheet1';
       const map = dimension === 'col' ? colWidths : rowHeights;
-      if (!map[sheet]) map[sheet] = Object.create(null);
+      const dimMap = ensureKey(map, sheet, () => Object.create(null));
       const key = dimension === 'col' ? col : row;
-      if (key != null) map[sheet][key] = size;
+      if (key != null) setKey(dimMap, key, size);
       // Re-render only when the change lands on the sheet currently in view.
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
@@ -706,7 +723,7 @@ function handleSocketMessage(event) {
       const { sheetName, count } = payload;
       const sheet = sheetName || 'Sheet1';
       const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, Number(count) || DEFAULT_COLS));
-      if (n > DEFAULT_COLS) colCounts[sheet] = n; else delete colCounts[sheet];
+      if (n > DEFAULT_COLS) setKey(colCounts, sheet, n); else deleteKey(colCounts, sheet);
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
 
@@ -714,7 +731,7 @@ function handleSocketMessage(event) {
     if (type === 'user-leave') {
       const { userId } = payload;
       removeCursorBorder(userId);
-      delete remoteCursors[userId];
+      deleteKey(remoteCursors, userId);
     }
   } catch (e) {
     console.error('Error handling WebSocket message:', e.message);
@@ -2267,8 +2284,8 @@ function startDimensionResize(dimension, key, headerEl, clientStart) {
     if (newSize !== startSize) {
       // Apply locally for instant feedback, then broadcast for persistence + peers.
       const map = isCol ? colWidths : rowHeights;
-      if (!map[activeSheetName]) map[activeSheetName] = Object.create(null);
-      map[activeSheetName][key] = newSize;
+      const dimMap = ensureKey(map, activeSheetName, () => Object.create(null));
+      setKey(dimMap, key, newSize);
       renderSpreadsheetGrid();
       if (socket && socket.readyState === WebSocket.OPEN) {
         const payload = { dimension, size: newSize };
@@ -7007,13 +7024,13 @@ const loadActiveSheetPref = () => {
 
 /** Records the current sheet's selection so it can be restored on return. */
 const rememberSheetSelection = () => {
-  if (!activeCellId) { delete sheetSelections[activeSheetName]; return; }
-  sheetSelections[activeSheetName] = {
+  if (!activeCellId) { deleteKey(sheetSelections, activeSheetName); return; }
+  setKey(sheetSelections, activeSheetName, {
     activeCellId,
     startId: selectionStartCellId || activeCellId,
     endId: selectionEndCellId || activeCellId,
     isColumnSelection: !!isColumnSelection,
-  };
+  });
 };
 
 /**
@@ -7095,7 +7112,7 @@ const addSheet = (sheetName) => {
   }
   if (localSheets[name]) return;
 
-  localSheets[name] = Object.create(null);
+  setKey(localSheets, name, Object.create(null));
   if (!sheetOrder.includes(name)) sheetOrder.push(name);
   if (socket && socket.readyState === WebSocket.OPEN && !sheetName) {
     socket.send(JSON.stringify({
