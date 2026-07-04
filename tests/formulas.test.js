@@ -2725,3 +2725,71 @@ test('recalculateSheet - does not overwrite the cached value of an unsupported f
   assert.strictEqual(sandbox.localCells['B1'].value, '30', 'unsupported formula keeps its cached value');
   assert.strictEqual(sandbox.localCells['B2'].value, '30', 'supported formula is recomputed');
 });
+
+// ---------------------------------------------------------------------------
+// Formula-engine correctness fixes (see the function audit): rounding of
+// negatives, TIME as a time value, DATEDIF units, EDATE month-end clamp,
+// YEARFRAC basis, SEARCH wildcards, cross-type comparison, and VALUE parsing.
+// ---------------------------------------------------------------------------
+
+test('ROUND rounds half away from zero, like Excel (not JS half-up)', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=ROUND(-2.5,0)'), '-3');
+  assert.strictEqual(s.evaluateFormula('=ROUND(-0.5,0)'), '-1');
+  assert.strictEqual(s.evaluateFormula('=ROUND(2.5,0)'), '3');
+  assert.strictEqual(s.evaluateFormula('=ROUND(2.345,2)'), '2.35');
+});
+
+test('TIME returns a time-of-day value (rendered H:MM:SS, wrapped into a day)', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=TIME(12,0,0)'), '12:00:00');
+  assert.strictEqual(s.evaluateFormula('=TIME(6,30,0)'), '06:30:00');
+  assert.strictEqual(s.evaluateFormula('=TIME(25,0,0)'), '01:00:00', 'wraps past 24h');
+  assert.strictEqual(s.evaluateFormula('=HOUR(TIME(9,30,0))'), '9', 'still usable as a serial');
+});
+
+test('DATEDIF supports the MD / YM / YD units', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=DATEDIF(DATE(2020,1,15),DATE(2020,3,10),"MD")'), '24');
+  assert.strictEqual(s.evaluateFormula('=DATEDIF(DATE(2020,1,15),DATE(2021,3,10),"YM")'), '1');
+  assert.strictEqual(s.evaluateFormula('=DATEDIF(DATE(2020,1,15),DATE(2021,3,10),"YD")'), '54');
+  assert.strictEqual(s.evaluateFormula('=DATEDIF(DATE(2020,1,1),DATE(2021,6,1),"M")'), '17', 'existing units unaffected');
+});
+
+test('EDATE clamps the day to the target month end', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=EDATE(DATE(2021,1,31),1)'), '2021/2/28');
+  assert.strictEqual(s.evaluateFormula('=EDATE(DATE(2020,1,31),1)'), '2020/2/29', 'leap year');
+  assert.strictEqual(s.evaluateFormula('=EDATE(DATE(2021,3,15),-1)'), '2021/2/15', 'negative offset, no clamp needed');
+});
+
+test('YEARFRAC honours the basis (default 30/360 gives a whole year = 1)', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=YEARFRAC(DATE(2020,1,1),DATE(2021,1,1))'), '1');
+  assert.strictEqual(s.evaluateFormula('=YEARFRAC(DATE(2021,1,1),DATE(2020,1,1))'), '1', 'order-independent');
+  assert.strictEqual(s.evaluateFormula('=YEARFRAC(DATE(2020,1,1),DATE(2020,7,1),3)'), '0.498630136986', 'actual/365');
+});
+
+test('SEARCH is case-insensitive and honours ? / * wildcards; FIND stays literal', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=SEARCH("a*e","apple")'), '1');
+  assert.strictEqual(s.evaluateFormula('=SEARCH("p?e","apple")'), '3');
+  assert.strictEqual(s.evaluateFormula('=SEARCH("PP","apple")'), '2', 'case-insensitive');
+  assert.strictEqual(s.evaluateFormula('=FIND("PP","apple")'), '#VALUE!', 'FIND is case-sensitive, no wildcards');
+});
+
+test('Comparisons are type-aware: text and numbers are never equal', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('="2"=2'), 'FALSE');
+  assert.strictEqual(s.evaluateFormula('=2=2'), 'TRUE');
+  assert.strictEqual(s.evaluateFormula('="a"="A"'), 'TRUE', 'text compare stays case-insensitive');
+  assert.strictEqual(s.evaluateFormula('=1<"a"'), 'TRUE', 'numbers order before text');
+});
+
+test('VALUE parses percent, currency and thousands separators', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=VALUE("50%")'), '0.5');
+  assert.strictEqual(s.evaluateFormula('=VALUE("$1,234")'), '1234');
+  assert.strictEqual(s.evaluateFormula('=VALUE("  42 ")'), '42');
+  assert.strictEqual(s.evaluateFormula('=VALUE("abc")'), '#VALUE!');
+});

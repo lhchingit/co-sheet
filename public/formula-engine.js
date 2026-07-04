@@ -41,8 +41,10 @@ const mkErr = (code) => ({ __error: code });
 const isErr = (v) => !!(v && typeof v === 'object' && v.__error);
 const isRange = (v) => !!(v && typeof v === 'object' && v.__range);
 // Date value: behaves as its numeric serial everywhere (arithmetic, YEAR(),
-// comparisons) but renders as a formatted date string. `time` adds H:MM:SS.
-const mkDate = (serial, time = false) => ({ __date: true, serial, time });
+// comparisons) but renders as a formatted date string. `time` adds H:MM:SS;
+// `dateless` renders the time of day only (no date part) for pure times, e.g.
+// the result of TIME().
+const mkDate = (serial, time = false, dateless = false) => ({ __date: true, serial, time, dateless });
 const isDate = (v) => !!(v && typeof v === 'object' && v.__date);
 const CELL_RE = /^[A-Z]+[0-9]+$/;
 const DATE_STR_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}):(\d{2}))?$/;
@@ -282,10 +284,12 @@ const formatNum = (n) => {
   return String(parseFloat(n.toPrecision(12)));
 };
 
-/** Formats a date serial as "YYYY/M/D" (optionally with " H:MM:SS"). */
-const formatDate = (serial, withTime) => {
+/** Formats a date serial as "YYYY/M/D" (optionally with " H:MM:SS"), or, when
+ *  `dateless` is set, as a bare "H:MM:SS" time of day (no date part). */
+const formatDate = (serial, withTime, dateless) => {
   const d = serialToDate(serial);
   const p2 = (x) => String(x).padStart(2, '0');
+  if (dateless) return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
   let s = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
   if (withTime) s += ` ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
   return s;
@@ -295,7 +299,7 @@ const formatDate = (serial, withTime) => {
 const formatScalar = (v) => {
   if (isErr(v)) return v.__error;
   if (v === '' || v == null) return '';
-  if (isDate(v)) return formatDate(v.serial, v.time);
+  if (isDate(v)) return formatDate(v.serial, v.time, v.dateless);
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (typeof v === 'number') { if (isNaN(v) || !isFinite(v)) return '#NUM!'; return formatNum(v); }
   return String(v);
@@ -304,13 +308,21 @@ const formatScalar = (v) => {
 /** Concatenation / general string coercion for a scalar value. */
 const toStr = (v) => formatScalar(scalarize(v));
 
+// Spreadsheet cross-type ordering for comparisons: numbers sort before text,
+// which sorts before booleans (numbers < text < FALSE < TRUE). Values of
+// different types are therefore never equal — `"2"=2` is FALSE, matching Excel /
+// Sheets — but still order deterministically for < and >.
+const CMP_RANK = (v) => (typeof v === 'number' ? 0 : (typeof v === 'boolean' ? 2 : 1));
+
 /** Compares two scalar values per spreadsheet rules; returns boolean/error. */
 const compareValues = (op, l, r) => {
   let res;
   if (isDate(l)) l = l.serial;
   if (isDate(r)) r = r.serial;
-  if (typeof l === 'number' && typeof r === 'number') res = l < r ? -1 : (l > r ? 1 : 0);
-  else if (typeof l === 'boolean' && typeof r === 'boolean') { const a = l ? 1 : 0, b = r ? 1 : 0; res = a < b ? -1 : (a > b ? 1 : 0); }
+  const rl = CMP_RANK(l), rr = CMP_RANK(r);
+  if (rl !== rr) res = rl < rr ? -1 : 1; // different types: order by type, never equal
+  else if (rl === 0) res = l < r ? -1 : (l > r ? 1 : 0);
+  else if (rl === 2) { const a = l ? 1 : 0, b = r ? 1 : 0; res = a < b ? -1 : (a > b ? 1 : 0); }
   else { const a = formatScalar(l).toUpperCase(), b = formatScalar(r).toUpperCase(); res = a < b ? -1 : (a > b ? 1 : 0); }
   switch (op) {
     case '=': return res === 0;
@@ -425,10 +437,33 @@ const matchCriteria = (value, criterion) => {
   return op === '<>' ? !matched : matched;
 };
 
+// Compile an Excel wildcard pattern (`?` = any char, `*` = any run, `~` escapes
+// the next `?`/`*`/`~`) into a case-insensitive RegExp. Used by SEARCH.
+const wildcardToRegExp = (pat) => {
+  let out = '';
+  for (let i = 0; i < pat.length; i++) {
+    const ch = pat[i];
+    if (ch === '~' && (pat[i + 1] === '*' || pat[i + 1] === '?' || pat[i + 1] === '~')) {
+      out += pat[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    } else if (ch === '*') out += '.*';
+    else if (ch === '?') out += '.';
+    else out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(out, 'i');
+};
+
 // --- date helpers (serial = days since 1899-12-30, matching Sheets) ---------
 const DATE_EPOCH = Date.UTC(1899, 11, 30);
 const dateToSerial = (y, mo, d, hh = 0, mi = 0, ss = 0) => (Date.UTC(y, mo - 1, d, hh, mi, ss) - DATE_EPOCH) / 86400000;
 const serialToDate = (s) => new Date(DATE_EPOCH + Math.round(s * 86400000));
+// 30/360 day count between two dates (US/NASD basis 0, or European basis 4).
+const days360 = (s, e, european) => {
+  let sd = s.getUTCDate(), ed = e.getUTCDate();
+  if (european) { if (sd === 31) sd = 30; if (ed === 31) ed = 30; }
+  else { if (sd === 31) sd = 30; if (ed === 31 && sd === 30) ed = 30; }
+  return (e.getUTCFullYear() - s.getUTCFullYear()) * 360
+    + (e.getUTCMonth() - s.getUTCMonth()) * 30 + (ed - sd);
+};
 
 /** The spreadsheet function library. Each fn receives (argNodes, ctx). */
 const FORMULA_FUNCS = {
@@ -466,7 +501,9 @@ const FORMULA_FUNCS = {
   CEILING: (a, c) => { const n = numAt(a, c, 0), f = optNumAt(a, c, 1, 1); return f === 0 ? 0 : Math.ceil(n / f) * f; },
   FLOOR: (a, c) => { const n = numAt(a, c, 0), f = optNumAt(a, c, 1, 1); return f === 0 ? 0 : Math.floor(n / f) * f; },
   MROUND: (a, c) => { const n = numAt(a, c, 0), f = numAt(a, c, 1); return f === 0 ? 0 : Math.round(n / f) * f; },
-  ROUND: (a, c) => { const f = Math.pow(10, optNumAt(a, c, 1, 0)); return Math.round(numAt(a, c, 0) * f) / f; },
+  // Round half away from zero (Excel), not half-up like JS Math.round — so
+  // ROUND(-2.5,0) is -3, not -2.
+  ROUND: (a, c) => { const f = Math.pow(10, optNumAt(a, c, 1, 0)); const n = numAt(a, c, 0) * f; return (n < 0 ? -Math.round(-n) : Math.round(n)) / f; },
   ROUNDUP: (a, c) => { const f = Math.pow(10, optNumAt(a, c, 1, 0)); const n = numAt(a, c, 0); return (n < 0 ? -Math.ceil(-n * f) : Math.ceil(n * f)) / f; },
   ROUNDDOWN: (a, c) => { const f = Math.pow(10, optNumAt(a, c, 1, 0)); const n = numAt(a, c, 0); return (n < 0 ? -Math.floor(-n * f) : Math.floor(n * f)) / f; },
   TRUNC: (a, c) => { const f = Math.pow(10, optNumAt(a, c, 1, 0)); const n = numAt(a, c, 0); return Math.trunc(n * f) / f; },
@@ -558,10 +595,26 @@ const FORMULA_FUNCS = {
   CONCATENATE: (a, c) => collectValues(a, c).map(formatScalar).join(''),
   TEXTJOIN: (a, c) => { const delim = strAt(a, c, 0); const skip = boolAt(a, c, 1); const vals = collectValues(a.slice(2), c).map(formatScalar); return (skip ? vals.filter(v => v !== '') : vals).join(delim); },
   FIND: (a, c) => { const idx = strAt(a, c, 1).indexOf(strAt(a, c, 0), optNumAt(a, c, 2, 1) - 1); return idx < 0 ? mkErr('#VALUE!') : idx + 1; },
-  SEARCH: (a, c) => { const idx = strAt(a, c, 1).toUpperCase().indexOf(strAt(a, c, 0).toUpperCase(), optNumAt(a, c, 2, 1) - 1); return idx < 0 ? mkErr('#VALUE!') : idx + 1; },
+  SEARCH: (a, c) => {
+    const find = strAt(a, c, 0), text = strAt(a, c, 1), start = optNumAt(a, c, 2, 1);
+    if (start < 1 || start > text.length + 1) return mkErr('#VALUE!');
+    // Case-insensitive, and honours ? / * wildcards like Excel's SEARCH.
+    const m = wildcardToRegExp(find).exec(text.slice(start - 1));
+    return m ? start + m.index : mkErr('#VALUE!');
+  },
   SUBSTITUTE: (a, c) => { const s = strAt(a, c, 0), find = strAt(a, c, 1), repl = strAt(a, c, 2); if (find === '') return s; if (a.length > 3) { const which = numAt(a, c, 3); let count = 0, idx = -1; while ((idx = s.indexOf(find, idx + 1)) >= 0) { if (++count === which) return s.slice(0, idx) + repl + s.slice(idx + find.length); } return s; } return s.split(find).join(repl); },
   REPLACE: (a, c) => { const s = strAt(a, c, 0), start = numAt(a, c, 1), len = numAt(a, c, 2), repl = strAt(a, c, 3); return s.slice(0, start - 1) + repl + s.slice(start - 1 + len); },
-  VALUE: (a, c) => { const v = toNum(evAt(a, c, 0)); return v; },
+  VALUE: (a, c) => {
+    const v = evAt(a, c, 0);
+    if (typeof v !== 'string') return toNum(v); // numbers/dates/booleans as before
+    let s = v.trim();
+    if (s === '') return 0;
+    const pct = s.endsWith('%');
+    if (pct) s = s.slice(0, -1);
+    s = s.replace(/[$£€¥₩,\s]/g, ''); // strip currency symbols, thousands separators
+    if (s !== '' && !isNaN(Number(s)) && isFinite(Number(s))) return pct ? Number(s) / 100 : Number(s);
+    return mkErr('#VALUE!');
+  },
   TEXT: (a, c) => formatWithPattern(numAt(a, c, 0), strAt(a, c, 1)),
   REGEXMATCH: (a, c) => { try { return new RegExp(strAt(a, c, 1)).test(strAt(a, c, 0)); } catch (e) { return mkErr('#VALUE!'); } },
   REGEXEXTRACT: (a, c) => { try { const m = strAt(a, c, 0).match(new RegExp(strAt(a, c, 1))); return m ? (m[1] !== undefined ? m[1] : m[0]) : mkErr('#N/A'); } catch (e) { return mkErr('#VALUE!'); } },
@@ -578,15 +631,49 @@ const FORMULA_FUNCS = {
   HOUR: (a, c) => serialToDate(numAt(a, c, 0)).getUTCHours(),
   MINUTE: (a, c) => serialToDate(numAt(a, c, 0)).getUTCMinutes(),
   SECOND: (a, c) => serialToDate(numAt(a, c, 0)).getUTCSeconds(),
-  TIME: (a, c) => (numAt(a, c, 0) * 3600 + numAt(a, c, 1) * 60 + numAt(a, c, 2)) / 86400,
+  TIME: (a, c) => { const frac = (numAt(a, c, 0) * 3600 + numAt(a, c, 1) * 60 + numAt(a, c, 2)) / 86400; return mkDate(frac - Math.floor(frac), true, true); }, // wrap into [0,1) like Excel
   WEEKDAY: (a, c) => { const d = serialToDate(numAt(a, c, 0)).getUTCDay(); const type = optNumAt(a, c, 1, 1); if (type === 2) return d === 0 ? 7 : d; if (type === 3) return (d + 6) % 7; return d + 1; },
   WEEKNUM: (a, c) => { const dt = serialToDate(numAt(a, c, 0)); const start = Date.UTC(dt.getUTCFullYear(), 0, 1); const days = Math.floor((dt.getTime() - start) / 86400000); return Math.floor((days + new Date(start).getUTCDay()) / 7) + 1; },
   DAYS: (a, c) => Math.round(numAt(a, c, 0) - numAt(a, c, 1)),
   DATEVALUE: (a, c) => { const t = Date.parse(strAt(a, c, 0)); return isNaN(t) ? mkErr('#VALUE!') : mkDate(Math.round((t - DATE_EPOCH) / 86400000)); },
-  EDATE: (a, c) => { const d = serialToDate(numAt(a, c, 0)); return mkDate(dateToSerial(d.getUTCFullYear(), d.getUTCMonth() + 1 + numAt(a, c, 1), d.getUTCDate())); },
+  EDATE: (a, c) => {
+    const d = serialToDate(numAt(a, c, 0));
+    const y = d.getUTCFullYear(), mIdx = d.getUTCMonth() + numAt(a, c, 1); // 0-based target month (may overflow years)
+    // Clamp the day to the target month's last day so EDATE(Jan 31, 1) is Feb 28,
+    // not March 3 (Excel behaviour); Date.UTC rolls month overflow into the year.
+    const lastDay = new Date(Date.UTC(y, mIdx + 1, 0)).getUTCDate();
+    return mkDate(dateToSerial(y, mIdx + 1, Math.min(d.getUTCDate(), lastDay)));
+  },
   EOMONTH: (a, c) => { const d = serialToDate(numAt(a, c, 0)); return mkDate(dateToSerial(d.getUTCFullYear(), d.getUTCMonth() + 2 + numAt(a, c, 1), 0)); },
-  YEARFRAC: (a, c) => Math.abs(numAt(a, c, 0) - numAt(a, c, 1)) / 365,
-  DATEDIF: (a, c) => { const s = serialToDate(numAt(a, c, 0)), e = serialToDate(numAt(a, c, 1)); const unit = strAt(a, c, 2).toUpperCase(); const days = Math.round((e.getTime() - s.getTime()) / 86400000); if (unit === 'D') return days; if (unit === 'M') return (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) - (e.getUTCDate() < s.getUTCDate() ? 1 : 0); if (unit === 'Y') { let y = e.getUTCFullYear() - s.getUTCFullYear(); if (e.getUTCMonth() < s.getUTCMonth() || (e.getUTCMonth() === s.getUTCMonth() && e.getUTCDate() < s.getUTCDate())) y--; return y; } return mkErr('#NUM!'); },
+  YEARFRAC: (a, c) => {
+    let sn = numAt(a, c, 0), en = numAt(a, c, 1);
+    if (sn > en) { const t = sn; sn = en; en = t; }
+    const basis = optNumAt(a, c, 2, 0);
+    const s = serialToDate(sn), e = serialToDate(en);
+    if (basis === 1) { // actual/actual: actual days over the average calendar-year length spanned
+      const years = e.getUTCFullYear() - s.getUTCFullYear() + 1;
+      const spanDays = (Date.UTC(e.getUTCFullYear() + 1, 0, 1) - Date.UTC(s.getUTCFullYear(), 0, 1)) / 86400000;
+      return (en - sn) / (spanDays / years);
+    }
+    if (basis === 2) return (en - sn) / 360;             // actual/360
+    if (basis === 3) return (en - sn) / 365;             // actual/365
+    return days360(s, e, basis === 4) / 360;             // 0 (US) / 4 (European) 30/360
+  },
+  DATEDIF: (a, c) => {
+    const s = serialToDate(numAt(a, c, 0)), e = serialToDate(numAt(a, c, 1));
+    const unit = strAt(a, c, 2).toUpperCase();
+    const days = Math.round((e.getTime() - s.getTime()) / 86400000);
+    if (unit === 'D') return days;
+    if (unit === 'M') return (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) - (e.getUTCDate() < s.getUTCDate() ? 1 : 0);
+    if (unit === 'Y') { let y = e.getUTCFullYear() - s.getUTCFullYear(); if (e.getUTCMonth() < s.getUTCMonth() || (e.getUTCMonth() === s.getUTCMonth() && e.getUTCDate() < s.getUTCDate())) y--; return y; }
+    // Whole months between the dates, ignoring years.
+    if (unit === 'YM') { let m = e.getUTCMonth() - s.getUTCMonth() + (e.getUTCDate() < s.getUTCDate() ? -1 : 0); return (m + 12) % 12; }
+    // Days between, ignoring the months (borrowing the previous month's length).
+    if (unit === 'MD') { let d = e.getUTCDate() - s.getUTCDate(); if (d < 0) d += new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 0)).getUTCDate(); return d; }
+    // Days between, ignoring the years.
+    if (unit === 'YD') { let anchor = Date.UTC(e.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()); if (anchor > e.getTime()) anchor = Date.UTC(e.getUTCFullYear() - 1, s.getUTCMonth(), s.getUTCDate()); return Math.round((e.getTime() - anchor) / 86400000); }
+    return mkErr('#NUM!');
+  },
   WORKDAY: (a, c) => { let serial = Math.floor(numAt(a, c, 0)); let n = Math.floor(numAt(a, c, 1)); const step = n < 0 ? -1 : 1; n = Math.abs(n); while (n > 0) { serial += step; const dow = serialToDate(serial).getUTCDay(); if (dow !== 0 && dow !== 6) n--; } return mkDate(serial); },
 
   // --- Lookup -------------------------------------------------------------
