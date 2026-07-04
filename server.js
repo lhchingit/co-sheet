@@ -1778,8 +1778,10 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
  * POST /api/files/import
  * Creates a new file from an uploaded .xlsx workbook. The raw file bytes are the
  * request body (Content-Type: application/octet-stream); the display name comes
- * from the `?name=` query. Imports cell values and sheet structure only (styles
- * and formulas are dropped — see services/xlsx-import.js). The per-role file quota
+ * from the `?name=` query. Imports cell values, formulas, formatting and sheet
+ * structure (see services/xlsx-import.js). A formula's cached result is kept as the
+ * cell value so it still shows when the client can't evaluate the formula itself.
+ * The per-role file quota
  * is enforced *before* parsing, so an over-quota user gets a clean 403 without the
  * upload being processed. Protected with ensureAuthenticated middleware.
  */
