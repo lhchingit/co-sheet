@@ -2685,6 +2685,18 @@ test('getCellValue - keeps the cached value for an IFERROR-wrapped unsupported f
   assert.strictEqual(sandbox.getCellValue('B1'), '10');
 });
 
+test('getCellValue - unsupported formula with no cached value shows the engine error (nothing to preserve)', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    // No `value`: there's no imported cache to protect, so the honest #NAME? must
+    // surface rather than a misleading blank.
+    'B1': { formula: '=SUBTOTAL(9,A1:A1)' }
+  };
+
+  assert.strictEqual(sandbox.getCellValue('B1'), '#NAME?');
+});
+
 test('getCellValue - still live-evaluates a supported formula (cache is not trusted blindly)', () => {
   const sandbox = createSandbox();
   sandbox.localCells = {
