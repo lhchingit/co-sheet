@@ -9,10 +9,10 @@
  * discover and insert function names quickly.
  *
  * IMPORTANT: Listing a function here does NOT mean this app's formula engine can
- * evaluate it. The engine in app.js currently computes SUM(range),
- * AVERAGE(range) and basic two-operand arithmetic; other functions will return
- * "#ERR!" if entered. The catalog mirrors the Google Sheets function list
- * (https://support.google.com/docs/answer/3092991) purely as a name reference.
+ * evaluate it, nor vice-versa. The engine (public/formula-engine.js) implements a
+ * large library, but this catalog mirrors the broader Google Sheets function list
+ * (https://support.google.com/docs/answer/3092991) as a name reference, so a few
+ * listed names may still return "#NAME?" if the engine hasn't implemented them.
  *
  * Each entry: { n: <NAME>, zh: <Traditional Chinese desc>, en: <English desc> }
  * Exposed on the global scope as window.SHEET_FUNCTIONS (consumed by app.js).
@@ -38,6 +38,8 @@
     { n: 'EXP', zh: '傳回 e 的指定次方值。', en: 'Returns Euler\'s number e raised to a power.' },
     { n: 'FACT', zh: '傳回數字的階乘。', en: 'Returns the factorial of a number.' },
     { n: 'FLOOR', zh: '將數字無條件捨去至最接近的指定倍數。', en: 'Rounds a number down to the nearest multiple of a factor.' },
+    { n: 'ISEVEN', zh: '檢查數字是否為偶數。', en: 'Checks whether a number is even.' },
+    { n: 'ISODD', zh: '檢查數字是否為奇數。', en: 'Checks whether a number is odd.' },
     { n: 'GCD', zh: '傳回一或多個整數的最大公因數。', en: 'Returns the greatest common divisor of integers.' },
     { n: 'INT', zh: '將數字無條件捨去為最接近的整數。', en: 'Rounds a number down to the nearest integer.' },
     { n: 'LCM', zh: '傳回一或多個整數的最小公倍數。', en: 'Returns the least common multiple of integers.' },
@@ -90,6 +92,7 @@
     { n: 'RANK', zh: '傳回某數值在資料集中的排名。', en: 'Returns the rank of a value within a dataset.' },
     { n: 'SMALL', zh: '傳回資料集中第 n 小的值。', en: 'Returns the nth smallest element in a dataset.' },
     { n: 'STDEV', zh: '依樣本估算標準差。', en: 'Estimates standard deviation based on a sample.' },
+    { n: 'SUBTOTAL', zh: '依指定的彙總函式傳回範圍的小計。', en: 'Returns a subtotal of a range using a chosen aggregate function.' },
     { n: 'STDEVP', zh: '依整個母體計算標準差。', en: 'Calculates standard deviation of an entire population.' },
     { n: 'VAR', zh: '依樣本估算變異數。', en: 'Estimates variance based on a sample.' },
     { n: 'VARP', zh: '依整個母體計算變異數。', en: 'Calculates variance of an entire population.' },
@@ -111,9 +114,11 @@
     { n: 'CHAR', zh: '依 Unicode 編碼傳回對應的字元。', en: 'Returns the character for a Unicode number.' },
     { n: 'CLEAN', zh: '移除文字中無法列印的字元。', en: 'Removes non-printable characters from text.' },
     { n: 'CODE', zh: '傳回字串首字元的 Unicode 編碼。', en: 'Returns the Unicode value of the first character.' },
+    { n: 'CONCAT', zh: '將多個值或範圍合併為單一字串。', en: 'Joins values or ranges into one string.' },
     { n: 'CONCATENATE', zh: '將多個字串合併為單一字串。', en: 'Joins several strings into one string.' },
     { n: 'EXACT', zh: '比較兩字串是否完全相同。', en: 'Tests whether two strings are identical.' },
     { n: 'FIND', zh: '傳回字串在文字中首次出現的位置（區分大小寫）。', en: 'Returns the position of a substring (case-sensitive).' },
+    { n: 'FIXED', zh: '將數字四捨五入並格式化為指定小數位數的文字。', en: 'Formats a number as text with a fixed number of decimals.' },
     { n: 'LEFT', zh: '傳回字串左側的指定字元數。', en: 'Returns a substring from the start of a string.' },
     { n: 'LEN', zh: '傳回字串的字元數。', en: 'Returns the number of characters in a string.' },
     { n: 'LOWER', zh: '將字串轉換為小寫。', en: 'Converts a string to lowercase.' },
@@ -129,6 +134,8 @@
     { n: 'SPLIT', zh: '依指定分隔符號將文字拆分為多個儲存格。', en: 'Splits text around a specified delimiter.' },
     { n: 'SUBSTITUTE', zh: '以新文字取代字串中的指定文字。', en: 'Substitutes new text for existing text in a string.' },
     { n: 'TEXT', zh: '依指定格式將數字轉換為文字。', en: 'Formats a number as text per a format pattern.' },
+    { n: 'TEXTAFTER', zh: '傳回指定分隔符號之後的文字。', en: 'Returns the text after a delimiter.' },
+    { n: 'TEXTBEFORE', zh: '傳回指定分隔符號之前的文字。', en: 'Returns the text before a delimiter.' },
     { n: 'TEXTJOIN', zh: '使用分隔符號合併多個字串。', en: 'Joins strings with a delimiter between each.' },
     { n: 'TRIM', zh: '移除文字前後及多餘的空格。', en: 'Removes leading, trailing and repeated spaces.' },
     { n: 'UPPER', zh: '將字串轉換為大寫。', en: 'Converts a string to uppercase.' },
@@ -140,11 +147,13 @@
     { n: 'DATEVALUE', zh: '將日期字串轉換為日期序列值。', en: 'Converts a date string to a serial number.' },
     { n: 'DAY', zh: '傳回日期中的「日」。', en: 'Returns the day of the month for a date.' },
     { n: 'DAYS', zh: '傳回兩個日期之間的天數。', en: 'Returns the number of days between two dates.' },
+    { n: 'DAYS360', zh: '依 360 天制計算兩日期之間的天數。', en: 'Returns days between two dates on a 360-day year basis.' },
     { n: 'EDATE', zh: '傳回指定月數前後的日期。', en: 'Returns a date a number of months before/after a date.' },
     { n: 'EOMONTH', zh: '傳回指定月數前後該月的最後一天。', en: 'Returns the last day of the month offset by months.' },
     { n: 'HOUR', zh: '傳回時間中的「時」。', en: 'Returns the hour component of a time.' },
     { n: 'MINUTE', zh: '傳回時間中的「分」。', en: 'Returns the minute component of a time.' },
     { n: 'MONTH', zh: '傳回日期中的「月」。', en: 'Returns the month of the year for a date.' },
+    { n: 'NETWORKDAYS', zh: '傳回兩日期之間的工作天數（不含週末）。', en: 'Returns the number of working days between two dates.' },
     { n: 'NOW', zh: '傳回目前的日期與時間。', en: 'Returns the current date and time.' },
     { n: 'SECOND', zh: '傳回時間中的「秒」。', en: 'Returns the second component of a time.' },
     { n: 'TIME', zh: '依時、分、秒傳回時間。', en: 'Returns a time from hour, minute and second.' },
@@ -188,7 +197,9 @@
     { n: 'ISNA', zh: '檢查值是否為 #N/A 錯誤。', en: 'Checks whether a value is the #N/A error.' },
     { n: 'ISNUMBER', zh: '檢查值是否為數字。', en: 'Checks whether a value is a number.' },
     { n: 'ISTEXT', zh: '檢查值是否為文字。', en: 'Checks whether a value is text.' },
+    { n: 'N', zh: '將值轉換為對應的數字。', en: 'Returns a value converted to a number.' },
     { n: 'NA', zh: '傳回 #N/A 錯誤值。', en: 'Returns the #N/A error value.' },
+    { n: 'T', zh: '若值為文字則傳回該文字，否則傳回空字串。', en: 'Returns text if the value is text, otherwise empty.' },
 
     // --- Financial --------------------------------------------------------
     { n: 'FV', zh: '依固定利率計算投資的未來價值。', en: 'Calculates the future value of an investment.' },

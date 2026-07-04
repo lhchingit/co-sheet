@@ -492,6 +492,8 @@ const FORMULA_FUNCS = {
   SQRT: (a, c) => { const n = numAt(a, c, 0); return n < 0 ? mkErr('#NUM!') : Math.sqrt(n); },
   POWER: (a, c) => Math.pow(numAt(a, c, 0), numAt(a, c, 1)),
   SIGN: (a, c) => Math.sign(numAt(a, c, 0)),
+  ISEVEN: (a, c) => Math.trunc(numAt(a, c, 0)) % 2 === 0,
+  ISODD: (a, c) => Math.abs(Math.trunc(numAt(a, c, 0)) % 2) === 1,
   INT: (a, c) => Math.floor(numAt(a, c, 0)),
   MOD: (a, c) => { const x = numAt(a, c, 0), y = numAt(a, c, 1); return y === 0 ? mkErr('#DIV/0!') : x - y * Math.floor(x / y); },
   QUOTIENT: (a, c) => { const y = numAt(a, c, 1); return y === 0 ? mkErr('#DIV/0!') : Math.trunc(numAt(a, c, 0) / y); },
@@ -533,6 +535,15 @@ const FORMULA_FUNCS = {
   MAXIFS: (a, c) => conditionalAggregate(a, c, 'max', true),
   MINIFS: (a, c) => conditionalAggregate(a, c, 'min', true),
   COUNTBLANK: (a, c) => flattenRange(rangeAt(a, c, 0)).filter(v => v === '' || v == null).length,
+  // SUBTOTAL(code, range...). Codes 1-11 and their 101-111 (ignore-hidden) forms
+  // map to the same aggregate; the engine has no hidden-row concept, so both
+  // behave identically.
+  SUBTOTAL: (a, c) => {
+    const code = Math.trunc(numAt(a, c, 0));
+    const names = { 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' };
+    const name = names[code] || names[code - 100];
+    return name ? FORMULA_FUNCS[name](a.slice(1), c) : mkErr('#VALUE!');
+  },
 
   // --- Statistical --------------------------------------------------------
   AVERAGE: (a, c) => { const ns = collectNumbers(a, c); return ns.length ? ns.reduce((s, n) => s + n, 0) / ns.length : mkErr('#DIV/0!'); },
@@ -576,6 +587,8 @@ const FORMULA_FUNCS = {
   ISERR: (a, c) => { const v = evalNode(a[0], c); return isErr(v) && v.__error !== '#N/A'; },
   ISNA: (a, c) => { const v = evalNode(a[0], c); return isErr(v) && v.__error === '#N/A'; },
   NA: () => mkErr('#N/A'),
+  N: (a, c) => { const v = scalarize(evalNode(a[0], c)); if (isErr(v)) return v; if (typeof v === 'number') return v; if (isDate(v)) return v.serial; if (typeof v === 'boolean') return v ? 1 : 0; return 0; },
+  T: (a, c) => { const v = scalarize(evalNode(a[0], c)); if (isErr(v)) return v; return typeof v === 'string' ? v : ''; },
 
   // --- Text ---------------------------------------------------------------
   LEN: (a, c) => strAt(a, c, 0).length,
@@ -593,6 +606,17 @@ const FORMULA_FUNCS = {
   REPT: (a, c) => { const n = numAt(a, c, 1); return n < 0 ? mkErr('#VALUE!') : strAt(a, c, 0).repeat(n); },
   EXACT: (a, c) => strAt(a, c, 0) === strAt(a, c, 1),
   CONCATENATE: (a, c) => collectValues(a, c).map(formatScalar).join(''),
+  CONCAT: (a, c) => collectValues(a, c).map(formatScalar).join(''), // like CONCATENATE but also accepts ranges
+  FIXED: (a, c) => {
+    const n = numAt(a, c, 0), dec = a.length > 1 ? Math.trunc(numAt(a, c, 1)) : 2, noCommas = a.length > 2 ? boolAt(a, c, 2) : false;
+    let s;
+    if (dec < 0) { const f = Math.pow(10, -dec); s = String((n < 0 ? -Math.round(-n / f) : Math.round(n / f)) * f); }
+    else s = n.toFixed(dec);
+    if (!noCommas) { const parts = s.split('.'); parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); s = parts.join('.'); }
+    return s;
+  },
+  TEXTBEFORE: (a, c) => { const s = strAt(a, c, 0), d = strAt(a, c, 1); const i = d === '' ? 0 : s.indexOf(d); return i < 0 ? mkErr('#N/A') : s.slice(0, i); },
+  TEXTAFTER: (a, c) => { const s = strAt(a, c, 0), d = strAt(a, c, 1); const i = d === '' ? 0 : s.indexOf(d); return i < 0 ? mkErr('#N/A') : s.slice(i + d.length); },
   TEXTJOIN: (a, c) => { const delim = strAt(a, c, 0); const skip = boolAt(a, c, 1); const vals = collectValues(a.slice(2), c).map(formatScalar); return (skip ? vals.filter(v => v !== '') : vals).join(delim); },
   FIND: (a, c) => { const idx = strAt(a, c, 1).indexOf(strAt(a, c, 0), optNumAt(a, c, 2, 1) - 1); return idx < 0 ? mkErr('#VALUE!') : idx + 1; },
   SEARCH: (a, c) => {
@@ -675,6 +699,17 @@ const FORMULA_FUNCS = {
     return mkErr('#NUM!');
   },
   WORKDAY: (a, c) => { let serial = Math.floor(numAt(a, c, 0)); let n = Math.floor(numAt(a, c, 1)); const step = n < 0 ? -1 : 1; n = Math.abs(n); while (n > 0) { serial += step; const dow = serialToDate(serial).getUTCDay(); if (dow !== 0 && dow !== 6) n--; } return mkDate(serial); },
+  DAYS360: (a, c) => days360(serialToDate(numAt(a, c, 0)), serialToDate(numAt(a, c, 1)), a.length > 2 ? boolAt(a, c, 2) : false),
+  NETWORKDAYS: (a, c) => {
+    let s = Math.floor(numAt(a, c, 0)), e = Math.floor(numAt(a, c, 1));
+    const sign = s <= e ? 1 : -1;
+    if (s > e) { const t = s; s = e; e = t; }
+    const holidays = new Set();
+    if (a.length > 2) for (const h of collectNumbers([a[2]], c)) holidays.add(Math.floor(h));
+    let count = 0;
+    for (let d = s; d <= e; d++) { const dow = serialToDate(d).getUTCDay(); if (dow !== 0 && dow !== 6 && !holidays.has(d)) count++; }
+    return count * sign;
+  },
 
   // --- Lookup -------------------------------------------------------------
   ROWS: (a, c) => { const r = rangeAt(a, c, 0); return r.r2 - r.r1 + 1; },
@@ -689,6 +724,46 @@ const FORMULA_FUNCS = {
   VLOOKUP: (a, c) => lookupVH(a, c, true),
   HLOOKUP: (a, c) => lookupVH(a, c, false),
   LOOKUP: (a, c) => { const key = evAt(a, c, 0); const r = rangeAt(a, c, 1); const flat = flattenRange(r); let best = -1; for (let i = 0; i < flat.length; i++) if (compareValues('<=', flat[i], key) === true) best = i; if (best < 0) return mkErr('#N/A'); if (a.length > 2) { const res = flattenRange(rangeAt(a, c, 2)); return res[best] ?? mkErr('#N/A'); } return flat[best]; },
+  XLOOKUP: (a, c) => {
+    const key = evAt(a, c, 0);
+    const lookup = flattenRange(rangeAt(a, c, 1));
+    const ret = flattenRange(rangeAt(a, c, 2));
+    const mode = a.length > 4 ? numAt(a, c, 4) : 0; // 0 exact, -1 next-smaller, 1 next-larger, 2 wildcard
+    let idx = -1;
+    if (mode === 0 || mode === 2) {
+      for (let i = 0; i < lookup.length; i++) { if (mode === 2 ? matchCriteria(lookup[i], key) : compareValues('=', lookup[i], key) === true) { idx = i; break; } }
+    } else { // approximate: closest value on the requested side
+      let bestVal;
+      for (let i = 0; i < lookup.length; i++) {
+        const side = mode < 0 ? compareValues('<=', lookup[i], key) : compareValues('>=', lookup[i], key);
+        if (side !== true) continue;
+        if (idx < 0 || compareValues(mode < 0 ? '>' : '<', lookup[i], bestVal) === true) { idx = i; bestVal = lookup[i]; }
+      }
+    }
+    if (idx < 0) return a.length > 3 ? valAt(a, c, 3) : mkErr('#N/A'); // if_not_found
+    return idx < ret.length ? ret[idx] : mkErr('#N/A');
+  },
+  OFFSET: (a, c) => {
+    const node = a[0];
+    let baseR, baseC, baseH, baseW;
+    if (node.type === 'ref' && CELL_RE.test(node.ref)) { const p = parseCoordinates(node.ref); baseR = p.row; baseC = p.col; baseH = 1; baseW = 1; }
+    else if (node.type === 'range') { const rv = evalRange(node, c); if (isErr(rv)) throw rv; baseR = rv.r1; baseC = rv.c1; baseH = rv.r2 - rv.r1 + 1; baseW = rv.c2 - rv.c1 + 1; }
+    else return mkErr('#REF!');
+    const sheet = refSheet(node, c);
+    const top = baseR + numAt(a, c, 1), left = baseC + numAt(a, c, 2);
+    const height = a.length > 3 ? numAt(a, c, 3) : baseH, width = a.length > 4 ? numAt(a, c, 4) : baseW;
+    if (top < 0 || left < 0 || height < 1 || width < 1) return mkErr('#REF!');
+    const values = [];
+    for (let r = top; r < top + height; r++) { const row = []; for (let col = left; col < left + width; col++) row.push(coerceRaw(getCellValue(`${getColLetter(col)}${r + 1}`, c.depth + 1, sheet))); values.push(row); }
+    return { __range: true, values, r1: top, c1: left, r2: top + height - 1, c2: left + width - 1 };
+  },
+  INDIRECT: (a, c) => {
+    const ref = strAt(a, c, 0).trim().replace(/\$/g, '').toUpperCase();
+    if (CELL_RE.test(ref)) return coerceRaw(getCellValue(ref, c.depth + 1, c.sheet));
+    const m = /^([A-Z]+[0-9]+):([A-Z]+[0-9]+)$/.exec(ref);
+    if (m) return evalRange({ type: 'range', from: m[1], to: m[2], sheet: null }, c);
+    return mkErr('#REF!');
+  },
 
   // --- Array (single-cell model: results render as a comma-joined list) ----
   ARRAYFORMULA: (a, c) => evalNode(a[0], c),
