@@ -242,6 +242,7 @@
   "status.allSaved": "All changes saved",
   "status.saving": "Saving…",
   "status.reconnecting": "Reconnecting — changes not saved",
+  "status.lastSaved": "Last saved {time}",
   "find.title": "Find and replace",
   "find.close": "Close",
   "find.find": "Find",
