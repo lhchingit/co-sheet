@@ -13,7 +13,7 @@
 // them to local names so the rest of app.js continues to use bare identifiers.
 // ---------------------------------------------------------------------------
 const { escapeHtml, getColLetter, parseCellCoord, parseCoordinates } = window.CoSheet.utils;
-const { evaluateFormula } = window.CoSheet.formula;
+const { evaluateFormula, formulaIsSupported } = window.CoSheet.formula;
 const { t, getLang, translatePage, loadLocales } = window.CoSheet.i18n;
 // Sandboxed test environment decoration and safety fallbacks
 if (typeof document !== 'undefined' && document) {
@@ -1403,7 +1403,16 @@ const getCellValue = (coord, depth = 0, sheetName = null) => {
   if (!cells) return ''; // reference to an unknown sheet → treated as blank
   const cell = cells[coord];
   if (!cell) return '';
-  if (cell.formula) return evaluateFormula(cell.formula, depth, coord, sheetName != null ? sheetName : null);
+  if (cell.formula) {
+    // Imported .xlsx formulas can use functions this engine doesn't implement.
+    // Re-evaluating those would overwrite Excel's cached result with #NAME? (or a
+    // blank, when the formula wraps the call in IFERROR), so when the cell carries
+    // a cached value, keep displaying it for any formula the engine can't fully
+    // compute. With no cached value to preserve (e.g. a formula typed into an empty
+    // cell), fall through and show the engine's honest error instead of a blank.
+    if (cell.value && !formulaIsSupported(cell.formula)) return cell.value;
+    return evaluateFormula(cell.formula, depth, coord, sheetName != null ? sheetName : null);
+  }
   return cell.value || '';
 };
 
@@ -1515,6 +1524,11 @@ const recalculateSheet = () => {
   Object.keys(localCells).forEach(coord => {
     const cell = localCells[coord];
     if (cell && cell.formula) {
+      // Leave a formula the engine can't compute untouched when it carries an
+      // imported cached value, so that value survives (see getCellValue):
+      // re-evaluating would clobber it. Without a cached value there's nothing to
+      // protect, so fall through and let the engine produce its result/error.
+      if (cell.value && !formulaIsSupported(cell.formula)) return;
       const newVal = evaluateFormula(cell.formula, 0, coord);
       if (newVal !== cell.value) {
         cell.value = newVal;

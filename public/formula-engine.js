@@ -696,6 +696,63 @@ const formatWithPattern = (n, pattern) => {
   return s;
 };
 
+// Whether every node in an AST is something this engine can evaluate: each call
+// resolves to an implemented function, and each reference is an A1-style cell (so
+// a named range like `Taxes`, which the engine can't resolve, counts as
+// unsupported). Numbers, strings and booleans are always fine.
+const nodeIsSupported = (node) => {
+  if (!node || typeof node !== 'object') return true;
+  switch (node.type) {
+    case 'call':
+      // hasOwnProperty (not `in`) so a call named like an Object.prototype member
+      // — e.g. TOSTRING — isn't mistaken for an implemented function.
+      return Object.prototype.hasOwnProperty.call(FORMULA_FUNCS, node.name)
+        && node.args.every(nodeIsSupported);
+    case 'binary':
+      return nodeIsSupported(node.left) && nodeIsSupported(node.right);
+    case 'unary':
+    case 'percent':
+      return nodeIsSupported(node.operand);
+    case 'ref':
+      return CELL_RE.test(node.ref);
+    case 'range':
+      return CELL_RE.test(node.from) && CELL_RE.test(node.to);
+    default: // num, str, bool
+      return true;
+  }
+};
+
+// Memoizes formulaIsSupported by formula string. Formulas repeat across a sheet
+// and are stable, so this keeps the extra parse off the hot getCellValue path.
+const supportCache = new Map();
+const SUPPORT_CACHE_MAX = 20000;
+
+/**
+ * Whether this engine can actually evaluate a formula — i.e. it parses, every
+ * function it calls is implemented in FORMULA_FUNCS, and every reference is an
+ * A1-style cell. Imported .xlsx formulas can use Excel functions or named ranges
+ * co-sheet doesn't support; evaluating those would replace Excel's cached result
+ * with #NAME? (or, if wrapped in IFERROR, a blank), so callers use this to decide
+ * whether to keep the imported cached value instead. A non-formula value (no
+ * leading '=') is trivially "supported".
+ * @param {string} formula - Formula text (may or may not start with '=').
+ * @returns {boolean}
+ */
+const formulaIsSupported = (formula) => {
+  if (typeof formula !== 'string' || !formula.startsWith('=')) return true;
+  const cached = supportCache.get(formula);
+  if (cached !== undefined) return cached;
+  let ok;
+  try {
+    ok = nodeIsSupported(parseFormula(tokenizeFormula(formula.slice(1))));
+  } catch (e) {
+    ok = false; // won't parse -> the engine can't evaluate it either
+  }
+  if (supportCache.size >= SUPPORT_CACHE_MAX) supportCache.clear();
+  supportCache.set(formula, ok);
+  return ok;
+};
+
 /**
  * Evaluates a formula string (e.g. =SUM(A1:A5), =IF(A1>0,"y","n")) to a display
  * string. Returns spreadsheet-style error codes (#DIV/0!, #N/A, …) on failure.
@@ -723,6 +780,7 @@ const evaluateFormula = (formula, recursionDepth = 0, ownerCoord = null, baseShe
 
   root.CoSheet.formula = {
     evaluateFormula,
+    formulaIsSupported,
     setCellResolver(fn) { if (typeof fn === 'function') getCellValue = fn; }
   };
 })();

@@ -111,6 +111,7 @@ function createSandbox() {
     globalThis.parseCoordinates = parseCoordinates;
     globalThis.getCellValue = getCellValue;
     globalThis.evaluateFormula = evaluateFormula;
+    globalThis.formulaIsSupported = formulaIsSupported;
     globalThis.recalculateSheet = recalculateSheet;
     globalThis.buildRangeRef = buildRangeRef;
     globalThis.parseFormulaRefs = parseFormulaRefs;
@@ -2635,4 +2636,92 @@ test('Edit Menu & Search Replace - Find, Replace, and Replace All modify values 
   vmContext.performUndo();
   assert.strictEqual(sheetCells['A1'].value, 'Hello TargetText World');
   assert.strictEqual(sheetCells['A2'].value, 'TargetText Exact');
+});
+
+// ---------------------------------------------------------------------------
+// Imported-formula value preservation
+//
+// .xlsx import stores each formula cell as { formula, value } where `value` is
+// Excel's cached result. The engine implements a subset of Excel's functions, so
+// re-evaluating a formula that uses an unsupported function must NOT clobber the
+// cached value (which would show #NAME?, or a blank when wrapped in IFERROR).
+// ---------------------------------------------------------------------------
+
+test('formulaIsSupported - true for implemented functions and plain values, false for unknown ones', () => {
+  const sandbox = createSandbox();
+  assert.strictEqual(sandbox.formulaIsSupported('=SUM(A1:A3)'), true);
+  assert.strictEqual(sandbox.formulaIsSupported('=IF(A1>0,SUM(A1:A2),AVERAGE(A1:A2))'), true);
+  assert.strictEqual(sandbox.formulaIsSupported('=A1+A2*3'), true, 'no function calls at all');
+  assert.strictEqual(sandbox.formulaIsSupported('100'), true, 'plain value (no leading =)');
+
+  assert.strictEqual(sandbox.formulaIsSupported('=SUBTOTAL(9,A1:A3)'), false);
+  assert.strictEqual(sandbox.formulaIsSupported('=IFERROR(XLOOKUP(1,A1:A2,A1:A2),"")'), false, 'unknown fn nested under a known one');
+  assert.strictEqual(sandbox.formulaIsSupported('=SUM(A1:A2'), false, 'unparseable formula');
+  assert.strictEqual(sandbox.formulaIsSupported('=SUM(Taxes)'), false, 'named range is not an A1 reference');
+});
+
+test('getCellValue - keeps the imported cached value for an unsupported function', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    'A2': { value: '20' },
+    // Excel cached 30; co-sheet has no SUBTOTAL, so it must show the cache, not #NAME?.
+    'B1': { formula: '=SUBTOTAL(9,A1:A2)', value: '30' }
+  };
+
+  assert.strictEqual(sandbox.getCellValue('B1'), '30');
+});
+
+test('getCellValue - keeps the cached value for an IFERROR-wrapped unsupported function (the disappearing-value case)', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    'A2': { value: '20' },
+    // Without the guard this evaluates to '' (IFERROR swallows XLOOKUP's #NAME?),
+    // making the value silently vanish. The cached value must win instead.
+    'B1': { formula: '=IFERROR(XLOOKUP(10,A1:A2,A1:A2),"")', value: '10' }
+  };
+
+  assert.strictEqual(sandbox.getCellValue('B1'), '10');
+});
+
+test('getCellValue - unsupported formula with no cached value shows the engine error (nothing to preserve)', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    // No `value`: there's no imported cache to protect, so the honest #NAME? must
+    // surface rather than a misleading blank.
+    'B1': { formula: '=SUBTOTAL(9,A1:A1)' }
+  };
+
+  assert.strictEqual(sandbox.getCellValue('B1'), '#NAME?');
+});
+
+test('getCellValue - still live-evaluates a supported formula (cache is not trusted blindly)', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    'A2': { value: '20' },
+    // Stale cache: the real sum is 30, so a supported formula must recompute.
+    'B1': { formula: '=SUM(A1:A2)', value: '999' }
+  };
+
+  assert.strictEqual(sandbox.getCellValue('B1'), '30');
+});
+
+test('recalculateSheet - does not overwrite the cached value of an unsupported formula', () => {
+  const sandbox = createSandbox();
+  sandbox.localCells = {
+    'A1': { value: '10' },
+    'A2': { value: '20' },
+    'B1': { formula: '=SUBTOTAL(9,A1:A2)', value: '30' },
+    'B2': { formula: '=SUM(A1:A2)', value: '0' }
+  };
+  sandbox.localSheets = { Sheet1: sandbox.localCells };
+  sandbox.activeSheetName = 'Sheet1';
+
+  sandbox.recalculateSheet();
+
+  assert.strictEqual(sandbox.localCells['B1'].value, '30', 'unsupported formula keeps its cached value');
+  assert.strictEqual(sandbox.localCells['B2'].value, '30', 'supported formula is recomputed');
 });
