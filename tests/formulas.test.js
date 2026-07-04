@@ -2654,8 +2654,8 @@ test('formulaIsSupported - true for implemented functions and plain values, fals
   assert.strictEqual(sandbox.formulaIsSupported('=A1+A2*3'), true, 'no function calls at all');
   assert.strictEqual(sandbox.formulaIsSupported('100'), true, 'plain value (no leading =)');
 
-  assert.strictEqual(sandbox.formulaIsSupported('=SUBTOTAL(9,A1:A3)'), false);
-  assert.strictEqual(sandbox.formulaIsSupported('=IFERROR(XLOOKUP(1,A1:A2,A1:A2),"")'), false, 'unknown fn nested under a known one');
+  assert.strictEqual(sandbox.formulaIsSupported('=FILTER(A1:A3,A1:A3>1)'), false);
+  assert.strictEqual(sandbox.formulaIsSupported('=IFERROR(FILTER(A1:A2,A1:A2>0),"")'), false, 'unknown fn nested under a known one');
   assert.strictEqual(sandbox.formulaIsSupported('=SUM(A1:A2'), false, 'unparseable formula');
   assert.strictEqual(sandbox.formulaIsSupported('=SUM(Taxes)'), false, 'named range is not an A1 reference');
 });
@@ -2665,8 +2665,8 @@ test('getCellValue - keeps the imported cached value for an unsupported function
   sandbox.localCells = {
     'A1': { value: '10' },
     'A2': { value: '20' },
-    // Excel cached 30; co-sheet has no SUBTOTAL, so it must show the cache, not #NAME?.
-    'B1': { formula: '=SUBTOTAL(9,A1:A2)', value: '30' }
+    // Excel cached 30; co-sheet has no FILTER, so it must show the cache, not #NAME?.
+    'B1': { formula: '=FILTER(A1:A2,A1:A2>5)', value: '30' }
   };
 
   assert.strictEqual(sandbox.getCellValue('B1'), '30');
@@ -2677,9 +2677,9 @@ test('getCellValue - keeps the cached value for an IFERROR-wrapped unsupported f
   sandbox.localCells = {
     'A1': { value: '10' },
     'A2': { value: '20' },
-    // Without the guard this evaluates to '' (IFERROR swallows XLOOKUP's #NAME?),
+    // Without the guard this evaluates to '' (IFERROR swallows FILTER's #NAME?),
     // making the value silently vanish. The cached value must win instead.
-    'B1': { formula: '=IFERROR(XLOOKUP(10,A1:A2,A1:A2),"")', value: '10' }
+    'B1': { formula: '=IFERROR(FILTER(A1:A2,A1:A2>1),"")', value: '10' }
   };
 
   assert.strictEqual(sandbox.getCellValue('B1'), '10');
@@ -2691,7 +2691,7 @@ test('getCellValue - unsupported formula with no cached value shows the engine e
     'A1': { value: '10' },
     // No `value`: there's no imported cache to protect, so the honest #NAME? must
     // surface rather than a misleading blank.
-    'B1': { formula: '=SUBTOTAL(9,A1:A1)' }
+    'B1': { formula: '=FILTER(A1:A1,A1:A1>0)' }
   };
 
   assert.strictEqual(sandbox.getCellValue('B1'), '#NAME?');
@@ -2714,7 +2714,7 @@ test('recalculateSheet - does not overwrite the cached value of an unsupported f
   sandbox.localCells = {
     'A1': { value: '10' },
     'A2': { value: '20' },
-    'B1': { formula: '=SUBTOTAL(9,A1:A2)', value: '30' },
+    'B1': { formula: '=FILTER(A1:A2,A1:A2>5)', value: '30' },
     'B2': { formula: '=SUM(A1:A2)', value: '0' }
   };
   sandbox.localSheets = { Sheet1: sandbox.localCells };
@@ -2792,4 +2792,78 @@ test('VALUE parses percent, currency and thousands separators', () => {
   assert.strictEqual(s.evaluateFormula('=VALUE("$1,234")'), '1234');
   assert.strictEqual(s.evaluateFormula('=VALUE("  42 ")'), '42');
   assert.strictEqual(s.evaluateFormula('=VALUE("abc")'), '#VALUE!');
+});
+
+// ---------------------------------------------------------------------------
+// Newly added common functions: ISEVEN/ISODD, N, T, CONCAT, FIXED,
+// TEXTBEFORE/TEXTAFTER, DAYS360, NETWORKDAYS, SUBTOTAL, XLOOKUP, OFFSET, INDIRECT.
+// ---------------------------------------------------------------------------
+
+function lookupSandbox() {
+  const s = createSandbox();
+  s.localCells = {
+    A1: { value: '10' }, A2: { value: '20' }, A3: { value: '30' }, A4: { value: '40' }, A5: { value: '50' },
+    B1: { value: 'apple' }, B2: { value: 'banana' }, B3: { value: 'cherry' }, B4: { value: 'date' }, B5: { value: 'elder' }
+  };
+  return s;
+}
+
+test('ISEVEN / ISODD / N / T', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=ISEVEN(4)'), 'TRUE');
+  assert.strictEqual(s.evaluateFormula('=ISODD(-3)'), 'TRUE');
+  assert.strictEqual(s.evaluateFormula('=N(TRUE)'), '1');
+  assert.strictEqual(s.evaluateFormula('=N("x")'), '0');
+  assert.strictEqual(s.evaluateFormula('=T("hi")'), 'hi');
+  assert.strictEqual(s.evaluateFormula('=T(5)'), '');
+});
+
+test('CONCAT / FIXED / TEXTBEFORE / TEXTAFTER', () => {
+  const s = createSandbox();
+  s.localCells = { B1: { value: 'a' }, B2: { value: 'b' }, B3: { value: 'c' } };
+  assert.strictEqual(s.evaluateFormula('=CONCAT(B1:B3)'), 'abc');
+  assert.strictEqual(s.evaluateFormula('=FIXED(1234.567,2)'), '1,234.57');
+  assert.strictEqual(s.evaluateFormula('=FIXED(1234.5,0,TRUE)'), '1235');
+  assert.strictEqual(s.evaluateFormula('=TEXTBEFORE("a-b-c","-")'), 'a');
+  assert.strictEqual(s.evaluateFormula('=TEXTAFTER("a-b-c","-")'), 'b-c');
+  assert.strictEqual(s.evaluateFormula('=TEXTBEFORE("abc","-")'), '#N/A');
+});
+
+test('DAYS360 / NETWORKDAYS', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.evaluateFormula('=DAYS360(DATE(2020,1,1),DATE(2020,2,1))'), '30');
+  assert.strictEqual(s.evaluateFormula('=NETWORKDAYS(DATE(2021,1,1),DATE(2021,1,31))'), '21');
+  assert.strictEqual(s.evaluateFormula('=NETWORKDAYS(DATE(2021,1,4),DATE(2021,1,8))'), '5', 'a full Mon-Fri week');
+});
+
+test('SUBTOTAL delegates to the aggregate (1-11 and 101-111)', () => {
+  const s = lookupSandbox();
+  assert.strictEqual(s.evaluateFormula('=SUBTOTAL(9,A1:A5)'), '150', 'SUM');
+  assert.strictEqual(s.evaluateFormula('=SUBTOTAL(1,A1:A3)'), '20', 'AVERAGE');
+  assert.strictEqual(s.evaluateFormula('=SUBTOTAL(109,A1:A3)'), '60', '109 == 9 (SUM)');
+  assert.strictEqual(s.evaluateFormula('=SUBTOTAL(2,A1:A5)'), '5', 'COUNT');
+  assert.strictEqual(s.evaluateFormula('=SUBTOTAL(99,A1:A3)'), '#VALUE!', 'invalid code');
+});
+
+test('XLOOKUP: exact, if-not-found, and approximate modes', () => {
+  const s = lookupSandbox();
+  assert.strictEqual(s.evaluateFormula('=XLOOKUP("banana",B1:B5,A1:A5)'), '20');
+  assert.strictEqual(s.evaluateFormula('=XLOOKUP(30,A1:A5,B1:B5)'), 'cherry');
+  assert.strictEqual(s.evaluateFormula('=XLOOKUP(25,A1:A5,B1:B5,"none")'), 'none', 'if_not_found');
+  assert.strictEqual(s.evaluateFormula('=XLOOKUP(25,A1:A5,A1:A5,"nf",-1)'), '20', 'next smaller');
+  assert.strictEqual(s.evaluateFormula('=XLOOKUP(25,A1:A5,A1:A5,"nf",1)'), '30', 'next larger');
+});
+
+test('OFFSET returns a shifted cell/range; out-of-grid rows error', () => {
+  const s = lookupSandbox();
+  assert.strictEqual(s.evaluateFormula('=OFFSET(A1,2,0)'), '30');
+  assert.strictEqual(s.evaluateFormula('=SUM(OFFSET(A1,0,0,3,1))'), '60', 'height/width build a range');
+  assert.strictEqual(s.evaluateFormula('=OFFSET(A1,-1,0)'), '#REF!', 'above the grid');
+});
+
+test('INDIRECT resolves a cell or range from text', () => {
+  const s = lookupSandbox();
+  assert.strictEqual(s.evaluateFormula('=INDIRECT("A3")'), '30');
+  assert.strictEqual(s.evaluateFormula('=SUM(INDIRECT("A1:A3"))'), '60');
+  assert.strictEqual(s.evaluateFormula('=INDIRECT("nonsense!")'), '#REF!');
 });
