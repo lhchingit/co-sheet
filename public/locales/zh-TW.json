@@ -242,6 +242,7 @@
   "status.allSaved": "所有變更都已儲存",
   "status.saving": "儲存中…",
   "status.reconnecting": "重新連線中——變更尚未儲存",
+  "status.lastSaved": "上次儲存 {time}",
   "find.title": "尋找並取代",
   "find.close": "關閉",
   "find.find": "尋找",

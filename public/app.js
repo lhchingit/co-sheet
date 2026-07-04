@@ -407,13 +407,39 @@ function setSaveStatus(state) {
   }
 }
 
+// Wall-clock time of the last save that settled this session (null until the
+// first edit is saved). Shown next to the status text as "Last saved HH:MM".
+let lastSavedAt = null;
+
+// Render the "Last saved HH:MM" stamp (24-hour, locale-formatted). Re-run on a
+// language switch so the label re-localizes; hidden until there's a save to show.
+function renderSavedTime() {
+  const el = document.getElementById('save-status-time');
+  if (!el) return;
+  if (!lastSavedAt) { el.classList.add('hidden'); el.textContent = ''; return; }
+  let time;
+  try {
+    time = lastSavedAt.toLocaleTimeString(getLang() === 'en' ? 'en-US' : 'zh-TW',
+      { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch (e) {
+    time = lastSavedAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  el.textContent = t('status.lastSaved', { time });
+  el.classList.remove('hidden');
+}
+
 // Show 'saving' on each broadcast edit, then settle back to 'saved' once edits
 // stop for a beat. A dropped socket clears this so 'reconnecting' isn't overwritten.
 function markSaving() {
   clearTimeout(saveStatusTimer);
   setSaveStatus('saving');
   saveStatusTimer = setTimeout(() => {
-    if (socket && socket.readyState === WebSocket.OPEN) setSaveStatus('saved');
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      setSaveStatus('saved');
+      // The save has settled — stamp it with the current time.
+      lastSavedAt = new Date();
+      renderSavedTime();
+    }
   }, 700);
 }
 
@@ -7925,6 +7951,9 @@ const applyLanguageSelection = (lang) => {
     if (check) check.textContent = opt.dataset.lang === lang ? 'check' : '';
   });
   translatePage(lang);
+  // The "Last saved …" stamp is built dynamically (interpolated time), so
+  // translatePage() can't swap it — re-render it for the new language.
+  renderSavedTime();
   try { localStorage.setItem('app-language', lang); } catch (err) {}
   // Language is now applied — reveal the UI (see the FOUC guard in index.html).
   if (document.documentElement) document.documentElement.classList.add('i18n-ready');
