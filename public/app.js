@@ -6787,7 +6787,7 @@ const renderSheetTabs = () => {
     // Render the dropdown arrow on every tab (not just the active one)
     if (!isHistoryMode) {
       const arrowSpan = document.createElement('span');
-      arrowSpan.className = 'material-symbols-outlined text-[16px] ml-1 cursor-pointer select-none';
+      arrowSpan.className = 'material-symbols-outlined text-[18px] ml-1 cursor-pointer select-none';
       arrowSpan.innerText = 'arrow_drop_down';
       arrowSpan.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -6882,7 +6882,7 @@ const showSheetContextMenu = (sheetName, x, _y) => {
   
   const menu = document.createElement('div');
   menu.id = 'sheet-context-menu';
-  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded py-1 z-[1000] border border-outline-variant text-label-md text-on-surface dark:text-on-surface-variant w-48';
+  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded py-1 z-[1000] border border-outline-variant text-label-lg text-on-surface dark:text-on-surface-variant w-48';
   
   const visibleSheets = sheetOrder.filter(s => !hiddenSheets.includes(s));
   const canDeleteOrHide = visibleSheets.length > 1;
