@@ -2949,6 +2949,10 @@ wss.on('connection', async (ws, req) => {
       hiddenCols: connWorkbook.hiddenCols,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
+      // This connection's own presence identity, so the client can filter its
+      // own cursor out of the roster below (a refresh/reconnect can briefly leave
+      // a stale presence of the previous connection for the same username).
+      self: { userId: wsId, username },
       // Presence list merges this instance's sockets with users mirrored from
       // other instances (empty in single-instance mode).
       users: presenceForFile(fileId)

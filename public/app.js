@@ -218,6 +218,17 @@ let localCells = new Proxy({}, {
 });
 
 let remoteCursors = Object.create(null); // Active remote cursors
+// This client's own presence identity, sent by the server in the `init` payload.
+// Used to filter our own cursor out of the roster: a refresh or WebSocket
+// reconnect gives us a fresh connection id while the previous connection lingers
+// briefly in the server's roster (with its last active cell), so without this we
+// would render our own username as a "peer" tag in that cell. Matching on the
+// (stable) username — not just the per-connection id — also catches that ghost.
+let myUserId = null;
+let myUsername = null;
+/** Whether a presence entry belongs to this client (never render our own tag). */
+const isSelfPresence = (u) =>
+  !!u && ((myUserId && u.userId === myUserId) || (myUsername != null && u.username === myUsername));
 let activeCellId = null; // Currently selected cell ID
 let isSelecting = false; // Whether selection drag is active
 let isColumnSelection = false; // Whether the current selection is a full-column header click
@@ -704,9 +715,18 @@ function handleSocketMessage(event) {
         }
       }
 
-      // Position active users' cursors
+      // Learn our own presence identity so we can exclude ourselves from the
+      // roster below (and in later cursor-update / re-render passes).
+      if (payload.self) {
+        myUserId = payload.self.userId || null;
+        myUsername = payload.self.username != null ? payload.self.username : null;
+      }
+
+      // Position active users' cursors (skipping our own, incl. a stale ghost of
+      // a previous connection left by a refresh/reconnect — see isSelfPresence).
       if (payload.users) {
         payload.users.forEach(user => {
+          if (isSelfPresence(user)) return;
           if (user.activeCell) {
             const sheet = user.activeSheet || 'Sheet1';
             user.activeSheet = sheet;
@@ -723,6 +743,9 @@ function handleSocketMessage(event) {
     if (type === 'cursor-update') {
       const { userId, activeCell, activeSheet } = payload;
       removeCursorBorder(userId);
+      // Ignore updates that describe our own presence (e.g. a lingering previous
+      // connection after a refresh/reconnect) so we never tag our own cell.
+      if (isSelfPresence(payload)) { deleteKey(remoteCursors, userId); return; }
       const sheet = activeSheet || 'Sheet1';
       payload.activeSheet = sheet;
 
@@ -3488,6 +3511,7 @@ const renderRemoteCursors = () => {
   if (isHistoryMode) return;
   Object.keys(remoteCursors).forEach(id => {
     const cursor = remoteCursors[id];
+    if (isSelfPresence(cursor)) return; // never render our own presence tag
     if (cursor && cursor.activeCell && cursor.activeSheet === activeSheetName) {
       renderCursorBorder(cursor);
     }
