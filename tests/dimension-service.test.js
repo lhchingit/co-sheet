@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { resizeColumn, resizeRow, setColCount, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimension-service.js';
+import { resizeColumn, resizeRow, setColCount, setHiddenCols, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimension-service.js';
 
 /** Build a minimal workbook with the given sheet names. */
 const makeWb = (...names) => {
@@ -90,4 +90,33 @@ test('setColCount rejects an unknown sheet', () => {
   const wb = makeWb('Sheet1');
   assert.deepStrictEqual(setColCount(wb, { sheetName: 'Nope', count: 30 }), { ok: false });
   assert.strictEqual(wb.colCounts, undefined);
+});
+
+test('setHiddenCols stores a de-duplicated list in a lazily created map', () => {
+  const wb = makeWb('Sheet1');
+  const res = setHiddenCols(wb, { sheetName: 'Sheet1', cols: ['C', 'C', 'AB'] });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', cols: ['C', 'AB'] });
+  assert.deepStrictEqual(wb.hiddenCols.Sheet1, ['C', 'AB']);
+});
+
+test('setHiddenCols drops invalid column keys (regex / __proto__)', () => {
+  const wb = makeWb('Sheet1');
+  const res = setHiddenCols(wb, { sheetName: 'Sheet1', cols: ['A', 'a1', '__proto__', 'ZZ', 5] });
+  assert.deepStrictEqual(res.cols, ['A', 'ZZ']);
+  assert.deepStrictEqual(wb.hiddenCols.Sheet1, ['A', 'ZZ']);
+});
+
+test('setHiddenCols with an empty list drops the entry (keeps the doc lean)', () => {
+  const wb = makeWb('Sheet1');
+  setHiddenCols(wb, { sheetName: 'Sheet1', cols: ['B'] });
+  const res = setHiddenCols(wb, { sheetName: 'Sheet1', cols: [] });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', cols: [] });
+  assert.strictEqual(wb.hiddenCols.Sheet1, undefined);
+});
+
+test('setHiddenCols rejects an unknown sheet and a non-array payload', () => {
+  const wb = makeWb('Sheet1');
+  assert.deepStrictEqual(setHiddenCols(wb, { sheetName: 'Nope', cols: ['A'] }), { ok: false });
+  assert.deepStrictEqual(setHiddenCols(wb, { sheetName: 'Sheet1', cols: 'A' }), { ok: false });
+  assert.strictEqual(wb.hiddenCols, undefined);
 });

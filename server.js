@@ -1391,8 +1391,9 @@ const loadState = async (key = 'default') => {
       const colWidths = sanitizeDimensionMap(parsed && parsed.colWidths);
       const rowHeights = sanitizeDimensionMap(parsed && parsed.rowHeights);
       const colCounts = sanitizeColCounts(parsed && parsed.colCounts);
+      const hiddenCols = sanitizeHiddenCols(parsed && parsed.hiddenCols);
 
-      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights, colCounts };
+      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights, colCounts, hiddenCols };
       // Define a getter/setter proxy for legacy 'cells' compatibility pointing to the first visible sheet
       return setupCellsProxy(state);
     }
@@ -1410,7 +1411,8 @@ const loadState = async (key = 'default') => {
     hiddenSheets: [],
     colWidths: Object.create(null),
     rowHeights: Object.create(null),
-    colCounts: Object.create(null)
+    colCounts: Object.create(null),
+    hiddenCols: Object.create(null)
   };
   // Define getter/setter proxy on the fresh state object pointing to first visible sheet (Sheet1).
   return setupCellsProxy(freshState);
@@ -1454,6 +1456,31 @@ const sanitizeColCounts = (raw) => {
     if (Number.isInteger(n) && n > dimensionService.DEFAULT_COLS && n <= dimensionService.MAX_COLS) {
       out[sheetName] = n;
     }
+  }
+  return out;
+};
+
+/**
+ * Sanitize a persisted per-sheet hidden-column map ({ [sheet]: string[] }).
+ * Returns a prototype-free copy keeping only valid, de-duplicated column-letter
+ * keys (A … ZZ), dropping `__proto__`/inherited keys and empty lists.
+ * @param {*} raw
+ * @returns {Object}
+ */
+const sanitizeHiddenCols = (raw) => {
+  const out = Object.create(null);
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [sheetName, cols] of Object.entries(raw)) {
+    if (sheetName === '__proto__' || !Array.isArray(cols)) continue;
+    const seen = new Set();
+    const clean = [];
+    for (const c of cols) {
+      if (typeof c === 'string' && /^[A-Z]{1,2}$/.test(c) && !seen.has(c)) {
+        seen.add(c);
+        clean.push(c);
+      }
+    }
+    if (clean.length) out[sheetName] = clean;
   }
   return out;
 };
@@ -1668,7 +1695,8 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
       hiddenSheets: [],
       colWidths: Object.create(null),
       rowHeights: Object.create(null),
-      colCounts: Object.create(null)
+      colCounts: Object.create(null),
+      hiddenCols: Object.create(null)
     };
 
     await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
@@ -1728,7 +1756,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       hiddenSheets: src.hiddenSheets || [],
       colWidths: src.colWidths || {},
       rowHeights: src.rowHeights || {},
-      colCounts: src.colCounts || {}
+      colCounts: src.colCounts || {},
+      hiddenCols: src.hiddenCols || {}
     }));
 
     const id = crypto.randomBytes(12).toString('hex');
@@ -1747,7 +1776,8 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       hiddenSheets: clonedState.hiddenSheets,
       colWidths: sanitizeDimensionMap(clonedState.colWidths),
       rowHeights: sanitizeDimensionMap(clonedState.rowHeights),
-      colCounts: sanitizeColCounts(clonedState.colCounts)
+      colCounts: sanitizeColCounts(clonedState.colCounts),
+      hiddenCols: sanitizeHiddenCols(clonedState.hiddenCols)
     }));
 
     // Optionally carry over the source's collaborators (never re-adding the new
@@ -1858,7 +1888,9 @@ app.post('/api/files/import',
       rowHeights: sanitizeDimensionMap(rowHeights),
       // Imported columns past Z render via the client's data-derived floor; no
       // explicit blank-column growth to carry over.
-      colCounts: Object.create(null)
+      colCounts: Object.create(null),
+      // Imported workbooks start with no hidden columns.
+      hiddenCols: Object.create(null)
     };
 
     const id = crypto.randomBytes(12).toString('hex');
@@ -2327,7 +2359,8 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       hiddenSheets: Array.isArray(targetState.hiddenSheets) ? targetState.hiddenSheets : [],
       colWidths: sanitizeDimensionMap(targetState.colWidths),
       rowHeights: sanitizeDimensionMap(targetState.rowHeights),
-      colCounts: sanitizeColCounts(targetState.colCounts)
+      colCounts: sanitizeColCounts(targetState.colCounts),
+      hiddenCols: sanitizeHiddenCols(targetState.hiddenCols)
     });
 
     // Install it into the correct workbook binding and persist to that file's key.
@@ -2356,6 +2389,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
         colWidths: restored.colWidths,
         rowHeights: restored.rowHeights,
         colCounts: restored.colCounts,
+        hiddenCols: restored.hiddenCols,
         cells: restored.cells,
         users: presenceForFile(fileId)
       }
@@ -2760,6 +2794,11 @@ const applyStateOp = (workbook, type, payload) => {
     if (result.ok) {
       out.push({ all: true, msg: { type: 'col-count-update', payload: { sheetName: result.sheetName, count: result.count } } });
     }
+  } else if (type === 'set-hidden-cols') {
+    const result = dimensionService.setHiddenCols(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'hidden-cols-update', payload: { sheetName: result.sheetName, cols: result.cols } } });
+    }
   }
 
   return out;
@@ -2907,6 +2946,7 @@ wss.on('connection', async (ws, req) => {
       colWidths: connWorkbook.colWidths,
       rowHeights: connWorkbook.rowHeights,
       colCounts: connWorkbook.colCounts,
+      hiddenCols: connWorkbook.hiddenCols,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
       // Presence list merges this instance's sockets with users mirrored from
@@ -2936,7 +2976,8 @@ wss.on('connection', async (ws, req) => {
     'unhide-sheet',
     'reorder-sheets',
     'resize',
-    'set-col-count'
+    'set-col-count',
+    'set-hidden-cols'
   ];
 
   // Handle incoming WebSocket message events.

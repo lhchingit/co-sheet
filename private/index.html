@@ -395,6 +395,47 @@
         .grid-header.header-selected .col-header-menu:hover {
             background-color: rgba(255, 255, 255, 0.4);
         }
+        /* Hidden columns collapse to a zero-width track (see getColWidth). Clip
+           their content so a hidden cell's text can't paint outside the 0px box
+           (grid cells overflow visibly by default), and drop the side padding /
+           gridline so the collapsed boundary stays crisp. */
+        .grid-cell.col-hidden,
+        .grid-header.col-hidden {
+            overflow: hidden;
+            padding-left: 0;
+            padding-right: 0;
+            border-right: none;
+        }
+        /* Unhide affordance: a run of hidden columns leaves a small arrow on each
+           visible neighbour's touching edge — ◀ on the left column's right edge,
+           ▶ on the right column's left edge. Clicking either reveals the run. */
+        .col-unhide-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 13px;
+            height: 18px;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            color: #444746;
+            background-color: #e2e4ec;
+            z-index: 24;
+        }
+        .col-unhide-arrow:hover { background-color: #c9ccd6; }
+        .col-unhide-arrow.left  { right: 0; border-radius: 3px 0 0 3px; }
+        .col-unhide-arrow.right { left: 0;  border-radius: 0 3px 3px 0; }
+        /* The arrow overlays the boundary's resize handle, so when there is a
+           column to widen it doubles as a resize grip (drag) — hint that with the
+           resize cursor; a plain click still reveals the run. */
+        .col-unhide-arrow.resizable { cursor: col-resize; }
+        .grid-header.header-selected .col-unhide-arrow {
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.25);
+        }
         /* Invisible drag zones straddling each header's boundary. Hovering one
            shows a resize cursor; dragging it resizes the whole column/row. They
            sit above the header content (z 22) but the column-dropdown button
