@@ -262,6 +262,13 @@ let rowHeights = Object.create(null); // { [sheetName]: { [rowNumber]: px } }
 // the default. See getColCount, which also raises this by the data-derived floor.
 let colCounts = Object.create(null); // { [sheetName]: number }
 
+// Per-sheet hidden columns, keyed by sheet name → array of column letters. A
+// hidden column keeps its index/data but renders as a zero-width track (see
+// getColWidth); the two visible neighbours carry unhide arrows. Loaded from the
+// init payload and kept in sync via `hidden-cols-update` broadcasts; an absent
+// entry means nothing is hidden.
+let hiddenCols = Object.create(null); // { [sheetName]: string[] }
+
 // Default track sizes — must match the base grid-template-columns / row min-height
 // in private/index.html (46px gutter + 100px columns, 21px rows).
 const DEFAULT_COL_WIDTH = 100;
@@ -269,8 +276,20 @@ const DEFAULT_ROW_HEIGHT = 21;
 // Smallest size a column/row may be dragged to (mirrors dimensionService.MIN_SIZE).
 const MIN_DIMENSION = 20;
 
+/** Whether a column letter is hidden on the active (or given) sheet. */
+const isColHidden = (colLetter, sheetName = activeSheetName) => {
+  const arr = hiddenCols[sheetName];
+  return Array.isArray(arr) && arr.includes(colLetter);
+};
+
 /** Resolved width (px) of a column letter on the active sheet. */
 const getColWidth = (colLetter, sheetName = activeSheetName) => {
+  // Hidden columns collapse to a zero-width track so their column — and every
+  // pixel measurement derived from it (grid template, selection overlay, freeze
+  // offsets) — disappears; the stored width stays in colWidths and returns when
+  // the column is unhidden. History previews render the snapshot as-is and
+  // ignore the live hidden set.
+  if (!isHistoryMode && isColHidden(colLetter, sheetName)) return 0;
   const m = colWidths[sheetName];
   const w = m && m[colLetter];
   return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
@@ -331,6 +350,111 @@ const applyColCountDelta = (delta) => {
   const base = colCounts[activeSheetName] != null ? colCounts[activeSheetName] : getColCount();
   setActiveColCount(base + delta);
   renderSpreadsheetGrid();
+};
+
+/** 0-based column index for a column letter (A→0, Z→25, AA→26 …). */
+const colLetterIndex = (letter) => {
+  const c = parseCellCoord(`${letter}1`);
+  return c ? c.colIndex : 0;
+};
+
+/** Hidden column letters for a sheet (a fresh array; empty when none). */
+const getHiddenCols = (sheetName = activeSheetName) => {
+  const arr = hiddenCols[sheetName];
+  return Array.isArray(arr) ? arr.slice() : [];
+};
+
+/**
+ * Replace the active sheet's hidden-column set: normalise (de-dupe, order by
+ * index), update local state, broadcast so the server persists it and peers
+ * follow, then re-render. Mirrors setActiveColCount — the client always sends
+ * the whole desired set, so the op is idempotent.
+ * @param {string[]} cols
+ */
+const setActiveHiddenCols = (cols) => {
+  const seen = new Set();
+  const clean = [];
+  for (const letter of cols) {
+    if (typeof letter === 'string' && !seen.has(letter)) { seen.add(letter); clean.push(letter); }
+  }
+  clean.sort((a, b) => colLetterIndex(a) - colLetterIndex(b));
+  if (clean.length) setKey(hiddenCols, activeSheetName, clean);
+  else deleteKey(hiddenCols, activeSheetName);
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'set-hidden-cols', payload: { sheetName: activeSheetName, cols: clean } }));
+  }
+  renderSpreadsheetGrid();
+};
+
+/** Hide a single column on the active sheet (no-op if already hidden). */
+const hideColumn = (colLetter) => {
+  if (!canEditWorkbook || isColHidden(colLetter)) return;
+  // Drop the (now zero-width) column selection so no invisible overlay lingers.
+  clearRangeSelection();
+  setActiveHiddenCols([...getHiddenCols(), colLetter]);
+};
+
+/** Reveal a run of column letters on the active sheet. */
+const unhideColumns = (letters) => {
+  if (!canEditWorkbook || !letters.length) return;
+  const drop = new Set(letters);
+  setActiveHiddenCols(getHiddenCols().filter((c) => !drop.has(c)));
+};
+
+/**
+ * Build the small arrow a visible column header shows on a hidden-run boundary.
+ * `side` is 'left' (a ◀ pinned to this header's right edge, when the hidden run
+ * sits to its right) or 'right' (a ▶ pinned to its left edge, when the run sits
+ * to its left).
+ *
+ * The arrow sits directly over the boundary's resize handle, so it doubles as a
+ * resize grip: a plain click reveals the whole `runLetters` run, while a drag
+ * hands off to a normal column resize of the boundary's left visible column
+ * (`resizeLetter` / `resizeHeaderEl`, omitted when the run is at the grid's left
+ * edge and there is no column to widen).
+ * @param {'left'|'right'} side
+ * @param {string[]} runLetters
+ * @param {string|null} resizeLetter
+ * @param {HTMLElement|null} resizeHeaderEl
+ * @returns {HTMLElement}
+ */
+const createUnhideArrow = (side, runLetters, resizeLetter, resizeHeaderEl) => {
+  const arrow = document.createElement('span');
+  arrow.className = `col-unhide-arrow ${side} material-symbols-outlined`;
+  if (resizeLetter && resizeHeaderEl) arrow.classList.add('resizable');
+  arrow.textContent = side === 'left' ? 'arrow_left' : 'arrow_right';
+  arrow.title = t('col.unhide');
+  // Distinguish a click (reveal the run) from a drag (resize the boundary's left
+  // visible column). We start the resize only once the pointer has moved past a
+  // small threshold, handing the original mousedown X to startDimensionResize so
+  // its delta stays correct; a mouseup before then is treated as a click.
+  arrow.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (isHistoryMode || !canEditWorkbook) return;
+    const startX = e.clientX;
+    let dragging = false;
+    const teardown = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    const onMove = (me) => {
+      if (dragging) return;
+      if (resizeLetter && resizeHeaderEl && Math.abs(me.clientX - startX) >= 3) {
+        dragging = true;
+        teardown();
+        startDimensionResize('col', resizeLetter, resizeHeaderEl, startX);
+      }
+    };
+    const onUp = () => {
+      teardown();
+      if (!dragging) unhideColumns(runLetters);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+  return arrow;
 };
 
 // Per-sheet value filters now live in sort-filter.js (window.CoSheet.sortFilter).
@@ -532,6 +656,7 @@ function handleSocketMessage(event) {
       colWidths = (payload.colWidths && typeof payload.colWidths === 'object') ? payload.colWidths : Object.create(null);
       rowHeights = (payload.rowHeights && typeof payload.rowHeights === 'object') ? payload.rowHeights : Object.create(null);
       colCounts = (payload.colCounts && typeof payload.colCounts === 'object') ? payload.colCounts : Object.create(null);
+      hiddenCols = (payload.hiddenCols && typeof payload.hiddenCols === 'object') ? payload.hiddenCols : Object.create(null);
 
       if (payload.sheets && Object.keys(payload.sheets).length > 0) {
         Object.assign(localSheets, payload.sheets);
@@ -600,7 +725,7 @@ function handleSocketMessage(event) {
       removeCursorBorder(userId);
       const sheet = activeSheet || 'Sheet1';
       payload.activeSheet = sheet;
-      
+
       if (activeCell) {
         setKey(remoteCursors, userId, payload);
         if (sheet === activeSheetName) {
@@ -750,6 +875,15 @@ function handleSocketMessage(event) {
       const sheet = sheetName || 'Sheet1';
       const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, Number(count) || DEFAULT_COLS));
       if (n > DEFAULT_COLS) setKey(colCounts, sheet, n); else deleteKey(colCounts, sheet);
+      if (sheet === activeSheetName) renderSpreadsheetGrid();
+    }
+
+    // Handle a hidden-column change (Hide/unhide from the column menu) from any peer.
+    if (type === 'hidden-cols-update') {
+      const { sheetName, cols } = payload;
+      const sheet = sheetName || 'Sheet1';
+      const clean = Array.isArray(cols) ? cols.filter((c) => typeof c === 'string') : [];
+      if (clean.length) setKey(hiddenCols, sheet, clean); else deleteKey(hiddenCols, sheet);
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
 
@@ -1896,6 +2030,11 @@ const renderSpreadsheetGrid = () => {
   const colLetters = new Array(colCount);
   for (let c = 0; c < colCount; c++) colLetters[c] = getColLetter(c);
 
+  // Hidden columns for this render (see getColWidth: their track collapses to
+  // 0px). Resolved once so the header/cell loops can O(1)-check membership.
+  // Ignored in history mode, which previews the snapshot as-is.
+  const hiddenColLetters = isHistoryMode ? new Set() : new Set(getHiddenCols());
+
   // Build the whole grid (headers, rows, cells, buffer) into a detached fragment
   // and attach it in one append at the end, so the browser lays out / reflows
   // once for the entire grid instead of after each of the ~tens-of-thousands of
@@ -1905,8 +2044,13 @@ const renderSpreadsheetGrid = () => {
   // Render Column Headers (A-Z and beyond as the grid grows)
   for (let c = 0; c < colCount; c++) {
     const colLetter = colLetters[c];
+    // A hidden column still renders a header, but on a zero-width track (see
+    // getColWidth), so it is invisible; it gets no menu button, resize handle or
+    // unhide arrows — those live on the visible neighbours.
+    const colIsHidden = hiddenColLetters.has(colLetter);
     const colHeader = document.createElement('div');
     colHeader.className = 'grid-header sticky top-0 z-20 cursor-pointer';
+    if (colIsHidden) colHeader.classList.add('col-hidden');
     colHeader.innerText = colLetter;
     // With explicit placement on, pin each header to its column/header track.
     if (hasMerges) { colHeader.style.gridColumn = `${c + 2}`; colHeader.style.gridRow = '1'; }
@@ -1923,37 +2067,40 @@ const renderSpreadsheetGrid = () => {
       selectColumn(colLetter);
     });
 
-    // Dropdown button shown on hover at the far right of the header. Clicking it
-    // opens the same context menu as right-clicking the sheet, anchored to the
-    // column. It auto-hides 0.2s after the cursor leaves the header.
-    const menuBtn = document.createElement('span');
-    menuBtn.className = 'col-header-menu material-symbols-outlined';
-    menuBtn.textContent = 'arrow_drop_down';
-    let hideTimer = null;
-    colHeader.addEventListener('mouseenter', () => {
-      if (isHistoryMode) return;
-      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-      menuBtn.classList.add('show');
-    });
-    colHeader.addEventListener('mouseleave', () => {
-      if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => { menuBtn.classList.remove('show'); hideTimer = null; }, 200);
-    });
-    // Swallow the header's column-select mousedown so the button click is clean.
-    menuBtn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
-    menuBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (isHistoryMode) return;
-      selectColumn(colLetter);
-      const r = menuBtn.getBoundingClientRect();
-      showContextMenu(`${colLetter}1`, r.left, r.bottom);
-    });
-    colHeader.appendChild(menuBtn);
+    if (!colIsHidden) {
+      // Dropdown button shown on hover at the far right of the header. Clicking
+      // it selects the whole column and opens the column-specific menu (see
+      // showColumnMenu / images/column_header_menu.png), anchored to the column.
+      // It auto-hides 0.2s after the cursor leaves the header.
+      const menuBtn = document.createElement('span');
+      menuBtn.className = 'col-header-menu material-symbols-outlined';
+      menuBtn.textContent = 'arrow_drop_down';
+      let hideTimer = null;
+      colHeader.addEventListener('mouseenter', () => {
+        if (isHistoryMode) return;
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        menuBtn.classList.add('show');
+      });
+      colHeader.addEventListener('mouseleave', () => {
+        if (hideTimer) clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { menuBtn.classList.remove('show'); hideTimer = null; }, 200);
+      });
+      // Swallow the header's column-select mousedown so the button click is clean.
+      menuBtn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+      menuBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isHistoryMode) return;
+        selectColumn(colLetter);
+        const r = menuBtn.getBoundingClientRect();
+        showColumnMenu(colLetter, r.left, r.bottom);
+      });
+      colHeader.appendChild(menuBtn);
+    }
 
     // Drag handle on the column's right boundary. Hovering it shows a col-resize
     // cursor; dragging resizes the whole column (see startDimensionResize).
-    if (!isHistoryMode) {
+    if (!isHistoryMode && !colIsHidden) {
       const resizeHandle = document.createElement('div');
       resizeHandle.className = 'col-resize-handle';
       resizeHandle.addEventListener('mousedown', (e) => {
@@ -1964,6 +2111,31 @@ const renderSpreadsheetGrid = () => {
         startDimensionResize('col', colLetter, colHeader, e.clientX);
       });
       colHeader.appendChild(resizeHandle);
+    }
+
+    // Unhide arrows: a visible header adjacent to a run of hidden columns shows a
+    // small arrow on the touching edge (◀ on the right edge when the run is to
+    // the right, ▶ on the left edge when the run is to the left). Clicking either
+    // reveals the whole run. Suppressed in history mode.
+    if (!colIsHidden && !isHistoryMode && hiddenColLetters.size) {
+      // ◀ on this header's right edge: the hidden run is to the right, and this
+      // very column is the boundary's left visible neighbour, so it resizes here.
+      if (c + 1 < colCount && hiddenColLetters.has(colLetters[c + 1])) {
+        const run = [];
+        for (let k = c + 1; k < colCount && hiddenColLetters.has(colLetters[k]); k++) run.push(colLetters[k]);
+        colHeader.appendChild(createUnhideArrow('left', run, colLetter, colHeader));
+      }
+      // ▶ on this header's left edge: the hidden run is to the left; the column
+      // just past it (already built this render) is the boundary's left visible
+      // neighbour that a drag resizes. None exists when the run hugs column A.
+      if (c - 1 >= 0 && hiddenColLetters.has(colLetters[c - 1])) {
+        const run = [];
+        for (let k = c - 1; k >= 0 && hiddenColLetters.has(colLetters[k]); k--) run.push(colLetters[k]);
+        const leftVisIdx = c - run.length - 1;
+        const leftVisLetter = leftVisIdx >= 0 ? colLetters[leftVisIdx] : null;
+        const leftVisHeader = leftVisLetter ? gridColHeaderIndex.get(leftVisLetter) : null;
+        colHeader.appendChild(createUnhideArrow('right', run, leftVisLetter, leftVisHeader));
+      }
     }
 
     frag.appendChild(colHeader);
@@ -2056,6 +2228,10 @@ const renderSpreadsheetGrid = () => {
 
       const cellEl = document.createElement('div');
       cellEl.className = 'grid-cell text-body-sm font-body-sm select-none cursor-default';
+      // Cells in a hidden column sit on a zero-width track; clip their content so
+      // it can't paint outside the collapsed box (grid cells overflow visibly by
+      // default so long values spill into empty neighbours).
+      if (hiddenColLetters.has(colLetter)) cellEl.classList.add('col-hidden');
       cellEl.setAttribute('data-cell-id', cellId);
 
       // Display evaluated cell value
@@ -5616,6 +5792,177 @@ const showContextMenu = (cellId, x, y) => {
   // pre-built table, dropdown, smart chips and "more actions" are rendered
   // greyed-out and intentionally left unwired until those features exist — see
   // the reference mock-up (images/right_click_menu.png).
+};
+
+/**
+ * Renders the column-header dropdown menu (opened by the ▾ button that appears
+ * on a column header) at the given viewport coordinates. Mirrors the reference
+ * mock-up in images/column_header_menu.png, but is styled with the app's
+ * Material theme tokens to match the cell context menu. The column is expected
+ * to already be selected by the caller, so cut/copy/paste/clear operate on the
+ * whole column and sort/filter key on its index. Actions that map to a real,
+ * existing feature are wired; the rest are shown greyed-out and unclickable per
+ * the project's "don't guess — gray it out" rule.
+ * @param {string} colLetter - The column the menu acts on (e.g. "C").
+ * @param {number} x - Client X coordinate to anchor the menu's left edge.
+ * @param {number} y - Client Y coordinate to anchor the menu's top edge.
+ */
+const showColumnMenu = (colLetter, x, y) => {
+  // Reuse the shared context-menu id so opening replaces any existing menu and
+  // the outside-click dismiss handler below tears it down.
+  const oldMenu = document.getElementById('grid-context-menu');
+  if (oldMenu) oldMenu.remove();
+
+  const colIndex = (parseCellCoord(`${colLetter}1`) || { colIndex: 0 }).colIndex;
+  const topCellId = `${colLetter}1`;
+
+  const menu = document.createElement('div');
+  menu.id = 'grid-context-menu';
+  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded-lg py-1.5 z-[1000] border border-outline-variant text-label-md text-on-surface dark:text-on-surface-variant w-60 select-none';
+
+  // Same row/icon/divider classes as showContextMenu so the two menus are
+  // visually identical.
+  const itemCls = 'w-full flex items-center gap-3 px-3 py-1.5 hover:bg-surface-variant cursor-pointer text-left';
+  const iconCls = 'material-symbols-outlined text-[20px] leading-none text-on-surface-variant';
+  const shortcutCls = 'text-xs text-on-surface-variant/70';
+  const dividerCls = 'h-px bg-outline-variant my-1.5';
+  const disabledCls = 'w-full flex items-center gap-3 px-3 py-1.5 cursor-not-allowed opacity-40 text-left';
+
+  // The header menu always acts on exactly one column, so the insert labels are
+  // fixed to a single column (reusing the toolbar Insert menu's {n}/{u} keys).
+  const insLeftLabel = t('ins.colLeft', { n: 1, u: 'column' });
+  const insRightLabel = t('ins.colRight', { n: 1, u: 'column' });
+
+  menu.innerHTML = `
+    <button class="${itemCls}" id="col-cut">
+      <span class="${iconCls}">content_cut</span>
+      <span class="flex-grow">${t('ctx.cut')}</span>
+      <span class="${shortcutCls}">Ctrl+X</span>
+    </button>
+    <button class="${itemCls}" id="col-copy">
+      <span class="${iconCls}">content_copy</span>
+      <span class="flex-grow">${t('ctx.copy')}</span>
+      <span class="${shortcutCls}">Ctrl+C</span>
+    </button>
+    <button class="${itemCls}" id="col-paste">
+      <span class="${iconCls}">content_paste</span>
+      <span class="flex-grow">${t('ctx.paste')}</span>
+      <span class="${shortcutCls}">Ctrl+V</span>
+    </button>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">content_paste_go</span>
+      <span class="flex-grow">${t('ctx.pasteSpecial')}</span>
+      <span class="${iconCls}">chevron_right</span>
+    </div>
+    <div class="${dividerCls}"></div>
+    <button class="${itemCls}" id="col-insert-left">
+      <span class="${iconCls}">add</span>
+      <span class="flex-grow">${insLeftLabel}</span>
+    </button>
+    <button class="${itemCls}" id="col-insert-right">
+      <span class="${iconCls}">add</span>
+      <span class="flex-grow">${insRightLabel}</span>
+    </button>
+    <button class="${itemCls}" id="col-delete">
+      <span class="${iconCls}">delete</span>
+      <span class="flex-grow">${t('ctx.deleteCol')}</span>
+    </button>
+    <button class="${itemCls}" id="col-clear">
+      <span class="${iconCls}">clear</span>
+      <span class="flex-grow">${t('col.clear')}</span>
+    </button>
+    <button class="${itemCls}" id="col-hide">
+      <span class="${iconCls}">visibility_off</span>
+      <span class="flex-grow">${t('col.hide')}</span>
+    </button>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">width</span>
+      <span class="flex-grow">${t('col.resize')}</span>
+    </div>
+    <div class="${dividerCls}"></div>
+    <button class="${itemCls}" id="col-create-filter">
+      <span class="${iconCls}">filter_alt</span>
+      <span class="flex-grow">${t('ctx.createFilter')}</span>
+    </button>
+    <div class="${dividerCls}"></div>
+    <button class="${itemCls}" id="col-sort-asc">
+      <span class="${iconCls}">arrow_downward</span>
+      <span class="flex-grow">${t('col.sortAsc')}</span>
+    </button>
+    <button class="${itemCls}" id="col-sort-desc">
+      <span class="${iconCls}">arrow_upward</span>
+      <span class="flex-grow">${t('col.sortDesc')}</span>
+    </button>
+    <div class="${dividerCls}"></div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">format_color_fill</span>
+      <span class="flex-grow">${t('col.condFormat')}</span>
+    </div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">rule</span>
+      <span class="flex-grow">${t('col.dataValidation')}</span>
+    </div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">lightbulb</span>
+      <span class="flex-grow">${t('col.stats')}</span>
+    </div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">arrow_drop_down_circle</span>
+      <span class="flex-grow">${t('ctx.dropdown')}</span>
+    </div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">deployed_code</span>
+      <span class="flex-grow">${t('col.smartChips')}</span>
+      <span class="${iconCls}">chevron_right</span>
+    </div>
+    <div class="${dividerCls}"></div>
+    <div class="${disabledCls}">
+      <span class="${iconCls}">more_vert</span>
+      <span class="flex-grow">${t('col.moreActions')}</span>
+      <span class="${iconCls}">chevron_right</span>
+    </div>
+  `;
+
+  // Position, then clamp to the viewport so the menu stays on-screen.
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${Math.max(0, window.innerWidth - rect.width - 4)}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${Math.max(0, window.innerHeight - rect.height - 4)}px`;
+  }
+
+  // Wire the actions that map to real features. Cut/copy/paste/clear act on the
+  // live selection (the whole column, already selected by the header button).
+  document.getElementById('col-cut').onclick = () => { cutSelectedCells(); menu.remove(); };
+  document.getElementById('col-copy').onclick = () => { copySelectedCells(); menu.remove(); };
+  document.getElementById('col-paste').onclick = () => { pasteSelectedCells(); menu.remove(); };
+  document.getElementById('col-insert-left').onclick = () => { performStructuralInsert('col', colIndex); menu.remove(); };
+  document.getElementById('col-insert-right').onclick = () => { performStructuralInsert('col', colIndex + 1); menu.remove(); };
+  document.getElementById('col-delete').onclick = () => { deleteColumn(topCellId); menu.remove(); };
+  document.getElementById('col-clear').onclick = () => { clearCell(topCellId); menu.remove(); };
+  document.getElementById('col-hide').onclick = () => { hideColumn(colLetter); menu.remove(); };
+  document.getElementById('col-create-filter').onclick = () => {
+    // Toggle the per-sheet value filter on this column (mirrors Data ▸ filter).
+    if (window.CoSheet.sortFilter.hasActiveFilter()) window.CoSheet.sortFilter.removeFilter();
+    else window.CoSheet.sortFilter.createFilter(colIndex);
+    menu.remove();
+  };
+  document.getElementById('col-sort-asc').onclick = () => {
+    window.CoSheet.sortFilter.sortDataRows(colIndex, true, (frozenRows || 0) + 1);
+    menu.remove();
+  };
+  document.getElementById('col-sort-desc').onclick = () => {
+    window.CoSheet.sortFilter.sortDataRows(colIndex, false, (frozenRows || 0) + 1);
+    menu.remove();
+  };
+  // Note: paste-special, resize column, conditional formatting, data validation,
+  // column stats, dropdown, smart chips and "more actions" are rendered
+  // greyed-out and intentionally left unwired until those features exist — see
+  // the reference mock-up (images/column_header_menu.png).
 };
 
 // Dismiss context menu on click elsewhere

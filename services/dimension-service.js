@@ -118,3 +118,41 @@ export const setColCount = (wb, { sheetName, count }) => {
   }
   return { ok: true, sheetName, count: n };
 };
+
+/**
+ * Set the full list of hidden columns on a sheet. Stored on
+ * `wb.hiddenCols[sheetName]` as an array of column-letter keys (A … ZZ); an
+ * empty list drops the entry so sheets with nothing hidden stay absent from the
+ * map. The client sends the whole desired set each time (idempotent, mirroring
+ * setColCount), so this simply validates and replaces it.
+ * @param {{ sheets: Object, hiddenCols?: Object }} wb
+ * @param {{ sheetName: any, cols: any }} payload
+ * @returns {{ ok: true, sheetName: string, cols: string[] } | { ok: false }}
+ */
+export const setHiddenCols = (wb, { sheetName, cols }) => {
+  if (!isValidSheetName(sheetName) || !wb.sheets || !wb.sheets[sheetName]) {
+    return { ok: false };
+  }
+  if (!Array.isArray(cols)) {
+    return { ok: false };
+  }
+  // Keep only valid, de-duplicated column keys, capped at the grid width.
+  const seen = new Set();
+  const clean = [];
+  for (const c of cols) {
+    if (typeof c === 'string' && COL_KEY_REGEX.test(c) && !seen.has(c)) {
+      seen.add(c);
+      clean.push(c);
+    }
+  }
+  if (clean.length > MAX_COLS) clean.length = MAX_COLS;
+  if (!wb.hiddenCols || typeof wb.hiddenCols !== 'object') {
+    wb.hiddenCols = Object.create(null);
+  }
+  if (clean.length) {
+    wb.hiddenCols[sheetName] = clean;
+  } else {
+    delete wb.hiddenCols[sheetName];
+  }
+  return { ok: true, sheetName, cols: clean };
+};
