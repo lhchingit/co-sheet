@@ -313,11 +313,6 @@ const getRowHeight = (row, sheetName = activeSheetName) => {
   const h = m && m[row];
   return (typeof h === 'number' && isFinite(h)) ? h : DEFAULT_ROW_HEIGHT;
 };
-/** Whether the active sheet has any custom (non-default) row heights. */
-const sheetHasCustomRowHeights = (sheetName = activeSheetName) => {
-  const m = rowHeights[sheetName];
-  return !!(m && Object.keys(m).length);
-};
 
 /**
  * Number of columns the grid renders for a sheet. The floor is the rightmost
@@ -2478,19 +2473,20 @@ function applyGridTemplate(gridRoot) {
     gridRoot.style.gridTemplateRows = '';
     return;
   }
-  // Rows: only override when custom heights exist (keeps the common case on the
-  // cheap auto-rows path). The header band is the first track.
-  if (sheetHasCustomRowHeights()) {
-    const rows = ['minmax(21px, auto)'];
-    for (let r = 1; r <= TOTAL_ROWS; r++) {
-      const m = rowHeights[activeSheetName];
-      const h = m && m[r];
-      rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : 'minmax(21px, auto)');
-    }
-    gridRoot.style.gridTemplateRows = rows.join(' ');
-  } else {
-    gridRoot.style.gridTemplateRows = '';
+  // Rows: emit an explicit track for the header band + every row, so each row has
+  // a defined height even when no cell occupies its track. That is the invariant a
+  // windowed render relies on — an off-screen row keeps its height with no cell to
+  // auto-size it — and it is behaviour-neutral for the full render: a resized row
+  // is a fixed track (as before), and the default stays minmax(21px, auto), which
+  // equals the base `grid-auto-rows` the untouched grid fell back to, so content
+  // still auto-grows a row. The header band is the first track.
+  const rows = ['minmax(21px, auto)'];
+  const m = rowHeights[activeSheetName];
+  for (let r = 1; r <= TOTAL_ROWS; r++) {
+    const h = m && m[r];
+    rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : 'minmax(21px, auto)');
   }
+  gridRoot.style.gridTemplateRows = rows.join(' ');
 }
 
 // Active drag-resize state ({ dimension, key, headerEl, start, startSize, guide,
