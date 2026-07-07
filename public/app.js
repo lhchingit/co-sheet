@@ -286,6 +286,8 @@ const DEFAULT_COL_WIDTH = 100;
 const DEFAULT_ROW_HEIGHT = 21;
 // Smallest size a column/row may be dragged to (mirrors dimensionService.MIN_SIZE).
 const MIN_DIMENSION = 20;
+// Width of the row-index gutter (the first grid column: `46px repeat(26, 100px)`).
+const GUTTER_WIDTH = 46;
 
 /** Whether a column letter is hidden on the active (or given) sheet. */
 const isColHidden = (colLetter, sheetName = activeSheetName) => {
@@ -304,6 +306,12 @@ const getColWidth = (colLetter, sheetName = activeSheetName) => {
   const m = colWidths[sheetName];
   const w = m && m[colLetter];
   return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
+};
+/** Resolved model height (px) of a row (1-based) on the active (or given) sheet. */
+const getRowHeight = (row, sheetName = activeSheetName) => {
+  const m = rowHeights[sheetName];
+  const h = m && m[row];
+  return (typeof h === 'number' && isFinite(h)) ? h : DEFAULT_ROW_HEIGHT;
 };
 /** Whether the active sheet has any custom (non-default) row heights. */
 const sheetHasCustomRowHeights = (sheetName = activeSheetName) => {
@@ -1191,32 +1199,20 @@ const updateRangeSelectionUI = () => {
     if (gridRoot) gridRoot.appendChild(overlay);
   }
 
-  // Coordinates offsets: columns header A-Z starts at 46px, cells 100px wide, rows 21px high (fallback)
-  let left = 46 + minColIndex * 100;
-  let width = (maxColIndex - minColIndex + 1) * 100;
-  let top = minRow * 21;
-  let height = (maxRow - minRow + 1) * 21;
-
-  // Measure from the top-left cell (always visible — after merge expansion the
-  // top-left corner of the range is a normal cell or a merge anchor, never a
-  // hidden covered cell). The size is summed from the column widths and the row
-  // header heights rather than read off the bottom-right cell, because that cell
-  // may be a display:none merge-covered cell with no layout box.
-  const minColLetter = getColLetter(minColIndex);
-  const topLeftEl = getCellEl(`${minColLetter}${minRow}`);
-  if (topLeftEl && typeof topLeftEl.offsetLeft === 'number') {
-    left = topLeftEl.offsetLeft;
-    top = topLeftEl.offsetTop;
-    let w = 0;
-    for (let c = minColIndex; c <= maxColIndex; c++) w += getColWidth(getColLetter(c));
-    width = w;
-    let h = 0;
-    for (let r = minRow; r <= maxRow; r++) {
-      const rh = getRowHeaderEl(r);
-      h += (rh && typeof rh.offsetHeight === 'number' && rh.offsetHeight) ? rh.offsetHeight : 21;
-    }
-    height = h;
-  }
+  // Position and size the overlay from the grid model via colLeft / rowTop and the
+  // column/row sizes, all in #grid-root's own layout space (the overlay is a child
+  // of #grid-root, so CSS `zoom` scales it with the cells). Deriving the rect this
+  // way needs no cell box to measure from, so it is correct even when the range's
+  // top-left corner is a display:none merge-covered cell or isn't in the DOM at all
+  // (hidden columns, and a future windowed render). Column widths are authoritative
+  // (columns never auto-fit content); row heights use the rendered height so a
+  // content-auto-grown row is enclosed exactly.
+  const left = colLeft(minColIndex);
+  const top = rowTop(minRow);
+  let width = 0;
+  for (let c = minColIndex; c <= maxColIndex; c++) width += getColWidth(getColLetter(c));
+  let height = 0;
+  for (let r = minRow; r <= maxRow; r++) height += resolvedRowHeight(r);
 
   // Position the overlay exactly on the range bounds. With box-sizing:border-box
   // the 1px outer border is drawn inside this rect, so along the anchor cell's
@@ -1833,6 +1829,42 @@ const getRowHeaderEl = (row) =>
 const getColHeaderEl = (colLetter) =>
   gridColHeaderIndex.get(colLetter) || document.querySelector(`[data-col-id="${colLetter}"]`);
 
+// --- Grid geometry: prefix offsets in #grid-root's own layout space ---------
+// colLeft(colIndex) / rowTop(row) return the left / top edge of a track measured
+// from #grid-root's origin, the same coordinate space its cell children and the
+// selection overlay live in — so CSS `zoom` on #grid-root scales them along with
+// the grid, and they need no rendered cell box to measure from. That makes them
+// correct even when the target track isn't in the DOM (a hidden column, or a
+// future windowed render that only materialises the visible rows). Callers here
+// sum a bounded range, so a direct cumulative sum is enough; a later step can
+// back these with a cached prefix-sum array + binary search for scroll hot-paths.
+
+/** Left edge (px) of column `colIndex` (0-based): gutter + widths before it.
+ *  Hidden columns contribute 0 (see getColWidth), so they collapse out. */
+const colLeft = (colIndex) => {
+  let x = GUTTER_WIDTH;
+  for (let c = 0; c < colIndex; c++) x += getColWidth(getColLetter(c));
+  return x;
+};
+
+/** Rendered height (px) of a row: the live row-header box when that row is in the
+ *  DOM (so a content-auto-grown row measures at its true height), else the model
+ *  height. The model fallback keeps geometry correct for rows a windowed render
+ *  hasn't built. */
+const resolvedRowHeight = (row) => {
+  const rh = getRowHeaderEl(row);
+  const h = rh && rh.offsetHeight;
+  return (typeof h === 'number' && h > 0) ? h : getRowHeight(row);
+};
+
+/** Top edge (px) of row `row` (1-based): the column-header band (the first grid
+ *  track, 21px per the base template) plus the rendered heights of the rows above. */
+const rowTop = (row) => {
+  let y = DEFAULT_ROW_HEIGHT;
+  for (let r = 1; r < row; r++) y += resolvedRowHeight(r);
+  return y;
+};
+
 const pendingOverflowRows = new Set();
 let overflowFlushScheduled = false;
 const flushPendingOverflow = () => {
@@ -2418,8 +2450,6 @@ const renderSpreadsheetGrid = () => {
   if (gridScrollbarLayout) gridScrollbarLayout();
 };
 
-// Width of the row-index gutter (the first grid column: `46px repeat(26, 100px)`).
-const GUTTER_WIDTH = 46;
 // Darker line drawn along the freeze boundary, matching Google Sheets.
 const FREEZE_BORDER = '2px solid #919191';
 
@@ -2553,23 +2583,19 @@ function applyFreeze() {
   const corner = gridRoot.firstElementChild;
   const headerH = corner ? corner.offsetHeight : 21;
 
-  // Cumulative sticky `top` for each frozen row (rows can have variable height).
-  const rowTop = {};
+  // Cumulative sticky `top` for each frozen row (rows can have variable height),
+  // precomputed into a lookup so the per-cell loop below stays O(1). Named to not
+  // shadow the module-scope rowTop() geometry helper. Sticky `left` for frozen
+  // columns uses the shared colLeft() prefix offset.
+  const frozenRowTop = {};
   if (frozenRows > 0) {
     let off = headerH;
     for (let r = 1; r <= frozenRows; r++) {
-      rowTop[r] = off;
+      frozenRowTop[r] = off;
       const rh = gridRoot.querySelector(`[data-row-id="${r}"]`);
       off += rh ? rh.offsetHeight : 21;
     }
   }
-  // Sticky `left` for a frozen column index, summing the (possibly resized)
-  // widths of all columns before it (after the row-index gutter).
-  const colLeft = (colIndex) => {
-    let x = GUTTER_WIDTH;
-    for (let c = 0; c < colIndex; c++) x += getColWidth(getColLetter(c));
-    return x;
-  };
 
   // Frozen column headers: stick to the left as well as the top, and draw the
   // boundary line on the last frozen column.
@@ -2584,7 +2610,7 @@ function applyFreeze() {
   for (let r = 1; r <= frozenRows; r++) {
     const rh = gridRoot.querySelector(`[data-row-id="${r}"]`);
     if (!rh) continue;
-    rh.style.top = `${rowTop[r]}px`;
+    rh.style.top = `${frozenRowTop[r]}px`;
     rh.style.zIndex = '25';
     if (r === frozenRows) rh.style.borderBottom = FREEZE_BORDER;
   }
@@ -2598,7 +2624,7 @@ function applyFreeze() {
     if (!inFrozenRow && !inFrozenCol) return;
     el.style.position = 'sticky';
     if (inFrozenRow) {
-      el.style.top = `${rowTop[coord.row]}px`;
+      el.style.top = `${frozenRowTop[coord.row]}px`;
       if (coord.row === frozenRows) el.style.borderBottom = FREEZE_BORDER;
     }
     if (inFrozenCol) {
@@ -3224,18 +3250,18 @@ const rangeRectFor = (startId, endId) => {
   const maxCol = Math.max(s.colIndex, e.colIndex);
   const minRow = Math.min(s.row, e.row);
   const maxRow = Math.max(s.row, e.row);
-  const topLeftEl = document.querySelector(`[data-cell-id="${getColLetter(minCol)}${minRow}"]`);
-  if (!topLeftEl) return null; // off-grid reference (no cell to anchor to)
-  // Measure from the top-left cell and sum column widths / row heights, matching
-  // the way the blue selection overlay is positioned (see updateRangeSelectionUI).
+  // Skip references outside the sheet's rendered grid — there's nothing to point
+  // at (mirrors the old "no cell to anchor to" guard, without needing the anchor
+  // cell's DOM box).
+  if (minRow < 1 || minRow > TOTAL_ROWS || minCol < 0 || minCol >= getColCount()) return null;
+  // Position/size from the grid model via colLeft / rowTop, exactly like the blue
+  // selection overlay (see updateRangeSelectionUI): offsets in #grid-root's layout
+  // space, so it needs no cell box and stays correct under zoom / hidden columns.
   let width = 0;
   for (let c = minCol; c <= maxCol; c++) width += getColWidth(getColLetter(c));
   let height = 0;
-  for (let r = minRow; r <= maxRow; r++) {
-    const rh = document.querySelector(`[data-row-id="${r}"]`);
-    height += (rh && rh.offsetHeight) ? rh.offsetHeight : 21;
-  }
-  return { left: topLeftEl.offsetLeft, top: topLeftEl.offsetTop, width, height };
+  for (let r = minRow; r <= maxRow; r++) height += resolvedRowHeight(r);
+  return { left: colLeft(minCol), top: rowTop(minRow), width, height };
 };
 
 /** Removes every orange reference box from the grid. */
