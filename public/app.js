@@ -307,11 +307,26 @@ const getColWidth = (colLetter, sheetName = activeSheetName) => {
   const w = m && m[colLetter];
   return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
 };
-/** Resolved model height (px) of a row (1-based) on the active (or given) sheet. */
+// Font-driven row heights for the active sheet: row number -> px, for rows a
+// large-font cell grows past the default. Rebuilt from the model each render by
+// rebuildAutoFontRowHeights (deterministic via getCellMinHeight, no DOM), so
+// getRowHeight is authoritative for these rows and a windowed render can size and
+// map their off-screen tracks. Wrapped-text growth needs real text measurement
+// and is not modelled here (see sheetHasWrappedRows).
+let autoFontRowHeights = Object.create(null);
+
+/** Resolved model height (px) of a row (1-based) on the active (or given) sheet:
+ *  an explicit (resized) height wins, else a font-driven auto height on the
+ *  active sheet, else the default. */
 const getRowHeight = (row, sheetName = activeSheetName) => {
   const m = rowHeights[sheetName];
   const h = m && m[row];
-  return (typeof h === 'number' && isFinite(h)) ? h : DEFAULT_ROW_HEIGHT;
+  if (typeof h === 'number' && isFinite(h)) return h;
+  if (sheetName === activeSheetName) {
+    const fh = autoFontRowHeights[row];
+    if (typeof fh === 'number' && isFinite(fh)) return fh;
+  }
+  return DEFAULT_ROW_HEIGHT;
 };
 
 /**
@@ -2065,18 +2080,17 @@ const WINDOW_OVERSCAN = 8;
 let activeSheetWindowed = false;
 let lastRenderedRowWindow = '';
 
-/** Whether the active sheet has any content that auto-grows a row past its model
- *  height (wrapped text, or a font size on a non-empty cell). computeRowWindow
- *  maps scroll offset to rows using the model height, so such sheets can't be
- *  windowed correctly yet and fall back to the full render. */
-const sheetHasAutoGrowRows = () => {
+/** Whether the active sheet has any wrapped-text cell. A wrapped row's height
+ *  depends on text layout (content x column width x font), which the model can't
+ *  compute without measuring, so computeRowWindow's scroll->row mapping would be
+ *  wrong; such sheets fall back to the full render. Font-driven growth, by
+ *  contrast, is modelled deterministically (see rebuildAutoFontRowHeights). */
+const sheetHasWrappedRows = () => {
   const cells = localSheets[activeSheetName];
   if (!cells) return false;
   for (const id in cells) {
     const st = cells[id] && cells[id].style;
-    if (!st) continue;
-    if (st.textWrap === 'wrap') return true;
-    if (st.fontSize && (cells[id].value || cells[id].formula)) return true;
+    if (st && st.textWrap === 'wrap') return true;
   }
   return false;
 };
@@ -2084,7 +2098,7 @@ const sheetHasAutoGrowRows = () => {
 /** Whether this render should window its rows. `hasMerges` is passed in because
  *  the caller has already computed the merge coverage. */
 const shouldWindowRows = (hasMerges) =>
-  windowingEnabled && !isHistoryMode && !hasMerges && !sheetHasAutoGrowRows();
+  windowingEnabled && !isHistoryMode && !hasMerges && !sheetHasWrappedRows();
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the
  *  overscan, derived from scrollTop and the model row heights. */
@@ -2183,6 +2197,12 @@ const renderSpreadsheetGrid = () => {
   // its true track despite the skipped rows before it. The frozen band and the
   // active cell's row are always kept so freeze and cell editing keep working.
   // Recorded on module state so the scroll handler knows the current window.
+  // With windowing enabled, refresh font-driven row heights first so getRowHeight
+  // (used by the window math and the row template) is authoritative for large-font
+  // rows. Skipped when the flag is off: the empty map leaves getRowHeight at the
+  // default, and the row template's minmax(21px, auto) + the cell's min-height
+  // reproduce the old height — so the default path pays nothing.
+  if (windowingEnabled) rebuildAutoFontRowHeights();
   const windowActive = shouldWindowRows(hasMerges);
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
@@ -2607,15 +2627,16 @@ function applyGridTemplate(gridRoot) {
   // Rows: emit an explicit track for the header band + every row, so each row has
   // a defined height even when no cell occupies its track. That is the invariant a
   // windowed render relies on — an off-screen row keeps its height with no cell to
-  // auto-size it — and it is behaviour-neutral for the full render: a resized row
-  // is a fixed track (as before), and the default stays minmax(21px, auto), which
-  // equals the base `grid-auto-rows` the untouched grid fell back to, so content
-  // still auto-grows a row. The header band is the first track.
+  // auto-size it. A resized row is a fixed track; otherwise the floor is
+  // getRowHeight (default 21, or a font-driven auto height), with `auto` still
+  // letting a rendered row grow. Behaviour-neutral for the full render: a rendered
+  // font-grown row reaches the same height via its cell's min-height. The header
+  // band is the first track.
   const rows = ['minmax(21px, auto)'];
   const m = rowHeights[activeSheetName];
   for (let r = 1; r <= TOTAL_ROWS; r++) {
     const h = m && m[r];
-    rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : 'minmax(21px, auto)');
+    rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : `minmax(${getRowHeight(r)}px, auto)`);
   }
   gridRoot.style.gridTemplateRows = rows.join(' ');
 }
@@ -4323,6 +4344,34 @@ const getCellMinHeight = (fontSize) => {
   const size = clampFontSize(fontSize);
   if (size === null || size <= DEFAULT_FONT_SIZE) return null;
   return Math.round(size * PT_TO_PX * CELL_LINE_HEIGHT_FACTOR) + CELL_VERTICAL_PADDING;
+};
+
+/**
+ * Recompute the active sheet's font-driven row heights (see autoFontRowHeights)
+ * from the model: a row grows to the tallest getCellMinHeight among its non-empty
+ * cells. Deterministic and DOM-free — it mirrors the per-cell min-height the
+ * renderer applies (only a value-bearing cell above the default font grows a row)
+ * — so getRowHeight stays exact for these rows even when they are off-screen.
+ * Called once per render; the map then serves the scroll handler between renders.
+ */
+const rebuildAutoFontRowHeights = () => {
+  const next = Object.create(null);
+  const cells = localSheets[activeSheetName];
+  if (cells) {
+    for (const id in cells) {
+      const cell = cells[id];
+      // Only a value-bearing cell grows its row (matches the renderer's `val ?`);
+      // treat 0 / false as present, skip null / undefined / empty string.
+      if (!cell || !cell.style || !cell.style.fontSize) continue;
+      if (cell.value == null || cell.value === '') continue;
+      const mh = getCellMinHeight(cell.style.fontSize);
+      if (!mh) continue;
+      const coord = parseCellCoord(id);
+      if (!coord) continue;
+      if (!(next[coord.row] >= mh)) next[coord.row] = mh;
+    }
+  }
+  autoFontRowHeights = next;
 };
 
 /**
