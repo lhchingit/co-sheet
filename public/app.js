@@ -2106,6 +2106,35 @@ const computeRowWindow = () => {
   return { start, end };
 };
 
+/** Scroll the grid viewport so `cellId` is within the visible band, using model
+ *  geometry (colLeft / rowTop) so it works whether or not the cell is currently
+ *  rendered — the reveal a windowed render needs when the selection jumps to an
+ *  off-screen cell (Enter past the fold, a find match, …). Scrolls an axis only
+ *  when the cell falls outside the band on that axis; the scroll then drives the
+ *  windowed re-render via onGridScrollWindow. */
+const revealCell = (cellId) => {
+  const viewport = document.getElementById('grid-viewport');
+  const coord = parseCellCoord(cellId);
+  if (!viewport || !coord) return;
+  // Vertical: the sticky column-header band covers the viewport's top edge, so the
+  // scrollable content band starts DEFAULT_ROW_HEIGHT below scrollTop.
+  const rTop = rowTop(coord.row);
+  const rBottom = rTop + getRowHeight(coord.row);
+  if (rTop < viewport.scrollTop + DEFAULT_ROW_HEIGHT) {
+    viewport.scrollTop = Math.max(0, rTop - DEFAULT_ROW_HEIGHT);
+  } else if (rBottom > viewport.scrollTop + viewport.clientHeight) {
+    viewport.scrollTop = rBottom - viewport.clientHeight;
+  }
+  // Horizontal: the sticky row gutter covers the left edge.
+  const cLeft = colLeft(coord.colIndex);
+  const cRight = cLeft + getColWidth(getColLetter(coord.colIndex));
+  if (cLeft < viewport.scrollLeft + GUTTER_WIDTH) {
+    viewport.scrollLeft = Math.max(0, cLeft - GUTTER_WIDTH);
+  } else if (cRight > viewport.scrollLeft + viewport.clientWidth) {
+    viewport.scrollLeft = cRight - viewport.clientWidth;
+  }
+};
+
 // rAF-throttled scroll response: when the visible row window moves, rebuild the
 // grid (now only the windowed rows). Cheap-exits for a non-windowed sheet.
 let windowRenderScheduled = false;
@@ -2910,14 +2939,16 @@ const selectCellBelow = (cellId) => {
   const nextRow = coord.row + 1;
   if (nextRow > TOTAL_ROWS) return; // already at the bottom of the grid
   const nextCellId = `${getColLetter(coord.colIndex)}${nextRow}`;
-  const nextCellEl = document.querySelector(`[data-cell-id="${nextCellId}"]`);
-  if (!nextCellEl) return;
   // Reset any range/column selection so this becomes a single-cell selection,
   // matching what a plain click on the cell would do.
   isColumnSelection = false;
   selectionStartCellId = nextCellId;
   selectionEndCellId = nextCellId;
-  handleCellSelect(nextCellId, nextCellEl);
+  // The target may be outside the current window (off-DOM); handleCellSelect works
+  // from the id alone, so pass whatever element exists (possibly none). When
+  // windowing, reveal it so it scrolls into view and the re-render materialises it.
+  handleCellSelect(nextCellId, document.querySelector(`[data-cell-id="${nextCellId}"]`));
+  if (activeSheetWindowed) revealCell(nextCellId);
 };
 
 /**
@@ -9368,6 +9399,7 @@ window.CoSheet.app = {
   get socket() { return socket; },
   switchSheet,
   handleCellSelect,
+  revealCell,
   recordHistoryAction,
   updateGridDOMCell,
   getCellValue,
