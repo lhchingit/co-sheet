@@ -2038,6 +2038,88 @@ const ensureGridCellDelegation = (gridRoot) => {
   gridCellDelegationBound = true;
 };
 
+// ---------------------------------------------------------------------------
+// Experimental windowed (virtualized) grid rendering.
+//
+// A full render materialises TOTAL_ROWS × colCount cells as DOM nodes (~65k on a
+// typical sheet), which dominates the tab's memory. Windowing renders only the
+// rows in and near the viewport, relying on the explicit per-row
+// grid-template-rows (see applyGridTemplate) to hold the full scroll height with
+// no cell in the off-screen tracks. Off by default; toggle for measurement with
+//   localStorage.setItem('cosheet:windowing','1')   // then reload
+// It stays disabled for cases it can't render correctly yet — history mode, sheets
+// with merged cells (deferred to a follow-up), and sheets with content-auto-grown
+// rows (wrap / large font), whose true height isn't in the model — all of which
+// fall back to the full render.
+// ---------------------------------------------------------------------------
+let windowingEnabled = false;
+try { windowingEnabled = localStorage.getItem('cosheet:windowing') === '1'; } catch { /* storage blocked */ }
+
+// Extra rows rendered above/below the viewport so a small scroll neither exposes a
+// blank edge nor forces a re-render.
+const WINDOW_OVERSCAN = 8;
+
+// Set by each render: whether the active sheet is currently windowed, and the row
+// span it last rendered, so the scroll handler rebuilds only when the visible
+// window moves to a new span (and never for a non-windowed sheet).
+let activeSheetWindowed = false;
+let lastRenderedRowWindow = '';
+
+/** Whether the active sheet has any content that auto-grows a row past its model
+ *  height (wrapped text, or a font size on a non-empty cell). computeRowWindow
+ *  maps scroll offset to rows using the model height, so such sheets can't be
+ *  windowed correctly yet and fall back to the full render. */
+const sheetHasAutoGrowRows = () => {
+  const cells = localSheets[activeSheetName];
+  if (!cells) return false;
+  for (const id in cells) {
+    const st = cells[id] && cells[id].style;
+    if (!st) continue;
+    if (st.textWrap === 'wrap') return true;
+    if (st.fontSize && (cells[id].value || cells[id].formula)) return true;
+  }
+  return false;
+};
+
+/** Whether this render should window its rows. `hasMerges` is passed in because
+ *  the caller has already computed the merge coverage. */
+const shouldWindowRows = (hasMerges) =>
+  windowingEnabled && !isHistoryMode && !hasMerges && !sheetHasAutoGrowRows();
+
+/** The 1-based [start,end] row range visible in the viewport, grown by the
+ *  overscan, derived from scrollTop and the model row heights. */
+const computeRowWindow = () => {
+  const viewport = document.getElementById('grid-viewport');
+  if (!viewport) return { start: 1, end: TOTAL_ROWS };
+  const top = viewport.scrollTop;
+  const bottom = top + viewport.clientHeight;
+  let y = DEFAULT_ROW_HEIGHT; // top of row 1, below the header band
+  let start = 1, end = TOTAL_ROWS;
+  for (let r = 1; r <= TOTAL_ROWS; r++) {
+    const h = getRowHeight(r);
+    if (y + h <= top) start = r + 1;               // row is fully above the viewport
+    else if (y >= bottom) { end = r - 1; break; }  // first row fully below the viewport
+    y += h;
+  }
+  start = Math.max(1, start - WINDOW_OVERSCAN);
+  end = Math.min(TOTAL_ROWS, Math.max(start, end + WINDOW_OVERSCAN));
+  return { start, end };
+};
+
+// rAF-throttled scroll response: when the visible row window moves, rebuild the
+// grid (now only the windowed rows). Cheap-exits for a non-windowed sheet.
+let windowRenderScheduled = false;
+const onGridScrollWindow = () => {
+  if (!activeSheetWindowed || windowRenderScheduled) return;
+  windowRenderScheduled = true;
+  requestAnimationFrame(() => {
+    windowRenderScheduled = false;
+    if (!activeSheetWindowed) return;
+    const w = computeRowWindow();
+    if (`${w.start}:${w.end}` !== lastRenderedRowWindow) renderSpreadsheetGrid();
+  });
+};
+
 /**
  * Dynamically builds and renders the interactive spreadsheet grid inside the DOM.
  */
@@ -2067,9 +2149,26 @@ const renderSpreadsheetGrid = () => {
     : getMergeCoverage();
   const { anchorSpan, coveredTo, hasMerges } = mergeCoverage;
 
+  // Windowing: when active, only rows in (and near) the viewport are built, and
+  // every header/cell is placed on explicit grid lines so a rendered row lands on
+  // its true track despite the skipped rows before it. The frozen band and the
+  // active cell's row are always kept so freeze and cell editing keep working.
+  // Recorded on module state so the scroll handler knows the current window.
+  const windowActive = shouldWindowRows(hasMerges);
+  activeSheetWindowed = windowActive;
+  const rowWin = windowActive ? computeRowWindow() : null;
+  lastRenderedRowWindow = windowActive ? `${rowWin.start}:${rowWin.end}` : '';
+  const frozenRowFloor = windowActive ? (frozenRows || 0) : 0;
+  const activeRowKept = windowActive && activeCellId ? (parseCellCoord(activeCellId)?.row || 0) : 0;
+  const inRowWindow = (r) =>
+    !windowActive || (r >= rowWin.start && r <= rowWin.end) || r <= frozenRowFloor || r === activeRowKept;
+  // Explicit line placement is used for merges (anchors span tracks) and whenever
+  // windowing is on (rows are sparse, so auto-flow would pack them at the top).
+  const useExplicitPlacement = hasMerges || windowActive;
+
   // Preserve the sticky top-left corner header
   gridRoot.innerHTML = '<div class="grid-header sticky top-0 left-0 z-30"></div>';
-  if (hasMerges) {
+  if (useExplicitPlacement) {
     const corner = gridRoot.firstElementChild;
     if (corner) { corner.style.gridColumn = '1'; corner.style.gridRow = '1'; }
   }
@@ -2103,7 +2202,7 @@ const renderSpreadsheetGrid = () => {
     if (colIsHidden) colHeader.classList.add('col-hidden');
     colHeader.innerText = colLetter;
     // With explicit placement on, pin each header to its column/header track.
-    if (hasMerges) { colHeader.style.gridColumn = `${c + 2}`; colHeader.style.gridRow = '1'; }
+    if (useExplicitPlacement) { colHeader.style.gridColumn = `${c + 2}`; colHeader.style.gridRow = '1'; }
     // Store column identifier for selection highlighting
     colHeader.setAttribute('data-col-id', colLetter);
     gridColHeaderIndex.set(colLetter, colHeader);
@@ -2219,6 +2318,9 @@ const renderSpreadsheetGrid = () => {
 
   // Render Grid Rows and Cells
   for (let r = 1; r <= TOTAL_ROWS; r++) {
+    // Windowing: skip rows outside the visible window (kept frozen/active rows and
+    // the overscan aside). Their grid-template-rows tracks still hold the height.
+    if (windowActive && !inRowWindow(r)) continue;
     // If we are in history mode, and "show unedited" is not checked, collapse consecutive unedited rows
     if (isHistoryMode && !showUneditedChecked && !editedRows.has(r)) {
       let startRow = r;
@@ -2249,7 +2351,7 @@ const renderSpreadsheetGrid = () => {
     rowHeader.setAttribute('data-row-id', r);
     gridRowHeaderIndex.set(r, rowHeader);
     // With explicit placement on, pin the row header to the gutter / its row track.
-    if (hasMerges) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
+    if (useExplicitPlacement) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
 
     // Drag handle on the row's bottom boundary (mirrors the column handle).
     if (!isHistoryMode) {
@@ -2352,10 +2454,10 @@ const renderSpreadsheetGrid = () => {
       // Cell mouse interactions (mousedown/mouseover/click/dblclick) are handled
       // by delegated listeners on #grid-root — see ensureGridCellDelegation above.
 
-      // Merge placement: anchors span their block; covered cells are hidden so
-      // the anchor shows through. Everything else gets pinned to its own track so
-      // the spans don't shift it (see mergeCoverage note above).
-      if (hasMerges) {
+      // Explicit placement: anchors span their block; covered cells are hidden so
+      // the anchor shows through; everything else is pinned to its own track so the
+      // spans (merges) or skipped rows (windowing) don't shift it.
+      if (useExplicitPlacement) {
         if (coveredTo.has(cellId)) {
           cellEl.style.display = 'none';
         } else if (anchorSpan.has(cellId)) {
@@ -2380,7 +2482,7 @@ const renderSpreadsheetGrid = () => {
   // auto-placed cells of its own.
   const bottomBuffer = document.createElement('div');
   bottomBuffer.className = 'grid-bottom-buffer';
-  if (hasMerges) bottomBuffer.style.gridRow = `${TOTAL_ROWS + 2}`;
+  if (useExplicitPlacement) bottomBuffer.style.gridRow = `${TOTAL_ROWS + 2}`;
   frag.appendChild(bottomBuffer);
 
   // Attach the whole grid in one append (single layout pass — see frag above).
@@ -9526,9 +9628,12 @@ function initGridScrollbars() {
   bindArrow(hleft, () => { viewport.scrollLeft -= STEP; });
   bindArrow(hright, () => { viewport.scrollLeft += STEP; });
   viewport.addEventListener('scroll', position, { passive: true });
-  window.addEventListener('resize', layout);
+  // Windowed rendering: a scroll or viewport resize can move the visible row
+  // window, which rebuilds the grid to the new span (no-op when not windowing).
+  viewport.addEventListener('scroll', onGridScrollWindow, { passive: true });
+  window.addEventListener('resize', () => { layout(); onGridScrollWindow(); });
   if (typeof ResizeObserver === 'function') {
-    const ro = new ResizeObserver(() => layout());
+    const ro = new ResizeObserver(() => { layout(); onGridScrollWindow(); });
     ro.observe(viewport);
     const gr = document.getElementById('grid-root');
     if (gr) ro.observe(gr);
