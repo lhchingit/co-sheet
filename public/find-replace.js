@@ -117,7 +117,7 @@
    * @returns {Object|null} Sheet name and cell ID coordinate.
    */
   const findNextMatch = () => {
-    const { activeSheetName, sheetOrder, activeCellId, switchSheet, handleCellSelect } = app;
+    const { activeSheetName, sheetOrder, activeCellId, switchSheet, handleCellSelect, revealCell } = app;
     const findStr = fieldValue('find-input');
     if (!findStr) return null;
     const matchCase = fieldChecked('find-match-case');
@@ -173,6 +173,11 @@
         if (cellEl) {
           handleCellSelect(cellId, cellEl);
           cellEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        } else {
+          // Windowed render: the match cell isn't in the DOM. Select it (works from
+          // the id alone) and scroll it into view by geometry, which renders it.
+          handleCellSelect(cellId, null);
+          if (revealCell) revealCell(cellId);
         }
         return { sheetName, cellId };
       }
