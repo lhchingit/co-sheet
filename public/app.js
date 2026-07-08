@@ -2063,9 +2063,9 @@ const ensureGridCellDelegation = (gridRoot) => {
 // no cell in the off-screen tracks. On by default, with an escape hatch — disable
 // it (e.g. if a sheet renders wrong) without a deploy via
 //   localStorage.setItem('cosheet:windowing','0')   // then reload; '1' re-enables
-// It automatically falls back to the full render for cases it can't window yet —
-// history mode, sheets with merged cells (deferred), and sheets with wrapped-text
-// rows, whose height isn't modelled — so those render exactly as before.
+// It automatically falls back to the full render for the cases it can't window
+// yet — history mode and sheets with wrapped-text rows, whose height isn't
+// modelled — so those render exactly as before. Merges are windowed.
 // ---------------------------------------------------------------------------
 let windowingEnabled = true;
 try {
@@ -2099,10 +2099,11 @@ const sheetHasWrappedRows = () => {
   return false;
 };
 
-/** Whether this render should window its rows. `hasMerges` is passed in because
- *  the caller has already computed the merge coverage. */
-const shouldWindowRows = (hasMerges) =>
-  windowingEnabled && !isHistoryMode && !hasMerges && !sheetHasWrappedRows();
+/** Whether this render should window its rows. Merges are supported (the render
+ *  force-includes anchor rows whose span reaches into the window); only wrapped
+ *  text — whose row height isn't modelled — still forces the full render. */
+const shouldWindowRows = () =>
+  windowingEnabled && !isHistoryMode && !sheetHasWrappedRows();
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the
  *  overscan, derived from scrollTop and the model row heights. */
@@ -2207,14 +2208,25 @@ const renderSpreadsheetGrid = () => {
   // default, and the row template's minmax(21px, auto) + the cell's min-height
   // reproduce the old height — so the default path pays nothing.
   if (windowingEnabled) rebuildAutoFontRowHeights();
-  const windowActive = shouldWindowRows(hasMerges);
+  const windowActive = shouldWindowRows();
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
   lastRenderedRowWindow = windowActive ? `${rowWin.start}:${rowWin.end}` : '';
   const frozenRowFloor = windowActive ? (frozenRows || 0) : 0;
   const activeRowKept = windowActive && activeCellId ? (parseCellCoord(activeCellId)?.row || 0) : 0;
+  // A merge anchor above the window whose span reaches into it must still be built,
+  // or the merge's visible portion (and the content its covered cells defer to)
+  // would be blank. Collect those anchor rows so the row loop keeps them.
+  const extraMergeRows = new Set();
+  if (windowActive && hasMerges) {
+    for (const [anchorId, sp] of anchorSpan) {
+      const ac = parseCellCoord(anchorId);
+      if (ac && ac.row < rowWin.start && ac.row + sp.rows - 1 >= rowWin.start) extraMergeRows.add(ac.row);
+    }
+  }
   const inRowWindow = (r) =>
-    !windowActive || (r >= rowWin.start && r <= rowWin.end) || r <= frozenRowFloor || r === activeRowKept;
+    !windowActive || (r >= rowWin.start && r <= rowWin.end) ||
+    r <= frozenRowFloor || r === activeRowKept || extraMergeRows.has(r);
   // Explicit line placement is used for merges (anchors span tracks) and whenever
   // windowing is on (rows are sparse, so auto-flow would pack them at the top).
   const useExplicitPlacement = hasMerges || windowActive;
