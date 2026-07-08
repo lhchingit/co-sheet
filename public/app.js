@@ -2054,21 +2054,25 @@ const ensureGridCellDelegation = (gridRoot) => {
 };
 
 // ---------------------------------------------------------------------------
-// Experimental windowed (virtualized) grid rendering.
+// Windowed (virtualized) grid rendering.
 //
 // A full render materialises TOTAL_ROWS × colCount cells as DOM nodes (~65k on a
 // typical sheet), which dominates the tab's memory. Windowing renders only the
 // rows in and near the viewport, relying on the explicit per-row
 // grid-template-rows (see applyGridTemplate) to hold the full scroll height with
-// no cell in the off-screen tracks. Off by default; toggle for measurement with
-//   localStorage.setItem('cosheet:windowing','1')   // then reload
-// It stays disabled for cases it can't render correctly yet — history mode, sheets
-// with merged cells (deferred to a follow-up), and sheets with content-auto-grown
-// rows (wrap / large font), whose true height isn't in the model — all of which
-// fall back to the full render.
+// no cell in the off-screen tracks. On by default, with an escape hatch — disable
+// it (e.g. if a sheet renders wrong) without a deploy via
+//   localStorage.setItem('cosheet:windowing','0')   // then reload; '1' re-enables
+// It automatically falls back to the full render for cases it can't window yet —
+// history mode, sheets with merged cells (deferred), and sheets with wrapped-text
+// rows, whose height isn't modelled — so those render exactly as before.
 // ---------------------------------------------------------------------------
-let windowingEnabled = false;
-try { windowingEnabled = localStorage.getItem('cosheet:windowing') === '1'; } catch { /* storage blocked */ }
+let windowingEnabled = true;
+try {
+  const pref = localStorage.getItem('cosheet:windowing');
+  if (pref === '0') windowingEnabled = false;
+  else if (pref === '1') windowingEnabled = true;
+} catch { /* storage blocked — keep the default */ }
 
 // Extra rows rendered above/below the viewport so a small scroll neither exposes a
 // blank edge nor forces a re-render.
