@@ -1661,13 +1661,22 @@ app.get('/api/files', ensureAuthenticated, async (req, res) => {
 /**
  * POST /api/files
  * Creates a new empty workbook, mints a unique id, and returns a shareable URL.
- * Body: { name?: string }. Protected with ensureAuthenticated middleware.
+ * Body: { name?: string, lang?: string }. `lang` is the creator's UI language and
+ * only decides the localized name of the single starter sheet. Protected with
+ * ensureAuthenticated middleware.
  */
 app.post('/api/files', ensureAuthenticated, async (req, res) => {
   try {
     let name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
     if (!name) name = 'Untitled spreadsheet';
     if (name.length > 120) name = name.slice(0, 120);
+
+    // Name the starter sheet in the creator's UI language: Chinese "工作表1",
+    // else the legacy "Sheet1". This mirrors the client's add-sheet naming so a
+    // workbook's first and later sheets read consistently. Localization is opt-in
+    // via an explicit `lang: 'zh'`; any other/absent value keeps "Sheet1" so
+    // callers that don't send a language stay backward-compatible.
+    const firstSheetName = (req.body && req.body.lang === 'zh') ? '工作表1' : 'Sheet1';
 
     // The creator (owner) is identified by their stable identity key.
     const creator = userIdentity(req.user) || 'anonymous';
@@ -1687,10 +1696,10 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     // Initialize a fresh, prototype-free workbook for this file. A new file starts
     // with a single sheet; users add more via the add-sheet control.
     const freshSheets = Object.create(null);
-    freshSheets['Sheet1'] = Object.create(null);
+    freshSheets[firstSheetName] = Object.create(null);
     const freshState = {
       sheets: freshSheets,
-      sheetOrder: ['Sheet1'],
+      sheetOrder: [firstSheetName],
       sheetColors: Object.create(null),
       hiddenSheets: [],
       colWidths: Object.create(null),
