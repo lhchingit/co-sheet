@@ -1,8 +1,8 @@
 /**
  * @file create-file-sheet-name.test.js
  * @description Integration test for POST /api/files: the single starter sheet of a
- * newly created workbook is named in the creator's UI language — "工作表1" for
- * Chinese (the default) and "Sheet1" for English.
+ * newly created workbook is named in the creator's UI language — "工作表1" when the
+ * creator explicitly sends lang: 'zh', otherwise the legacy "Sheet1".
  */
 
 import test from 'node:test';
@@ -78,9 +78,10 @@ test('POST /api/files names the starter sheet in the creator\'s language', async
     const enOrder = await createFileAndReadSheets(PORT, cookie, 'en');
     assert.deepStrictEqual(enOrder, ['Sheet1'], 'English first sheet should be Sheet1');
 
-    // Missing/unknown lang defaults to Chinese (the app's default UI language).
+    // Missing lang stays backward-compatible with the legacy "Sheet1"
+    // (localization is opt-in via an explicit lang: 'zh').
     const defaultOrder = await createFileAndReadSheets(PORT, cookie, undefined);
-    assert.deepStrictEqual(defaultOrder, ['工作表1'], 'Default first sheet should be 工作表1');
+    assert.deepStrictEqual(defaultOrder, ['Sheet1'], 'Default first sheet should be Sheet1');
   } finally {
     child.kill();
     await new Promise((resolve) => setTimeout(resolve, 300));

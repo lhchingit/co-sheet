@@ -1671,11 +1671,12 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
     if (!name) name = 'Untitled spreadsheet';
     if (name.length > 120) name = name.slice(0, 120);
 
-    // Name the starter sheet in the creator's UI language: English "Sheet1",
-    // otherwise (Chinese, the default) "工作表1". This mirrors the client's
-    // add-sheet naming so a workbook's first and later sheets read consistently.
-    const lang = (req.body && req.body.lang === 'en') ? 'en' : 'zh';
-    const firstSheetName = lang === 'en' ? 'Sheet1' : '工作表1';
+    // Name the starter sheet in the creator's UI language: Chinese "工作表1",
+    // else the legacy "Sheet1". This mirrors the client's add-sheet naming so a
+    // workbook's first and later sheets read consistently. Localization is opt-in
+    // via an explicit `lang: 'zh'`; any other/absent value keeps "Sheet1" so
+    // callers that don't send a language stay backward-compatible.
+    const firstSheetName = (req.body && req.body.lang === 'zh') ? '工作表1' : 'Sheet1';
 
     // The creator (owner) is identified by their stable identity key.
     const creator = userIdentity(req.user) || 'anonymous';
