@@ -324,7 +324,9 @@
           const res = await fetch('/api/files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: finalName })
+            // Pass the UI language so the server names the starter sheet
+            // in the creator's language (e.g. "工作表1" vs "Sheet1").
+            body: JSON.stringify({ name: finalName, lang: getLang ? getLang() : 'zh' })
           });
           if (res.status === 403) {
             const d = await res.json().catch(() => ({}));
