@@ -1616,6 +1616,8 @@ const getCellValue = (coord, depth = 0, sheetName = null) => {
 const formatCellDisplay = (rawValue, style) => {
   // Nothing to do without either a named format or an explicit decimal count.
   if (!style || (!style.numberFormat && style.decimalPlaces == null)) return rawValue;
+  // Plain-text format shows the value verbatim — no numeric reformatting.
+  if (style.numberFormat === 'text') return rawValue;
   // Only numeric values are reformatted; text/blank pass through untouched.
   const str = String(rawValue).trim();
   if (str === '' || isNaN(str) || !isFinite(Number(str))) return rawValue;
@@ -1695,6 +1697,9 @@ const isDateValue = (rawValue) => /^\d{4}\/\d{1,2}\/\d{1,2}(\s+\d{1,2}:\d{2}:\d{
  */
 const resolveCellAlign = (rawValue, style) => {
   if (style && style.align) return style.align;
+  // Plain-text format treats contents as text, so numbers left-align (the
+  // default) rather than picking up the numeric right-alignment below.
+  if (style && style.numberFormat === 'text') return '';
   if (isNumericValue(rawValue) || isDateValue(rawValue)) return 'right';
   return '';
 };
@@ -8344,6 +8349,7 @@ if (menuFormatBtn && menuFormatDropdown) {
 
   // Number formats
   wireFmt('fmt-num-auto',             () => act((id) => setCellNumberFormat(id, null)));
+  wireFmt('fmt-num-plain-text',       () => act((id) => setCellNumberFormat(id, 'text')));
   wireFmt('fmt-num-number',           () => act((id) => setCellNumberFormat(id, 'number')));
   wireFmt('fmt-num-percent',          () => act((id) => setCellNumberFormat(id, 'percent')));
   wireFmt('fmt-num-scientific',       () => act((id) => setCellNumberFormat(id, 'scientific')));

@@ -410,6 +410,12 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
     const res17 = await makeRequest('http://localhost:31262/api/cells', 'POST', badWrapPayload, { Cookie: cookie });
     assert.strictEqual(res17.statusCode, 400);
     assert.strictEqual(res17.data.error, 'bad_request');
+
+    // 18. numberFormat 'text' (plain text) is valid.
+    const textFormatPayload = { cellId: 'A15', formula: '', value: '', style: { numberFormat: 'text' } };
+    const res18 = await makeRequest('http://localhost:31262/api/cells', 'POST', textFormatPayload, { Cookie: cookie });
+    assert.strictEqual(res18.statusCode, 200);
+    assert.strictEqual(res18.data.success, true);
   } finally {
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 300));

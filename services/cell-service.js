@@ -62,7 +62,7 @@ export const validateCellPayload = (cellId, formula, value, style) => {
     const allowedKeys = ['bold', 'italic', 'underline', 'color', 'strikethrough', 'textColor', 'border', 'borders', 'align', 'link', 'verticalAlign', 'fontFamily', 'fontSize', 'numberFormat', 'textWrap'];
     const borderSides = ['top', 'right', 'bottom', 'left'];
     const borderStyles = ['thin', 'medium', 'thick', 'dashed', 'dotted', 'double'];
-    const numberFormats = ['number', 'percent', 'scientific', 'accounting', 'financial', 'currency', 'currencyRounded'];
+    const numberFormats = ['text', 'number', 'percent', 'scientific', 'accounting', 'financial', 'currency', 'currencyRounded'];
     const textWrapModes = ['overflow', 'wrap', 'clip'];
     for (const key of Object.keys(style)) {
       if (!allowedKeys.includes(key)) {
