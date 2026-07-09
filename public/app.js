@@ -1680,6 +1680,23 @@ const isNumericValue = (rawValue) => {
 };
 
 /**
+ * Trim redundant leading zeros from a plain decimal number entry so "01" and
+ * "007" commit as "1" and "7" (treated as ordinary numbers). Only decimal-format
+ * numbers are rewritten — the integer part's leading zeros are stripped while the
+ * sign, fraction, and exponent are preserved (so "0.5" stays "0.5" and "01.50"
+ * becomes "1.50"). Any input that isn't a plain decimal number is returned
+ * unchanged. Callers skip this for the plain-text format, which keeps literals.
+ * @param {string} text - The raw text the user committed.
+ * @returns {string} The text with redundant leading zeros removed.
+ */
+const stripLeadingZeros = (text) => {
+  const match = /^([+-]?)(\d+)((?:\.\d+)?(?:[eE][+-]?\d+)?)$/.exec(text);
+  if (!match) return text;
+  const [, sign, intPart, rest] = match;
+  return sign + intPart.replace(/^0+(?=\d)/, '') + rest;
+};
+
+/**
  * Determines whether a cell's evaluated value is a date string in the format
  * the formula engine emits (e.g. "2026/6/13" or "2026/6/13 14:30:00").
  * @param {string} rawValue - The evaluated cell value.
@@ -3131,7 +3148,11 @@ const saveCellUpdate = (cellId, text) => {
     }
   } else {
     cell.formula = '';
-    cell.value = text;
+    // Numeric entries with redundant leading zeros ("01" → "1") are normalized so
+    // the value is treated as an ordinary number. The plain-text format is exempt:
+    // it deliberately preserves the literal input (e.g. "007").
+    const isPlainText = cell.style && cell.style.numberFormat === 'text';
+    cell.value = isPlainText ? text : stripLeadingZeros(text);
   }
 
   localCells[cellId] = cell;
