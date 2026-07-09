@@ -1235,6 +1235,46 @@ const updateRangeSelectionUI = () => {
 };
 
 /**
+ * Serialize copied cells to tab/newline-delimited text (TSV) for the system
+ * clipboard, laying each cell out by its row/column offset (gaps become empty
+ * strings). This is the plain-text mirror of the in-memory clipboard so an
+ * in-app copy and a browser-native paste agree on content.
+ * @param {Array<{offsetRow:number, offsetCol:number, value?:string}>} copiedCells
+ * @returns {string} TSV text (rows joined by "\n", columns by "\t").
+ */
+const copiedCellsToText = (copiedCells) => {
+  if (!copiedCells || copiedCells.length === 0) return '';
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const c of copiedCells) {
+    if (c.offsetRow > maxRow) maxRow = c.offsetRow;
+    if (c.offsetCol > maxCol) maxCol = c.offsetCol;
+  }
+  const grid = Array.from({ length: maxRow + 1 }, () => Array(maxCol + 1).fill(''));
+  for (const c of copiedCells) {
+    grid[c.offsetRow][c.offsetCol] = c.value != null ? c.value : '';
+  }
+  return grid.map(row => row.join('\t')).join('\n');
+};
+
+/**
+ * Best-effort mirror of the internal clipboard onto the system clipboard so a
+ * browser-native paste (e.g. into a cell that is being edited, where the app's
+ * Ctrl+V interception steps aside) inserts what the user actually copied rather
+ * than stale OS-clipboard text. Failures — insecure context, denied permission,
+ * no document focus — are swallowed; the in-memory buffer stays the source of
+ * truth for in-app pastes.
+ * @param {string} text - The text to place on the system clipboard.
+ */
+const writeSystemClipboard = (text) => {
+  try {
+    if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).catch(() => { /* clipboard write rejected */ });
+    }
+  } catch { /* clipboard API unavailable */ }
+};
+
+/**
  * Copies values, formulas, and styles of the currently selected range of cells.
  */
 const copySelectedCells = () => {
@@ -1260,6 +1300,9 @@ const copySelectedCells = () => {
   });
 
   clipboardData = { copiedCells };
+  // Keep the OS clipboard in sync with the in-app copy so a native paste (e.g.
+  // into a cell being edited) can't insert stale, unrelated clipboard content.
+  writeSystemClipboard(copiedCellsToText(copiedCells));
 };
 
 /**
@@ -3036,6 +3079,8 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   if (!canEditWorkbook) return; // viewers cannot edit cells
   // Make cell contenteditable
   cellEl.setAttribute('contenteditable', 'true');
+  // Suppress the browser's spellcheck squiggles on cell data (numbers, codes).
+  cellEl.setAttribute('spellcheck', 'false');
   
   // Set cell text: either the initial text or the cell's formula/value
   if (initialText !== null) {
