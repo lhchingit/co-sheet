@@ -6292,6 +6292,36 @@ window.addEventListener('click', (e) => {
  * Updates the active styling states of the toolbar buttons.
  * @param {Object} [style] - The current cell's style object.
  */
+// Format-key → Format ▸ Number menu button id, for the active-format check mark.
+// A null/absent numberFormat means "Automatic".
+const NUMBER_FORMAT_MENU_IDS = {
+  auto: 'fmt-num-auto',
+  text: 'fmt-num-plain-text',
+  number: 'fmt-num-number',
+  percent: 'fmt-num-percent',
+  scientific: 'fmt-num-scientific',
+  accounting: 'fmt-num-accounting',
+  financial: 'fmt-num-financial',
+  currency: 'fmt-num-currency',
+  currencyRounded: 'fmt-num-currency-rounded',
+};
+
+/**
+ * Show a check mark beside the active cell's number format in the
+ * Format ▸ Number menu (falling back to "Automatic" when no explicit format is
+ * set). Called whenever the toolbar formatting state is refreshed.
+ * @param {{ numberFormat?: string|null }|null|undefined} style - Active cell style.
+ */
+const updateNumberFormatMenuChecks = (style) => {
+  const activeKey = (style && style.numberFormat) || 'auto';
+  for (const [key, id] of Object.entries(NUMBER_FORMAT_MENU_IDS)) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    const check = btn.querySelector('.fmt-num-check');
+    if (check) check.classList.toggle('invisible', key !== activeKey);
+  }
+};
+
 const updateToolbarFormattingStates = (style) => {
   const toolbarBold = document.getElementById('toolbar-bold');
   const toolbarItalic = document.getElementById('toolbar-italic');
@@ -6319,6 +6349,9 @@ const updateToolbarFormattingStates = (style) => {
   setActive(toolbarItalic, style && style.italic);
   setActive(toolbarStrikethrough, style && style.strikethrough);
   setActive(toolbarBorder, styleHasBorders(style));
+
+  // Mark the active number format in the Format ▸ Number menu.
+  updateNumberFormatMenuChecks(style);
 
   // Determine the effective alignment: an explicit style wins, otherwise a
   // numeric active cell defaults to right (mirroring the grid rendering),
