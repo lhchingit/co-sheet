@@ -959,6 +959,25 @@ if (!isGoogleLoginEnabled()) {
   );
 }
 
+// Cache-busting version for the client bundles, computed once at startup from a
+// content hash of every public JS file. It is appended as `?v=<hash>` to the
+// editor's <script> URLs (see the /sheet route) so a deploy always changes those
+// URLs — defeating any browser or intermediary (CDN/proxy) cache that would
+// otherwise keep serving a stale bundle. Any change to any module bumps it; a
+// timestamp is the fallback if the directory can't be hashed.
+const ASSET_VERSION = (() => {
+  try {
+    const dir = path.join(__dirname, 'public');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort();
+    const hash = crypto.createHash('md5');
+    for (const f of files) hash.update(fs.readFileSync(path.join(dir, f)));
+    return hash.digest('hex').slice(0, 10);
+  } catch (err) {
+    logger.warn({ err }, 'Could not hash public assets for cache-busting; using timestamp');
+    return String(Date.now());
+  }
+})();
+
 // Serve the login page.
 app.get('/login', (req, res) => {
   res.type('html').send(loginPageHtml);
@@ -1001,7 +1020,9 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
     }
 
     const template = await fs.promises.readFile(path.join(__dirname, 'private', 'index.html'), 'utf8');
-    const html = template.split('{{FILE_NAME}}').join(escapeHtml(name));
+    const html = template
+      .split('{{FILE_NAME}}').join(escapeHtml(name))
+      .split('{{ASSET_VERSION}}').join(ASSET_VERSION);
     res.type('html').send(html);
   } catch (err) {
     logger.error({ err: err }, 'Error serving editor');

@@ -134,7 +134,8 @@ test('HTTP Server serves the spreadsheet editor at /sheet containing grid-root a
     // --- Assert ---
     assert.strictEqual(pageRes.statusCode, 200);
     assert.ok(pageRes.html.includes('id="grid-root"'));
-    assert.ok(pageRes.html.includes('src="/app.js"'));
+    // app.js is served with a cache-busting version query (?v=<hash>).
+    assert.ok(/src="\/app\.js\?v=[0-9a-f]+"/.test(pageRes.html));
   } finally {
     child.kill();
   }
