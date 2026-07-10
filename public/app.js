@@ -5933,7 +5933,7 @@ const showContextMenu = (cellId, x, y) => {
   // Styled with the app's Material theme tokens (matches the sheet-tab context
   // menu) rather than the mockup's raw Google colors, so it fits the rest of
   // the UI. Only actions that map to real, existing functions are included.
-  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded-lg py-1.5 z-[1000] border border-outline-variant text-label-md text-on-surface dark:text-on-surface-variant w-60 select-none';
+  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded-lg py-1.5 z-[1000] border border-outline-variant text-label-lg text-on-surface dark:text-on-surface-variant w-60 select-none';
 
   // Shared class strings for the menu rows.
   const itemCls = 'w-full flex items-center gap-3 px-3 py-1.5 hover:bg-surface-variant cursor-pointer text-left';
@@ -6146,7 +6146,7 @@ const showColumnMenu = (colLetter, x, y) => {
 
   const menu = document.createElement('div');
   menu.id = 'grid-context-menu';
-  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded-lg py-1.5 z-[1000] border border-outline-variant text-label-md text-on-surface dark:text-on-surface-variant w-60 select-none';
+  menu.className = 'fixed bg-surface-container-lowest dark:bg-inverse-surface shadow-lg rounded-lg py-1.5 z-[1000] border border-outline-variant text-label-lg text-on-surface dark:text-on-surface-variant w-60 select-none';
 
   // Same row/icon/divider classes as showContextMenu so the two menus are
   // visually identical.
