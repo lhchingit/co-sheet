@@ -497,6 +497,11 @@
             pointer-events: auto;
             cursor: crosshair;
         }
+        /* Keep the crosshair (and suppress text selection) for the whole
+           fill-handle drag, so the cursor doesn't flicker once the pointer
+           leaves the 8px dot — same pattern as the resize drags above. */
+        body.fill-dragging, body.fill-dragging * { cursor: crosshair !important; }
+        body.fill-dragging { user-select: none; }
         /* Find/Replace Tailwind custom styles */
         /* Secondary button styling for less prominent actions */
         .btn-secondary {

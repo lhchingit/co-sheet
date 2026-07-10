@@ -234,6 +234,11 @@ let isSelecting = false; // Whether selection drag is active
 let isColumnSelection = false; // Whether the current selection is a full-column header click
 let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
+// Fill-handle drag: dragging the dot at the selection's bottom-right corner
+// extends the selection from its original bounds along one axis only (the
+// dominant drag direction), like Google Sheets' fill handle.
+let isFillDragging = false;
+let fillDragBaseRange = null; // Selection bounds ({minRow,maxRow,minCol,maxCol}) when the drag began
 // Each sheet's last selection, so switching away and back restores where you were.
 // In-memory only (keyed by sheet name); intentionally not persisted, so a page
 // reload starts fresh (the initial load selects A1).
@@ -2043,10 +2048,67 @@ const cellElFromEvent = (e) => {
   return (t && typeof t.closest === 'function') ? t.closest('[data-cell-id]') : null;
 };
 
+/** The current selection's bounds (merge-expanded, matching the visible
+ *  overlay), or null when nothing is selected. */
+const currentSelectionRange = () => {
+  const startId = selectionStartCellId || activeCellId;
+  if (!startId) return null;
+  const start = parseCellCoord(startId);
+  const end = parseCellCoord(selectionEndCellId || startId);
+  if (!start || !end) return null;
+  return expandRangeForMerges(
+    Math.min(start.row, end.row), Math.max(start.row, end.row),
+    Math.min(start.colIndex, end.colIndex), Math.max(start.colIndex, end.colIndex),
+  );
+};
+
+/** mousedown on the selection's fill handle: start an axis-locked extend drag.
+ *  The base range is frozen here; mouseover then grows it toward the pointer. */
+const beginFillHandleDrag = (e) => {
+  const range = currentSelectionRange();
+  if (!range) return;
+  e.preventDefault(); // keep focus where it is; no text selection during the drag
+  isFillDragging = true;
+  fillDragBaseRange = range;
+  document.body.classList.add('fill-dragging');
+};
+
+/** Extends the selection from the fill-drag base range toward `cellId`, along
+ *  the dominant axis only (ties prefer vertical, the common fill-down case).
+ *  A pointer inside the base range restores the original selection. */
+const extendFillDrag = (cellId) => {
+  const c = parseCellCoord(cellId);
+  const b = fillDragBaseRange;
+  if (!c || !b) return;
+  const beyondCols = c.colIndex > b.maxCol ? c.colIndex - b.maxCol : (c.colIndex < b.minCol ? b.minCol - c.colIndex : 0);
+  const beyondRows = c.row > b.maxRow ? c.row - b.maxRow : (c.row < b.minRow ? b.minRow - c.row : 0);
+  let { minRow, maxRow, minCol, maxCol } = b;
+  if (beyondRows >= beyondCols && beyondRows > 0) {
+    if (c.row > b.maxRow) maxRow = c.row; else minRow = c.row;
+  } else if (beyondCols > 0) {
+    if (c.colIndex > b.maxCol) maxCol = c.colIndex; else minCol = c.colIndex;
+  }
+  // Re-anchor the range corners; activeCellId is untouched, so the thick
+  // border stays on the cell the user originally selected.
+  selectionStartCellId = `${getColLetter(minCol)}${minRow}`;
+  selectionEndCellId = `${getColLetter(maxCol)}${maxRow}`;
+  updateRangeSelectionUI();
+};
+
 // mousedown: begin range selection, or pick a reference in formula-point mode.
 const onGridCellMouseDown = (e) => {
   if (isHistoryMode) return; // Disable selection in history mode
   if (e.button !== 0) return; // Only trigger selection on left mouse click
+  // The fill handle sits inside the (pointer-events:none) selection overlay, so
+  // a mousedown targeting it can only be the dot itself. It starts an extend
+  // drag instead of a new selection — except in formula point mode, where the
+  // grid is a reference picker and the dot is inert.
+  const t = e.target;
+  if (t && t.classList && typeof t.classList.contains === 'function' && t.classList.contains('fill-handle')
+      && t.closest && t.closest('#selection-range-overlay')) {
+    if (!formulaPickCapable()) beginFillHandleDrag(e);
+    return;
+  }
   const cellEl = cellElFromEvent(e);
   if (!cellEl) return;
   const cellId = cellEl.getAttribute('data-cell-id');
@@ -2070,13 +2132,14 @@ const onGridCellMouseDown = (e) => {
 // extend a range-selection or formula-pick drag as the cursor crosses cells.
 const onGridCellMouseOver = (e) => {
   if (isHistoryMode) return; // Disable selection in history mode
-  if (!fpActive && !isSelecting) { delegatedHoverCellId = null; return; }
+  if (!fpActive && !isSelecting && !isFillDragging) { delegatedHoverCellId = null; return; }
   const cellEl = cellElFromEvent(e);
   if (!cellEl) return;
   const cellId = cellEl.getAttribute('data-cell-id');
   if (cellId === delegatedHoverCellId) return; // same cell, nothing changed
   delegatedHoverCellId = cellId;
   if (fpActive) { extendFormulaPick(cellId); return; } // formula range drag
+  if (isFillDragging) { extendFillDrag(cellId); return; } // fill-handle axis-locked extend
   if (isSelecting) {
     selectionEndCellId = cellId;
     updateRangeSelectionUI();
@@ -7978,6 +8041,11 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 // Stop range selection dragging when releasing mouse button anywhere
 window.addEventListener('mouseup', () => {
   isSelecting = false;
+  if (isFillDragging) {
+    isFillDragging = false;
+    fillDragBaseRange = null;
+    document.body.classList.remove('fill-dragging');
+  }
   endFormulaPick(); // freeze the formula pick range; the box stays until typed over
 });
 
