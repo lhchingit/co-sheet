@@ -488,6 +488,15 @@
             border-radius: 50%;
             z-index: 6;
         }
+        /* The local selection's fill handle shows a crosshair on hover so the
+           user knows the dot is a distinct target. Its parent
+           #selection-range-overlay is pointer-events:none, so the handle must
+           opt back in to receive the hover; scoping to the overlay keeps
+           remote peers' dots (inside .active-cell-border) inert. */
+        #selection-range-overlay .fill-handle {
+            pointer-events: auto;
+            cursor: crosshair;
+        }
         /* Find/Replace Tailwind custom styles */
         /* Secondary button styling for less prominent actions */
         .btn-secondary {
