@@ -138,11 +138,11 @@ function createSandbox() {
 }
 
 /** Establishes a B2:C3 selection by simulated drag, then mousedowns the fill
- *  handle, returning the drive helpers. */
-function setUpFillDrag() {
+ *  handle, returning the drive helpers. `cells` seeds the sheet's cell data. */
+function setUpFillDrag(cells = {}) {
   const ctx = createSandbox();
   const { sandbox, cellById, elById, fire, fireWindow } = ctx;
-  sandbox.localSheets = { Sheet1: {} };
+  sandbox.localSheets = { Sheet1: cells };
   sandbox.activeSheetName = 'Sheet1';
   sandbox.renderSpreadsheetGrid();
 
@@ -218,4 +218,73 @@ test('a pointer inside the base range restores the original selection', () => {
   assert.strictEqual(sandbox.selectionStartCellId, 'B2');
   assert.strictEqual(sandbox.selectionEndCellId, 'C3',
     'retreating into the base range must restore the original B2:C3, not keep the extension');
+});
+
+test('releasing a fill drag tiles the base range\'s values into the extension', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: '1', formula: '', style: {} }, C2: { value: 'a', formula: '', style: {} },
+    B3: { value: '2', formula: '', style: {} }, C3: { value: 'b', formula: '', style: {} },
+  });
+
+  fire('mouseover', cellById.get('C7')); // extend B2:C3 down to B2:C7
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  // The 2-row base pattern repeats downward: rows 4/6 copy row 2, rows 5/7 copy row 3.
+  assert.strictEqual(s.B4.value, '1');
+  assert.strictEqual(s.C4.value, 'a');
+  assert.strictEqual(s.B5.value, '2');
+  assert.strictEqual(s.C5.value, 'b');
+  assert.strictEqual(s.B6.value, '1');
+  assert.strictEqual(s.C7.value, 'b');
+  // The base cells themselves are untouched.
+  assert.strictEqual(s.B2.value, '1');
+  assert.strictEqual(s.C3.value, 'b');
+});
+
+test('a fill drag copies formulas and styles and recalculates them', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: '3', formula: '=SUM(1,2)', style: { fontWeight: 'bold' } },
+    C2: { value: '', formula: '', style: {} },
+    B3: { value: '3', formula: '=SUM(1,2)', style: { fontWeight: 'bold' } },
+    C3: { value: '', formula: '', style: {} },
+  });
+
+  fire('mouseover', cellById.get('C4')); // extend down one row
+  fireWindow('mouseup');
+
+  const b4 = sandbox.localSheets.Sheet1.B4;
+  assert.strictEqual(b4.formula, '=SUM(1,2)', 'the formula must be copied (verbatim, matching paste semantics)');
+  assert.strictEqual(b4.value, '3', 'the copied formula must be recalculated in the target cell');
+  assert.strictEqual(b4.style.fontWeight, 'bold', 'the source style must be copied too');
+  assert.notStrictEqual(b4.style, sandbox.localSheets.Sheet1.B2.style,
+    'the copied style must be a clone, not a shared object');
+});
+
+test('an upward fill tiles from the base\'s bottom edge, and leftward from its right edge', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: 'top', formula: '', style: {} }, C2: { value: 'x', formula: '', style: {} },
+    B3: { value: 'bottom', formula: '', style: {} }, C3: { value: 'y', formula: '', style: {} },
+  });
+
+  fire('mouseover', cellById.get('B1')); // extend up one row
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  assert.strictEqual(s.B1.value, 'bottom', 'the row above the base must repeat the base\'s LAST row (aligned tiling)');
+  assert.strictEqual(s.C1.value, 'y');
+});
+
+test('releasing a fill drag inside the base range writes nothing and records no undo entry', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: '1', formula: '', style: {} },
+  });
+
+  fire('mouseover', cellById.get('C7')); // out…
+  fire('mouseover', cellById.get('C2')); // …and back inside the base
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  assert.strictEqual(s.B4, undefined, 'no cells outside the base range may be written');
+  assert.strictEqual(s.B2.value, '1');
 });

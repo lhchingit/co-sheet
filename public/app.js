@@ -2095,6 +2095,61 @@ const extendFillDrag = (cellId) => {
   updateRangeSelectionUI();
 };
 
+/** Completes a fill drag on mouseup: tiles the base range's cells (formula,
+ *  value, and style — verbatim, matching paste semantics) into the extension
+ *  the drag selected, as one undoable action. No-op when the drag never left
+ *  the base range. */
+const applyFillDrag = () => {
+  const b = fillDragBaseRange;
+  const sel = currentSelectionRange();
+  if (!b || !sel) return;
+  if (sel.minRow === b.minRow && sel.maxRow === b.maxRow &&
+      sel.minCol === b.minCol && sel.maxCol === b.maxCol) return;
+
+  const height = b.maxRow - b.minRow + 1;
+  const width = b.maxCol - b.minCol + 1;
+  const historyChanges = [];
+  for (let r = sel.minRow; r <= sel.maxRow; r++) {
+    for (let c = sel.minCol; c <= sel.maxCol; c++) {
+      if (r >= b.minRow && r <= b.maxRow && c >= b.minCol && c <= b.maxCol) continue; // base cell, not a target
+      // Tile the base pattern across the extension. The double modulo keeps the
+      // tiling aligned in both directions: the row just below the base repeats
+      // the base's first row, the row just above it repeats the base's last row
+      // (and likewise for columns).
+      const srcRow = b.minRow + (((r - b.minRow) % height) + height) % height;
+      const srcCol = b.minCol + (((c - b.minCol) % width) + width) % width;
+      const src = localCells[`${getColLetter(srcCol)}${srcRow}`] || { formula: '', value: '', style: {} };
+      const targetId = `${getColLetter(c)}${r}`;
+
+      const before = localCells[targetId] ? JSON.parse(JSON.stringify(localCells[targetId])) : { formula: '', value: '', style: {} };
+      const after = {
+        formula: src.formula || '',
+        value: src.value || '',
+        style: src.style ? JSON.parse(JSON.stringify(src.style)) : {}
+      };
+      localCells[targetId] = after;
+      historyChanges.push({ cellId: targetId, before, after: JSON.parse(JSON.stringify(after)) });
+
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: 'cell-edit',
+          payload: { cellId: targetId, formula: after.formula, value: after.value, style: after.style }
+        }));
+      }
+      updateGridDOMCell(targetId, getCellValue(targetId), after.style);
+    }
+  }
+
+  if (historyChanges.length > 0) {
+    recordHistoryAction({ type: 'multi', changes: historyChanges });
+    recalculateSheet();
+    // Filled cells can grow row heights (e.g. a larger source font); re-measure
+    // so the overlay and its fill handle track the new geometry — same reason
+    // paste does this.
+    updateRangeSelectionUI();
+  }
+};
+
 // mousedown: begin range selection, or pick a reference in formula-point mode.
 const onGridCellMouseDown = (e) => {
   if (isHistoryMode) return; // Disable selection in history mode
@@ -8042,6 +8097,7 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 window.addEventListener('mouseup', () => {
   isSelecting = false;
   if (isFillDragging) {
+    applyFillDrag(); // write the base range's cells into the dragged extension
     isFillDragging = false;
     fillDragBaseRange = null;
     document.body.classList.remove('fill-dragging');
