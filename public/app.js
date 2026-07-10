@@ -2095,10 +2095,66 @@ const extendFillDrag = (cellId) => {
   updateRangeSelectionUI();
 };
 
-/** Completes a fill drag on mouseup: tiles the base range's cells (formula,
- *  value, and style — verbatim, matching paste semantics) into the extension
- *  the drag selected, as one undoable action. No-op when the drag never left
- *  the base range. */
+/**
+ * Rewrites the cell references inside a formula for a fill copy that lands
+ * `rowOffset` rows and `colOffset` columns away from its source, spreadsheet
+ * style: relative reference axes shift with the copy (C1's "=A1+B1" filled
+ * down to C2 becomes "=A2+B2"), "$"-pinned axes stay put, and a reference
+ * pushed above row 1 or left of column A becomes #REF! (mirroring the
+ * structural-delete rewriters). String literals and function names are left
+ * untouched — same tokenizer as adjustFormulaRefs.
+ * @param {string} formula - Formula text (starting with '=').
+ * @param {number} rowOffset - Rows from source cell to target cell.
+ * @param {number} colOffset - Columns from source cell to target cell.
+ * @returns {string} The adjusted formula.
+ */
+const shiftFormulaRefsForFill = (formula, rowOffset, colOffset) => {
+  if (typeof formula !== 'string' || formula[0] !== '=' || (rowOffset === 0 && colOffset === 0)) return formula;
+  const isAlpha = (c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+  const isDigit = (c) => c >= '0' && c <= '9';
+  let out = '=';
+  let i = 1;
+  const n = formula.length;
+  while (i < n) {
+    const c = formula[i];
+    if (c === '"') { // copy a string literal verbatim ("" escapes a quote)
+      out += c; i++;
+      while (i < n) { out += formula[i]; if (formula[i] === '"') { if (formula[i + 1] === '"') { out += formula[i + 1]; i += 2; continue; } i++; break; } i++; }
+      continue;
+    }
+    if (c === '$' || isAlpha(c)) {
+      let k = i, run = '';
+      while (k < n && (isAlpha(formula[k]) || isDigit(formula[k]) || formula[k] === '$' || formula[k] === '.')) { run += formula[k]; k++; }
+      let m = k; while (m < n && formula[m] === ' ') m++;
+      const isFunc = formula[m] === '(';
+      const prevCh = formula[i - 1];
+      const afterDigit = prevCh && isDigit(prevCh); // avoid mis-reading e.g. 1E5
+      const ref = (!isFunc && !afterDigit) ? run.match(/^(\$?)([A-Za-z]{1,3})(\$?)(\d+)$/) : null;
+      if (ref) {
+        const colLetters = ref[2].toUpperCase();
+        let colIdx = 0;
+        for (let q = 0; q < colLetters.length; q++) colIdx = colIdx * 26 + (colLetters.charCodeAt(q) - 64);
+        colIdx -= 1;
+        let rowNum = parseInt(ref[4], 10);
+        if (ref[1] !== '$') colIdx += colOffset;
+        if (ref[3] !== '$') rowNum += rowOffset;
+        out += (colIdx < 0 || rowNum < 1) ? '#REF!' : (ref[1] + getColLetter(colIdx) + ref[3] + rowNum);
+      } else {
+        out += run;
+      }
+      i = k;
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+};
+
+/** Completes a fill drag on mouseup: tiles the base range's cells into the
+ *  extension the drag selected, as one undoable action. Values and styles are
+ *  copied; a formula is copied with its relative references shifted by the
+ *  copy offset (spreadsheet fill semantics) and re-evaluated in the target
+ *  cell. No-op when the drag never left the base range. */
 const applyFillDrag = () => {
   const b = fillDragBaseRange;
   const sel = currentSelectionRange();
@@ -2122,12 +2178,30 @@ const applyFillDrag = () => {
       const targetId = `${getColLetter(c)}${r}`;
 
       const before = localCells[targetId] ? JSON.parse(JSON.stringify(localCells[targetId])) : { formula: '', value: '', style: {} };
+      const srcFormula = src.formula || '';
+      const formula = srcFormula ? shiftFormulaRefsForFill(srcFormula, r - srcRow, c - srcCol) : '';
       const after = {
-        formula: src.formula || '',
+        formula,
         value: src.value || '',
         style: src.style ? JSON.parse(JSON.stringify(src.style)) : {}
       };
       localCells[targetId] = after;
+      // The shifted formula's result differs from the source's, so re-evaluate
+      // it in the target cell before it is recorded/broadcast.
+      if (formula) {
+        if (formulaIsSupported(formula)) {
+          after.value = evaluateFormula(formula, 0, targetId);
+        } else if (formula !== srcFormula || !after.value) {
+          // The engine can't compute this formula, and the shift changed its
+          // references, so the copied cached value no longer applies. A
+          // reference the shift killed displays as #REF! (the rewritten
+          // formula itself no longer parses); otherwise show the engine's
+          // error result.
+          after.value = formula.indexOf('#REF!') !== -1 ? '#REF!' : evaluateFormula(formula, 0, targetId);
+        }
+        // An unchanged engine-unsupported formula keeps the copied cached
+        // value — the same imported-result protection recalculateSheet applies.
+      }
       historyChanges.push({ cellId: targetId, before, after: JSON.parse(JSON.stringify(after)) });
 
       if (socket.readyState === WebSocket.OPEN) {

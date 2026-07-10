@@ -254,7 +254,7 @@ test('a fill drag copies formulas and styles and recalculates them', () => {
   fireWindow('mouseup');
 
   const b4 = sandbox.localSheets.Sheet1.B4;
-  assert.strictEqual(b4.formula, '=SUM(1,2)', 'the formula must be copied (verbatim, matching paste semantics)');
+  assert.strictEqual(b4.formula, '=SUM(1,2)', 'a formula with no cell references must be copied unchanged');
   assert.strictEqual(b4.value, '3', 'the copied formula must be recalculated in the target cell');
   assert.strictEqual(b4.style.fontWeight, 'bold', 'the source style must be copied too');
   assert.notStrictEqual(b4.style, sandbox.localSheets.Sheet1.B2.style,
@@ -273,6 +273,90 @@ test('an upward fill tiles from the base\'s bottom edge, and leftward from its r
   const s = sandbox.localSheets.Sheet1;
   assert.strictEqual(s.B1.value, 'bottom', 'the row above the base must repeat the base\'s LAST row (aligned tiling)');
   assert.strictEqual(s.C1.value, 'y');
+});
+
+test('filling a formula down rewrites its relative references (C1 =A1+B1 → C2 =A2+B2)', () => {
+  const { sandbox, cellById, elById, fire, fireWindow } = createSandbox();
+  sandbox.localSheets = { Sheet1: {
+    A1: { value: '1', formula: '', style: {} }, B1: { value: '2', formula: '', style: {} },
+    C1: { value: '3', formula: '=A1+B1', style: {} },
+    A2: { value: '4', formula: '', style: {} }, B2: { value: '5', formula: '', style: {} },
+    A3: { value: '7', formula: '', style: {} }, B3: { value: '1', formula: '', style: {} },
+  } };
+  sandbox.activeSheetName = 'Sheet1';
+  sandbox.renderSpreadsheetGrid();
+
+  // Select the single formula cell, then grab its fill handle (fabricated, as
+  // in setUpFillDrag — the stub doesn't parse the overlay's innerHTML).
+  fire('mousedown', cellById.get('C1'));
+  fireWindow('mouseup');
+  const overlay = elById.get('selection-range-overlay');
+  assert.ok(overlay, 'the selection overlay should exist for a single selected cell');
+  const handle = sandbox.document.createElement();
+  handle.className = 'fill-handle';
+  overlay.appendChild(handle);
+  fire('mousedown', handle);
+
+  fire('mouseover', cellById.get('C3')); // drag down two rows
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  assert.strictEqual(s.C2.formula, '=A2+B2', 'the copy one row down must shift each relative reference down one row');
+  assert.strictEqual(s.C2.value, '9', 'the shifted formula must be re-evaluated in the target cell (4+5)');
+  assert.strictEqual(s.C3.formula, '=A3+B3');
+  assert.strictEqual(s.C3.value, '8', 'each fill row shifts from the SOURCE cell by its own offset (7+1)');
+  assert.strictEqual(s.C1.formula, '=A1+B1', 'the source cell must be untouched');
+});
+
+test('filling a formula sideways shifts its column references', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: '1', formula: '', style: {} },
+    C2: { value: '', formula: '=B2', style: {} },
+  });
+
+  fire('mouseover', cellById.get('E3')); // extend B2:C3 right to column E
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  // E2 copies C2 two columns over, so its reference shifts B2 → D2; D2 itself
+  // was tiled from B2 (plain value '1'), so the formula evaluates to '1'.
+  assert.strictEqual(s.E2.formula, '=D2');
+  assert.strictEqual(s.E2.value, '1');
+});
+
+test('"$"-pinned reference axes stay fixed while relative ones shift, and quoted text is untouched', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    A1: { value: '10', formula: '', style: {} },
+    A4: { value: '2', formula: '', style: {} },
+    B2: { value: '', formula: '=$A$1+A2', style: {} },
+    B3: { value: '', formula: '=CONCATENATE("A1",$A3)', style: {} },
+  });
+
+  fire('mouseover', cellById.get('C5')); // extend B2:C3 down two rows
+  fireWindow('mouseup');
+
+  const s = sandbox.localSheets.Sheet1;
+  assert.strictEqual(s.B4.formula, '=$A$1+A4', 'a fully pinned $A$1 must not move; the relative A2 shifts with the copy');
+  assert.strictEqual(s.B4.value, '12', 'the re-evaluated result must use the shifted reference (10+2)');
+  assert.strictEqual(s.B5.formula, '=CONCATENATE("A1",$A5)',
+    '"A1" inside a string literal must not be rewritten; $A3 pins its column but its row still shifts');
+});
+
+test('a reference pushed above row 1 by an upward fill becomes #REF!', () => {
+  const { sandbox, cellById, fire, fireWindow } = setUpFillDrag({
+    B2: { value: 'x', formula: '', style: {} },
+    B3: { value: 'x', formula: '=B2', style: {} },
+  });
+
+  fire('mouseover', cellById.get('B1')); // extend up one row
+  fireWindow('mouseup');
+
+  // B1 tiles from the base's LAST row (B3), a -2 row offset: B2 → B0, which
+  // does not exist, so the reference dies — same marker the row-delete
+  // rewriter uses.
+  assert.strictEqual(sandbox.localSheets.Sheet1.B1.formula, '=#REF!');
+  assert.strictEqual(sandbox.localSheets.Sheet1.B1.value, '#REF!',
+    'the dead reference must display as #REF!, not keep the source cell\'s stale value');
 });
 
 test('releasing a fill drag inside the base range writes nothing and records no undo entry', () => {
