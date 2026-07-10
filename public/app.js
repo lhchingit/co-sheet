@@ -3932,13 +3932,14 @@ const changeCellTextColor = (cellId, hex) => {
  * Clears all formatting from the selected cell(s), restoring them to their
  * unstyled default while leaving the underlying content (formula/value) intact.
  * Mirrors Google Sheets' "Clear formatting" (Ctrl+\): font, colors, borders,
- * bold/italic/strikethrough, alignment, number format, text wrapping, etc. are
- * all reset. Two style properties are *not* visual formatting and so survive:
- *   • link  – the cell's hyperlink target (a cell can render purely from it via
- *             the `val || link` fallback in the renderer, so dropping it would
- *             lose content), and
- *   • merge – the merged-range span anchored on this cell; clearing formatting
- *             must not unmerge cells.
+ * bold/italic/strikethrough, alignment, number format, text wrapping, merges,
+ * etc. are all reset. One style property is *not* visual formatting and survives:
+ *   • link – the cell's hyperlink target (a cell can render purely from it via
+ *            the `val || link` fallback in the renderer, so dropping it would
+ *            lose content).
+ * `merge` used to survive here too, on the reasoning that a merge isn't visual
+ * formatting. Google Sheets disagrees — Ctrl+\ splits merged blocks — so a merge
+ * anchored on a cleared cell is now dropped, unmerging the block (see #149).
  * @param {string} cellId - Selected cell ID.
  */
 const clearFormatting = (cellId) => {
@@ -3951,16 +3952,22 @@ const clearFormatting = (cellId) => {
   // re-rendered too — otherwise their copies of the shared edges linger, drawn by
   // neighbours we never refreshed.
   const renderIds = new Set();
+  // Dropping a merge changes cell geometry across the whole block — including
+  // cells outside `renderIds` that the block used to cover — so the per-cell DOM
+  // refresh below can't express it. Track whether any merge actually went away and
+  // fall back to a full grid render only then, keeping the common (unmerged) clear
+  // on the cheap per-cell path.
+  let unmergedAny = false;
 
   cellIds.forEach(id => {
     const cell = localCells[id];
     if (!cell || !cell.style) return;
     const preserved = {};
     if (cell.style.link) preserved.link = cell.style.link;
-    if (cell.style.merge) preserved.merge = cell.style.merge;
     // Nothing to clear when every style property is one we keep (or there are none).
     if (Object.keys(cell.style).length === Object.keys(preserved).length) return;
 
+    if (styleHasMerge(cell.style)) unmergedAny = true;
     const hadBorders = styleHasBorders(cell.style);
     const before = JSON.parse(JSON.stringify(cell));
     cell.style = preserved;
@@ -3989,13 +3996,19 @@ const clearFormatting = (cellId) => {
 
   // Render only after every cell is mutated so neighbour-aware edge de-duping
   // reads final state.
-  renderIds.forEach(id => {
-    const cell = localCells[id];
-    const st = (cell && cell.style) || EMPTY_STYLE;
-    // Use the cached value, not getCellValue(): clearing formatting can't change
-    // any cell's value, so re-evaluating each cleared formula cell here is wasted.
-    updateGridDOMCell(id, (cell && cell.value) || '', st);
-  });
+  if (unmergedAny) {
+    // A block just split back into its constituent cells; only a full re-render
+    // rebuilds the grid's geometry (mirrors unmergeSelectedCells).
+    renderSpreadsheetGrid();
+  } else {
+    renderIds.forEach(id => {
+      const cell = localCells[id];
+      const st = (cell && cell.style) || EMPTY_STYLE;
+      // Use the cached value, not getCellValue(): clearing formatting can't change
+      // any cell's value, so re-evaluating each cleared formula cell here is wasted.
+      updateGridDOMCell(id, (cell && cell.value) || '', st);
+    });
+  }
 
   if (historyChanges.length) {
     recordHistoryAction({ type: 'multi', changes: historyChanges });
@@ -6322,6 +6335,26 @@ const updateNumberFormatMenuChecks = (style) => {
   }
 };
 
+// Font sizes offered by the toolbar control and the Format ▸ Font size menu.
+const FONT_SIZE_PRESETS = [6, 7, 8, 9, 10, 11, 12, 14, 18, 24, 36];
+
+/**
+ * Show a check mark beside the active cell's font size in the Format ▸ Font size
+ * menu (falling back to DEFAULT_FONT_SIZE when the cell has no explicit size).
+ * A custom size typed into the toolbar may match no preset, in which case every
+ * option stays unchecked. Called whenever the toolbar formatting state is refreshed.
+ * @param {{ fontSize?: number|null }|null|undefined} style - Active cell style.
+ */
+const updateFontSizeMenuChecks = (style) => {
+  const list = document.getElementById('fmt-fontsize-list');
+  if (!list) return;
+  const activeSize = (style && style.fontSize) || DEFAULT_FONT_SIZE;
+  list.querySelectorAll('[data-size]').forEach((btn) => {
+    const check = btn.querySelector('.fmt-size-check');
+    if (check) check.classList.toggle('invisible', Number(btn.getAttribute('data-size')) !== activeSize);
+  });
+};
+
 const updateToolbarFormattingStates = (style) => {
   const toolbarBold = document.getElementById('toolbar-bold');
   const toolbarItalic = document.getElementById('toolbar-italic');
@@ -6352,6 +6385,9 @@ const updateToolbarFormattingStates = (style) => {
 
   // Mark the active number format in the Format ▸ Number menu.
   updateNumberFormatMenuChecks(style);
+
+  // Mark the active font size in the Format ▸ Font size menu.
+  updateFontSizeMenuChecks(style);
 
   // Determine the effective alignment: an explicit style wins, otherwise a
   // numeric active cell defaults to right (mirroring the grid rendering),
@@ -8434,16 +8470,28 @@ if (menuFormatBtn && menuFormatDropdown) {
     });
   }
 
-  // Build the Font size submenu (same presets as the toolbar control).
+  // Build the Font size submenu (same presets as the toolbar control). Each option
+  // carries a fixed-width check slot that stays reserved when unchecked, so the
+  // size labels line up (mirroring the Number submenu).
   const fontSizeList = document.getElementById('fmt-fontsize-list');
   if (fontSizeList && !fontSizeList.childElementCount) {
-    [6, 7, 8, 9, 10, 11, 12, 14, 18, 24, 36].forEach((sz) => {
+    FONT_SIZE_PRESETS.forEach((sz) => {
       const b = document.createElement('button');
-      b.className = 'block w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant';
-      b.textContent = sz;
+      b.className = 'flex items-center gap-2 w-full px-4 py-1.5 text-left hover:bg-surface-variant text-label-md text-on-surface-variant';
+      b.setAttribute('data-size', sz);
+      const check = document.createElement('span');
+      check.className = 'material-symbols-outlined text-[18px] w-[18px] shrink-0 fmt-size-check invisible';
+      check.textContent = 'check';
+      const label = document.createElement('span');
+      label.textContent = sz;
+      b.appendChild(check);
+      b.appendChild(label);
       b.addEventListener('click', (e) => { e.stopPropagation(); act((id) => setCellFontSize(id, sz)); });
       fontSizeList.appendChild(b);
     });
+    // The list is built after the first toolbar refresh, so seed the check mark here.
+    const s = activeCellId && localCells[activeCellId] ? localCells[activeCellId].style : null;
+    updateFontSizeMenuChecks(s);
   }
 
   // Number formats
