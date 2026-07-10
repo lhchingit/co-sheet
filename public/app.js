@@ -7478,6 +7478,19 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+A selects the whole grid (every row and column) instead of the
+  // browser's page-wide select-all. Sits above the read-only gate because it
+  // only moves the selection — viewers can use it too. When a text field or
+  // cell editor has focus the guard above already returned, so the browser's
+  // own text select-all still applies there.
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    selectionStartCellId = 'A1';
+    selectionEndCellId = `${getColLetter(getColCount() - 1)}${TOTAL_ROWS}`;
+    updateRangeSelectionUI();
+    return;
+  }
+
   // Read-only mode (viewer): every editing shortcut below this point mutates the
   // workbook, so permit only copy and ignore the rest. Cell navigation lives in a
   // separate handler and is unaffected.
