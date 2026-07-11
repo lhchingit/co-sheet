@@ -1161,17 +1161,22 @@ const updateRangeSelectionUI = () => {
   // rather than scanning the whole grid four times (see clearSelectionHighlights).
   clearSelectionHighlights();
 
+  // Headers take the solid-blue "selected" style when their whole track is
+  // inside the selection — geometry, not gesture, decides: a column header
+  // darkens when the selection spans every row (a header click, Ctrl+A, or a
+  // full-height drag all qualify), a row header when it spans every rendered
+  // column. Anything less keeps the light active-header tint.
+  const spansAllRows = minRow === 1 && maxRow === TOTAL_ROWS;
+  const spansAllCols = minColIndex === 0 && maxColIndex === getColCount() - 1;
+
   // Highlight cells and headers in range. Lookups go through the O(1) render
   // indexes (getColHeaderEl / getRowHeaderEl / getCellEl), and each highlighted
   // element is recorded so the next clear is O(this selection), not O(grid).
   for (let c = minColIndex; c <= maxColIndex; c++) {
     const colLetter = getColLetter(c);
     const colHeader = getColHeaderEl(colLetter);
-    // A column-header selection gives the column header a solid-blue highlight
-    // and leaves the row headers un-highlighted; a normal range lightly
-    // highlights both the spanned column and row headers.
     if (colHeader) {
-      colHeader.classList.add(isColumnSelection ? 'header-selected' : 'active-header');
+      colHeader.classList.add(spansAllRows ? 'header-selected' : 'active-header');
       highlightedEls.push(colHeader);
     }
 
@@ -1180,7 +1185,7 @@ const updateRangeSelectionUI = () => {
       if (c === minColIndex) {
         const rowHeader = getRowHeaderEl(r);
         if (rowHeader) {
-          rowHeader.classList.add('active-header');
+          rowHeader.classList.add(spansAllCols ? 'header-selected' : 'active-header');
           highlightedEls.push(rowHeader);
         }
       }
