@@ -232,6 +232,7 @@ const isSelfPresence = (u) =>
 let activeCellId = null; // Currently selected cell ID
 let isSelecting = false; // Whether selection drag is active
 let isColumnSelection = false; // Whether the current selection is a full-column header click
+let isRowSelection = false; // Whether the current selection is a full-row header click
 let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
 // Fill-handle drag: dragging the dot at the selection's bottom-right corner
@@ -1019,6 +1020,7 @@ const clearRangeSelection = () => {
   selectionStartCellId = null;
   selectionEndCellId = null;
   isColumnSelection = false;
+  isRowSelection = false;
   const overlay = document.getElementById('selection-range-overlay');
   if (overlay) overlay.remove();
   clearSelectionHighlights();
@@ -1155,9 +1157,12 @@ const updateRangeSelectionUI = () => {
   const nameBox = document.getElementById('name-box');
   if (nameBox) {
     const topLeft = `${getColLetter(minColIndex)}${minRow}`;
-    // A full-column selection reads like Google Sheets, e.g. "A:A" / "A:C".
+    // A full-column selection reads like Google Sheets, e.g. "A:A" / "A:C";
+    // a full-row one reads e.g. "5:5" / "5:8".
     if (isColumnSelection) {
       nameBox.innerText = `${getColLetter(minColIndex)}:${getColLetter(maxColIndex)}`;
+    } else if (isRowSelection) {
+      nameBox.innerText = `${minRow}:${maxRow}`;
     } else {
       nameBox.innerText = isRange ? `${topLeft}:${getColLetter(maxColIndex)}${maxRow}` : topLeft;
     }
@@ -2262,7 +2267,8 @@ const onGridCellMouseDown = (e) => {
     return;
   }
   isSelecting = true;
-  isColumnSelection = false; // a cell click is never a full-column selection
+  isColumnSelection = false; // a cell click is never a full-column/row selection
+  isRowSelection = false;
   selectionStartCellId = cellId;
   selectionEndCellId = cellId;
   handleCellSelect(cellId, cellEl);
@@ -2677,18 +2683,27 @@ const renderSpreadsheetGrid = () => {
     }
 
     // Row Header
+    const rowNum = r;
     const rowHeader = document.createElement('div');
-    rowHeader.className = 'grid-header sticky left-0 z-20';
+    rowHeader.className = 'grid-header sticky left-0 z-20 cursor-pointer';
     rowHeader.innerText = r;
     // Store row identifier for selection highlighting
     rowHeader.setAttribute('data-row-id', r);
     gridRowHeaderIndex.set(r, rowHeader);
     // With explicit placement on, pin the row header to the gutter / its row track.
     if (useExplicitPlacement) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
+    // Clicking a row header selects the entire row: the cells fill with the
+    // selection colour, the active anchor is the first cell, and the header is
+    // highlighted in solid blue (mirrors the column-header click).
+    rowHeader.addEventListener('mousedown', (e) => {
+      if (isHistoryMode) return;
+      if (e.button !== 0) return;
+      e.preventDefault();
+      selectRow(rowNum);
+    });
 
     // Drag handle on the row's bottom boundary (mirrors the column handle).
     if (!isHistoryMode) {
-      const rowNum = r;
       const resizeHandle = document.createElement('div');
       resizeHandle.className = 'row-resize-handle';
       resizeHandle.addEventListener('mousedown', (e) => {
@@ -3216,9 +3231,9 @@ const handleCellSelect = (cellId, cellEl, silent = false) => {
   const formulaBar = document.getElementById('formula-bar-input');
   const coordDisplay = document.querySelector('.w-12.text-center');
 
-  // For a full-column selection the Name Box already shows "A:A" (set by
-  // updateRangeSelectionUI); don't overwrite it with the anchor cell ID.
-  if (coordDisplay && !isColumnSelection) coordDisplay.innerText = cellId;
+  // For a full-column/row selection the Name Box already shows "A:A" / "5:5"
+  // (set by updateRangeSelectionUI); don't overwrite it with the anchor cell ID.
+  if (coordDisplay && !isColumnSelection && !isRowSelection) coordDisplay.innerText = cellId;
   if (formulaBar) {
     formulaBar.value = cellData && cellData.formula ? cellData.formula : (cellData && cellData.value ? cellData.value : '');
   }
@@ -3248,9 +3263,10 @@ const selectCellBelow = (cellId) => {
   const nextRow = coord.row + 1;
   if (nextRow > TOTAL_ROWS) return; // already at the bottom of the grid
   const nextCellId = `${getColLetter(coord.colIndex)}${nextRow}`;
-  // Reset any range/column selection so this becomes a single-cell selection,
+  // Reset any range/column/row selection so this becomes a single-cell selection,
   // matching what a plain click on the cell would do.
   isColumnSelection = false;
+  isRowSelection = false;
   selectionStartCellId = nextCellId;
   selectionEndCellId = nextCellId;
   // The target may be outside the current window (off-DOM); handleCellSelect works
@@ -3269,11 +3285,29 @@ const selectCellBelow = (cellId) => {
 const selectColumn = (colLetter) => {
   if (isHistoryMode) return;
   isColumnSelection = true;
+  isRowSelection = false;
   // Pre-set the range end to the bottom of the column; handleCellSelect keeps it
   // because it only defaults the end when none is set.
   selectionEndCellId = `${colLetter}${TOTAL_ROWS}`;
   const topCellEl = document.querySelector(`[data-cell-id="${colLetter}1"]`);
   handleCellSelect(`${colLetter}1`, topCellEl);
+};
+
+/**
+ * Selects an entire row from its header: fills every cell in the row, anchors
+ * the active cell at the first column, and highlights the row header in solid
+ * blue (see updateRangeSelectionUI for the row-selection styling).
+ * @param {number} rowNum - The 1-based row number.
+ */
+const selectRow = (rowNum) => {
+  if (isHistoryMode) return;
+  isRowSelection = true;
+  isColumnSelection = false;
+  // Pre-set the range end to the last column of the row; handleCellSelect keeps
+  // it because it only defaults the end when none is set.
+  selectionEndCellId = `${getColLetter(getColCount() - 1)}${rowNum}`;
+  const firstCellEl = document.querySelector(`[data-cell-id="A${rowNum}"]`);
+  handleCellSelect(`A${rowNum}`, firstCellEl);
 };
 
 /**
@@ -7641,9 +7675,10 @@ document.addEventListener('keydown', (e) => {
     selectionStartCellId = allSelected ? activeCellId : allStart;
     selectionEndCellId = allSelected ? activeCellId : allEnd;
     // Whichever way it toggles, this is a plain range selection, not a
-    // column-header one — reset the flag so the name box reads A1:Z1000
+    // column/row-header one — reset the flags so the name box reads A1:Z1000
     // (or the bare cell), not A:Z.
     isColumnSelection = false;
+    isRowSelection = false;
     updateRangeSelectionUI();
     return;
   }
@@ -8163,6 +8198,7 @@ const rememberSheetSelection = () => {
     startId: selectionStartCellId || activeCellId,
     endId: selectionEndCellId || activeCellId,
     isColumnSelection: !!isColumnSelection,
+    isRowSelection: !!isRowSelection,
   });
 };
 
@@ -8178,6 +8214,7 @@ const restoreSheetSelection = () => {
   const cellEl = document.querySelector(`[data-cell-id="${saved.activeCellId}"]`);
   if (!cellEl) return null;
   isColumnSelection = saved.isColumnSelection;
+  isRowSelection = !!saved.isRowSelection;
   selectionStartCellId = saved.startId;
   selectionEndCellId = saved.endId;
   handleCellSelect(saved.activeCellId, cellEl, true); // silent: switchSheet broadcasts below
@@ -8196,6 +8233,7 @@ const switchSheet = (sheetName) => {
   selectionStartCellId = null;
   selectionEndCellId = null;
   isColumnSelection = false;
+  isRowSelection = false;
 
   activeSheetName = sheetName;
   saveActiveSheetPref(sheetName); // remember across reloads (client-side)
