@@ -197,6 +197,38 @@ test('the full-grid selection tracks columns added beyond Z', () => {
     'the selection must reach the last rendered column, not stop at Z');
 });
 
+test('a second Ctrl+A collapses the selection back to the active cell', () => {
+  const { sandbox, fireKeydown } = setUpGrid();
+
+  fireKeydown({ key: 'a', ctrlKey: true }); // select all
+  assert.strictEqual(sandbox.selectionEndCellId, 'Z1000');
+
+  const prevented = fireKeydown({ key: 'a', ctrlKey: true }); // toggle off
+  assert.strictEqual(prevented, true, 'the browser select-all must stay suppressed on the second press');
+  assert.strictEqual(sandbox.selectionStartCellId, 'B2',
+    'the second press must deselect all rows and columns, leaving only the active cell');
+  assert.strictEqual(sandbox.selectionEndCellId, 'B2');
+  assert.strictEqual(sandbox.activeCellId, 'B2');
+
+  fireKeydown({ key: 'a', ctrlKey: true }); // a third press selects all again
+  assert.strictEqual(sandbox.selectionStartCellId, 'A1', 'the toggle must keep cycling');
+  assert.strictEqual(sandbox.selectionEndCellId, 'Z1000');
+});
+
+test('Ctrl+A after a partial range still selects all (only a FULL selection toggles off)', () => {
+  const { sandbox, cellById, fire, fireWindow, fireKeydown } = setUpGrid();
+
+  fire('mousedown', cellById.get('B2'));
+  fire('mouseover', cellById.get('C3'));
+  fireWindow('mouseup');
+  assert.strictEqual(sandbox.selectionEndCellId, 'C3');
+
+  fireKeydown({ key: 'a', ctrlKey: true });
+  assert.strictEqual(sandbox.selectionStartCellId, 'A1');
+  assert.strictEqual(sandbox.selectionEndCellId, 'Z1000',
+    'a partial selection must grow to the whole grid, not collapse');
+});
+
 test('Ctrl+A inside a text input is left to the browser', () => {
   const { sandbox, fireKeydown, documentStub } = setUpGrid();
   documentStub.activeElement = { tagName: 'INPUT', getAttribute: () => null };
