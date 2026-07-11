@@ -184,6 +184,7 @@
   "tip.shareMenu": "共用選項",
   "tip.undo": "復原 (Ctrl+Z)",
   "tip.redo": "取消復原 (Ctrl+Y)",
+  "tip.paintFormat": "套用格式",
   "tip.formatPercent": "格式設為百分比",
   "tip.decreaseDecimal": "減少小數位數",
   "tip.increaseDecimal": "增加小數位數",

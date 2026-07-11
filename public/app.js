@@ -6828,6 +6828,113 @@ if (toolbarDecimalIncreaseBtn) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Format painter — the toolbar "Apply format" roller. Clicking the button
+// snapshots the active cell's visual style and arms the painter; the next
+// cell/range selection receives a copy of that style (an unformatted source
+// paints "no format", i.e. clears the targets) and the painter disarms.
+// Escape or a second click on the button cancels. Two style properties are
+// never painted and the targets keep their own: `link` (a hyperlink is cell
+// content, not formatting) and `merge` (block geometry — painting it would
+// stamp overlapping merges across the target range).
+
+/** The armed painter's style snapshot; null while the painter is idle. */
+let paintFormatStyle = null;
+
+const toolbarPaintFormatBtn = document.getElementById('toolbar-paint-format');
+
+const cancelPaintFormat = () => {
+  paintFormatStyle = null;
+  if (toolbarPaintFormatBtn) toolbarPaintFormatBtn.classList.remove('bg-surface-variant');
+  document.body.classList.remove('paint-format-mode');
+};
+
+if (toolbarPaintFormatBtn) {
+  toolbarPaintFormatBtn.addEventListener('click', () => {
+    if (paintFormatStyle) { cancelPaintFormat(); return; } // second click disarms
+    if (!activeCellId || isHistoryMode || !canEditWorkbook) return;
+    const src = localCells[activeCellId];
+    const style = src && src.style ? JSON.parse(JSON.stringify(src.style)) : {};
+    delete style.link;
+    delete style.merge;
+    paintFormatStyle = style;
+    toolbarPaintFormatBtn.classList.add('bg-surface-variant');
+    document.body.classList.add('paint-format-mode');
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && paintFormatStyle) cancelPaintFormat();
+});
+
+/**
+ * Stamps the armed painter's style onto every cell of the just-completed
+ * selection, then disarms. Runs from the window mouseup that ends a grid
+ * selection drag, so a click paints one cell and a drag paints the range.
+ */
+const applyPaintFormat = () => {
+  const source = paintFormatStyle;
+  cancelPaintFormat();
+  if (!source) return;
+
+  const cellIds = getSelectedCellIds();
+  const historyChanges = [];
+  // Borders are neighbour-aware (each shared edge is also drawn by the facing
+  // cell), so whenever a paint adds or removes borders the four neighbours
+  // must re-render too — same bookkeeping as clearFormatting.
+  const renderIds = new Set();
+
+  cellIds.forEach(id => {
+    const before = localCells[id] ? JSON.parse(JSON.stringify(localCells[id])) : { formula: '', value: '', style: {} };
+    const cell = localCells[id] || { formula: '', value: '', style: {} };
+    const newStyle = JSON.parse(JSON.stringify(source));
+    if (cell.style && cell.style.link) newStyle.link = cell.style.link;
+    if (cell.style && cell.style.merge) newStyle.merge = cell.style.merge;
+    const bordersInPlay = styleHasBorders(cell.style) || styleHasBorders(newStyle);
+    cell.style = newStyle;
+    localCells[id] = cell;
+    historyChanges.push({ cellId: id, before, after: JSON.parse(JSON.stringify(cell)) });
+
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'cell-edit',
+        payload: { cellId: id, formula: cell.formula, value: cell.value, style: cell.style }
+      }));
+    }
+
+    renderIds.add(id);
+    if (bordersInPlay) {
+      const coord = parseCellCoord(id);
+      if (coord) {
+        const { row: r, colIndex: c } = coord;
+        const colCount = getColCount(activeSheetName);
+        if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
+        if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
+        if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
+        if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+      }
+    }
+  });
+
+  // Render only after every cell is mutated so neighbour-aware edge de-duping
+  // reads final state.
+  renderIds.forEach(id => {
+    const cell = localCells[id];
+    updateGridDOMCell(id, getCellValue(id), (cell && cell.style) || EMPTY_STYLE);
+  });
+
+  if (historyChanges.length) {
+    recordHistoryAction({ type: 'multi', changes: historyChanges });
+  }
+  // No recalculateSheet(): a style change never alters a cell value (see
+  // clearFormatting). But a painted font/size can change row heights, so the
+  // selection overlay must re-measure.
+  updateRangeSelectionUI();
+  if (activeCellId) {
+    updateToolbarFormattingStates(localCells[activeCellId] ? localCells[activeCellId].style : null);
+  }
+};
+
 // Hook up toolbar formatting buttons for bold, italic, and strikethrough
 const toolbarBoldBtn = document.getElementById('toolbar-bold');
 if (toolbarBoldBtn) {
@@ -8203,6 +8310,7 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 
 // Stop range selection dragging when releasing mouse button anywhere
 window.addEventListener('mouseup', () => {
+  const endedCellSelection = isSelecting;
   isSelecting = false;
   if (isFillDragging) {
     applyFillDrag(); // write the base range's cells into the dragged extension
@@ -8210,6 +8318,10 @@ window.addEventListener('mouseup', () => {
     fillDragBaseRange = null;
     document.body.classList.remove('fill-dragging');
   }
+  // An armed format painter fires on the mouseup that completes a grid
+  // selection (a click or a drag), stamping the source style onto it. A
+  // mouseup anywhere else (toolbar, menus) leaves the painter armed.
+  if (endedCellSelection && paintFormatStyle) applyPaintFormat();
   endFormulaPick(); // freeze the formula pick range; the box stays until typed over
 });
 
