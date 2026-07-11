@@ -6229,10 +6229,10 @@ const showContextMenu = (cellId, x, y) => {
       <span class="flex-grow">${t('ctx.convertTable')}</span>
       <span class="text-[10px] font-semibold text-[#188038] bg-[#e6f4ea] dark:bg-[#0f3d23] dark:text-[#6dd58c] px-1.5 py-0.5 rounded">${t('ctx.newBadge')}</span>
     </div>
-    <div class="${disabledCls}">
+    <button class="${itemCls}" id="menu-create-filter">
       <span class="${iconCls}">filter_alt</span>
-      <span class="flex-grow">${t('ctx.createFilter')}</span>
-    </div>
+      <span class="flex-grow">${t(window.CoSheet.sortFilter.hasActiveFilter() ? 'data.removeFilter' : 'ctx.createFilter')}</span>
+    </button>
     <div class="${dividerCls}"></div>
     <button class="${itemCls}" id="menu-history">
       <span class="${iconCls}">history</span>
@@ -6308,15 +6308,22 @@ const showContextMenu = (cellId, x, y) => {
   const delCellUp = document.getElementById('menu-delete-cell-up');
   if (delCellLeft) delCellLeft.onclick = () => { performCellDelete('left'); menu.remove(); };
   if (delCellUp) delCellUp.onclick = () => { performCellDelete('up'); menu.remove(); };
+  document.getElementById('menu-create-filter').onclick = () => {
+    // Toggle the per-sheet value filter on the right-clicked cell's column —
+    // the same action as the toolbar funnel and Data ▸ Create/Remove filter.
+    if (window.CoSheet.sortFilter.hasActiveFilter()) window.CoSheet.sortFilter.removeFilter();
+    else window.CoSheet.sortFilter.createFilter((parseCellCoord(cellId) || { colIndex: 0 }).colIndex);
+    menu.remove();
+  };
   document.getElementById('menu-history').onclick = () => { window.CoSheet.history.toggle(true); menu.remove(); };
   document.getElementById('menu-link').onclick = () => {
     menu.remove();
     openLinkDialog(cellId);
   };
-  // Note: paste-special, convert-to-table, create-filter, comment, note,
-  // pre-built table, dropdown, smart chips and "more actions" are rendered
-  // greyed-out and intentionally left unwired until those features exist — see
-  // the reference mock-up (images/right_click_menu.png).
+  // Note: paste-special, convert-to-table, comment, note, pre-built table,
+  // dropdown, smart chips and "more actions" are rendered greyed-out and
+  // intentionally left unwired until those features exist — see the reference
+  // mock-up (images/right_click_menu.png).
 };
 
 /**
