@@ -7483,15 +7483,24 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+A selects the whole grid (every row and column) instead of the
-  // browser's page-wide select-all. Sits above the read-only gate because it
-  // only moves the selection — viewers can use it too. When a text field or
-  // cell editor has focus the guard above already returned, so the browser's
-  // own text select-all still applies there.
+  // Ctrl+A toggles a whole-grid selection (every row and column) instead of
+  // the browser's page-wide select-all: a first press selects everything, a
+  // second press (the grid is already fully selected) collapses back to the
+  // active cell alone. Sits above the read-only gate because it only moves
+  // the selection — viewers can use it too. When a text field or cell editor
+  // has focus the guard above already returned, so the browser's own text
+  // select-all still applies there.
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
     e.preventDefault();
-    selectionStartCellId = 'A1';
-    selectionEndCellId = `${getColLetter(getColCount() - 1)}${TOTAL_ROWS}`;
+    const allStart = 'A1';
+    const allEnd = `${getColLetter(getColCount() - 1)}${TOTAL_ROWS}`;
+    const allSelected = selectionStartCellId === allStart && selectionEndCellId === allEnd;
+    selectionStartCellId = allSelected ? activeCellId : allStart;
+    selectionEndCellId = allSelected ? activeCellId : allEnd;
+    // Whichever way it toggles, this is a plain range selection, not a
+    // column-header one — reset the flag so the name box reads A1:Z1000
+    // (or the bare cell), not A:Z.
+    isColumnSelection = false;
     updateRangeSelectionUI();
     return;
   }
