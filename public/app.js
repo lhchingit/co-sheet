@@ -239,6 +239,12 @@ let selectionEndCellId = null; // End cell of range selection
 // dominant drag direction), like Google Sheets' fill handle.
 let isFillDragging = false;
 let fillDragBaseRange = null; // Selection bounds ({minRow,maxRow,minCol,maxCol}) when the drag began
+// Format painter ("Apply format" roller) armed state. `paintFormatStyle` holds
+// the source cell's style snapshot (null while idle); `paintFormatSource`
+// remembers where the snapshot was copied from so the dashed source outline
+// can be re-applied after any full grid rebuild (and only on that sheet).
+let paintFormatStyle = null;
+let paintFormatSource = null; // { cellId, sheetName } of the armed painter's source
 // Each sheet's last selection, so switching away and back restores where you were.
 // In-memory only (keyed by sheet name); intentionally not persisted, so a page
 // reload starts fresh (the initial load selects A1).
@@ -2869,6 +2875,10 @@ const renderSpreadsheetGrid = () => {
   // peer's name tag disappears on every full re-render (e.g. a remote resize or
   // sheet change) until they next move their cursor.
   renderRemoteCursors();
+
+  // Re-apply the armed format painter's dashed source outline, which the
+  // rebuild above just discarded.
+  refreshPaintFormatSourceOutline();
 
   // The content height/width just changed; resync the synthetic scrollbars.
   if (gridScrollbarLayout) gridScrollbarLayout();
@@ -6830,21 +6840,38 @@ if (toolbarDecimalIncreaseBtn) {
 
 // ---------------------------------------------------------------------------
 // Format painter — the toolbar "Apply format" roller. Clicking the button
-// snapshots the active cell's visual style and arms the painter; the next
-// cell/range selection receives a copy of that style (an unformatted source
-// paints "no format", i.e. clears the targets) and the painter disarms.
-// Escape or a second click on the button cancels. Two style properties are
-// never painted and the targets keep their own: `link` (a hyperlink is cell
-// content, not formatting) and `merge` (block geometry — painting it would
-// stamp overlapping merges across the target range).
+// snapshots the active cell's visual style and arms the painter; the source
+// cell wears a dashed outline until the next cell/range selection receives a
+// copy of that style (an unformatted source paints "no format", i.e. clears
+// the targets) and the painter disarms. Escape or a second click on the
+// button cancels. Two style properties are never painted and the targets
+// keep their own: `link` (a hyperlink is cell content, not formatting) and
+// `merge` (block geometry — painting it would stamp overlapping merges
+// across the target range). State lives up with the selection globals
+// (paintFormatStyle / paintFormatSource) so renderSpreadsheetGrid can consult
+// it safely.
 
-/** The armed painter's style snapshot; null while the painter is idle. */
-let paintFormatStyle = null;
+/**
+ * Puts the dashed "format being copied" outline on the armed painter's source
+ * cell. Safe to call after any full grid rebuild (hoisted; renderSpreadsheetGrid
+ * calls it): the cell is looked up fresh, and nothing is marked unless the
+ * painter is armed and its source sheet is the one on screen.
+ */
+function refreshPaintFormatSourceOutline() {
+  if (!paintFormatStyle || !paintFormatSource || paintFormatSource.sheetName !== activeSheetName) return;
+  const el = document.querySelector(`[data-cell-id="${paintFormatSource.cellId}"]`);
+  if (el) el.classList.add('paint-format-source');
+}
 
 const toolbarPaintFormatBtn = document.getElementById('toolbar-paint-format');
 
 const cancelPaintFormat = () => {
+  if (paintFormatSource && paintFormatSource.sheetName === activeSheetName) {
+    const el = document.querySelector(`[data-cell-id="${paintFormatSource.cellId}"]`);
+    if (el) el.classList.remove('paint-format-source');
+  }
   paintFormatStyle = null;
+  paintFormatSource = null;
   if (toolbarPaintFormatBtn) toolbarPaintFormatBtn.classList.remove('bg-surface-variant');
   document.body.classList.remove('paint-format-mode');
 };
@@ -6858,6 +6885,8 @@ if (toolbarPaintFormatBtn) {
     delete style.link;
     delete style.merge;
     paintFormatStyle = style;
+    paintFormatSource = { cellId: activeCellId, sheetName: activeSheetName };
+    refreshPaintFormatSourceOutline();
     toolbarPaintFormatBtn.classList.add('bg-surface-variant');
     document.body.classList.add('paint-format-mode');
   });

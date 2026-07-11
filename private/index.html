@@ -502,9 +502,13 @@
            leaves the 8px dot — same pattern as the resize drags above. */
         body.fill-dragging, body.fill-dragging * { cursor: crosshair !important; }
         body.fill-dragging { user-select: none; }
-        /* Armed format painter ("Apply format" roller): the grid advertises
-           that the next click will paint the copied format onto the cell. */
-        body.paint-format-mode #grid-root .grid-cell { cursor: cell; }
+        /* Armed format painter ("Apply format" roller): the source cell whose
+           format was copied wears a dashed outline until the paint lands or is
+           cancelled. The pointer stays the normal arrow while picking targets.
+           Inset far enough (-4px) to stay visible inside the solid active-cell
+           border, which covers the cell's outer 2px ring while the source is
+           still the active cell (always true at the moment of arming). */
+        .grid-cell.paint-format-source { outline: 2px dashed #1a73e8; outline-offset: -4px; }
         /* Find/Replace Tailwind custom styles */
         /* Secondary button styling for less prominent actions */
         .btn-secondary {
