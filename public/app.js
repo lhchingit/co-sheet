@@ -2537,7 +2537,9 @@ const renderSpreadsheetGrid = () => {
     // unhide arrows — those live on the visible neighbours.
     const colIsHidden = hiddenColLetters.has(colLetter);
     const colHeader = document.createElement('div');
-    colHeader.className = 'grid-header sticky top-0 z-20 cursor-pointer';
+    // No cursor-pointer: headers keep the arrow cursor like Google Sheets even
+    // though clicking selects the column (the menu button keeps its own finger).
+    colHeader.className = 'grid-header sticky top-0 z-20';
     if (colIsHidden) colHeader.classList.add('col-hidden');
     colHeader.innerText = colLetter;
     // With explicit placement on, pin each header to its column/header track.
@@ -2685,7 +2687,8 @@ const renderSpreadsheetGrid = () => {
     // Row Header
     const rowNum = r;
     const rowHeader = document.createElement('div');
-    rowHeader.className = 'grid-header sticky left-0 z-20 cursor-pointer';
+    // No cursor-pointer: same arrow-cursor rule as the column headers above.
+    rowHeader.className = 'grid-header sticky left-0 z-20';
     rowHeader.innerText = r;
     // Store row identifier for selection highlighting
     rowHeader.setAttribute('data-row-id', r);
