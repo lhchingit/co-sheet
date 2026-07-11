@@ -241,6 +241,11 @@ let selectionEndCellId = null; // End cell of range selection
 // per-cell operations (formatting, clearing) cover them. Rectangle-shaped
 // operations (copy/cut/merge/borders) pass activeRangeOnly and ignore them.
 let extraSelectionRanges = [];
+// Header drag-selection: 'col' or 'row' while the left button is held down on
+// a column/row header, null otherwise. Sweeping over sibling headers of the
+// same kind extends the selection to span every column/row covered (the
+// window mouseup handler ends the drag).
+let headerDragType = null;
 // Fill-handle drag: dragging the dot at the selection's bottom-right corner
 // extends the selection from its original bounds along one axis only (the
 // dominant drag direction), like Google Sheets' fill handle.
@@ -2621,11 +2626,13 @@ const renderSpreadsheetGrid = () => {
     // the selection colour, the active anchor is the top cell, and the header
     // is highlighted in solid blue. Shift+click selects the whole span of
     // columns from the anchor to this one; Ctrl/Cmd+click keeps the current
-    // selection and adds this column to it.
+    // selection and adds this column to it. Holding the button and dragging
+    // across other column headers selects the whole swept span.
     colHeader.addEventListener('mousedown', (e) => {
       if (isHistoryMode) return;
       if (e.button !== 0) return;
       e.preventDefault();
+      headerDragType = 'col';
       if (e.shiftKey && (selectionStartCellId || activeCellId)) {
         extendSelectionToColumn(colLetter);
         return;
@@ -2639,6 +2646,10 @@ const renderSpreadsheetGrid = () => {
         extraSelectionRanges = [];
       }
       selectColumn(colLetter);
+    });
+    colHeader.addEventListener('mouseover', () => {
+      if (headerDragType !== 'col') return;
+      extendSelectionToColumn(colLetter);
     });
 
     if (!colIsHidden) {
@@ -2784,11 +2795,13 @@ const renderSpreadsheetGrid = () => {
     // selection colour, the active anchor is the first cell, and the header is
     // highlighted in solid blue (mirrors the column-header click). Shift+click
     // selects the whole span of rows from the anchor to this one; Ctrl/Cmd+
-    // click keeps the current selection and adds this row to it.
+    // click keeps the current selection and adds this row to it. Holding the
+    // button and dragging across other row headers selects the whole swept span.
     rowHeader.addEventListener('mousedown', (e) => {
       if (isHistoryMode) return;
       if (e.button !== 0) return;
       e.preventDefault();
+      headerDragType = 'row';
       if (e.shiftKey && (selectionStartCellId || activeCellId)) {
         extendSelectionToRow(rowNum);
         return;
@@ -2802,6 +2815,10 @@ const renderSpreadsheetGrid = () => {
         extraSelectionRanges = [];
       }
       selectRow(rowNum);
+    });
+    rowHeader.addEventListener('mouseover', () => {
+      if (headerDragType !== 'row') return;
+      extendSelectionToRow(rowNum);
     });
 
     // Drag handle on the row's bottom boundary (mirrors the column handle).
@@ -8522,6 +8539,7 @@ if (userMenuMount && window.CoSheet && window.CoSheet.userMenu) {
 window.addEventListener('mouseup', () => {
   const endedCellSelection = isSelecting;
   isSelecting = false;
+  headerDragType = null; // releasing the button ends a header drag-selection
   if (isFillDragging) {
     applyFillDrag(); // write the base range's cells into the dragged extension
     isFillDragging = false;
