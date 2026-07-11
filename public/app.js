@@ -235,6 +235,12 @@ let isColumnSelection = false; // Whether the current selection is a full-column
 let isRowSelection = false; // Whether the current selection is a full-row header click
 let selectionStartCellId = null; // Start cell of range selection
 let selectionEndCellId = null; // End cell of range selection
+// Extra ranges added by Ctrl/Cmd+clicking row/column headers, each {startId,
+// endId}. The start/end pair above stays the ACTIVE range (anchor, overlay,
+// name box); these only add highlight and join getSelectedCellIds() so
+// per-cell operations (formatting, clearing) cover them. Rectangle-shaped
+// operations (copy/cut/merge/borders) pass activeRangeOnly and ignore them.
+let extraSelectionRanges = [];
 // Fill-handle drag: dragging the dot at the selection's bottom-right corner
 // extends the selection from its original bounds along one axis only (the
 // dominant drag direction), like Google Sheets' fill handle.
@@ -1021,6 +1027,7 @@ const clearRangeSelection = () => {
   selectionEndCellId = null;
   isColumnSelection = false;
   isRowSelection = false;
+  extraSelectionRanges = [];
   const overlay = document.getElementById('selection-range-overlay');
   if (overlay) overlay.remove();
   clearSelectionHighlights();
@@ -1097,30 +1104,56 @@ const expandRangeForMerges = (minRow, maxRow, minCol, maxCol) => {
 };
 
 /**
- * Helper to get all cell IDs within the currently selected range. The raw range
- * is expanded to fully include any merged cells it touches, so an operation on a
- * selection that clips a merge still covers the whole merged block.
- * @returns {string[]} List of cell IDs.
+ * Normalized, merge-expanded bounds of a {startId, endId} range, or null when
+ * either id fails to parse.
  */
-const getSelectedCellIds = () => {
-  const baseId = selectionStartCellId || activeCellId;
-  if (!baseId) return [];
-  const endId = selectionEndCellId || selectionStartCellId || baseId;
-  const start = parseCellCoord(baseId);
+const rangeBounds = (startId, endId) => {
+  const start = parseCellCoord(startId);
   const end = parseCellCoord(endId);
-  if (!start || !end) return activeCellId ? [activeCellId] : [];
-
+  if (!start || !end) return null;
   let minCol = Math.min(start.colIndex, end.colIndex);
   let maxCol = Math.max(start.colIndex, end.colIndex);
   let minRow = Math.min(start.row, end.row);
   let maxRow = Math.max(start.row, end.row);
   ({ minRow, maxRow, minCol, maxCol } = expandRangeForMerges(minRow, maxRow, minCol, maxCol));
+  return { minRow, maxRow, minCol, maxCol };
+};
+
+/**
+ * Helper to get all cell IDs within the current selection. The raw range is
+ * expanded to fully include any merged cells it touches, so an operation on a
+ * selection that clips a merge still covers the whole merged block. Extra
+ * header ranges (Ctrl+click) are included, deduplicated, unless the caller
+ * needs a single rectangle and passes activeRangeOnly (copy/cut/merge/borders,
+ * whose offset or perimeter math is only defined on one rectangle).
+ * @param {{activeRangeOnly?: boolean}} [opts]
+ * @returns {string[]} List of cell IDs.
+ */
+const getSelectedCellIds = ({ activeRangeOnly = false } = {}) => {
+  const baseId = selectionStartCellId || activeCellId;
+  if (!baseId) return [];
+  const bounds = rangeBounds(baseId, selectionEndCellId || selectionStartCellId || baseId);
+  if (!bounds) return activeCellId ? [activeCellId] : [];
 
   const cellIds = [];
-  for (let c = minCol; c <= maxCol; c++) {
+  for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
     const colLetter = getColLetter(c);
-    for (let r = minRow; r <= maxRow; r++) {
+    for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
       cellIds.push(`${colLetter}${r}`);
+    }
+  }
+  if (activeRangeOnly || !extraSelectionRanges.length) return cellIds;
+
+  const seen = new Set(cellIds);
+  for (const range of extraSelectionRanges) {
+    const b = rangeBounds(range.startId, range.endId);
+    if (!b) continue;
+    for (let c = b.minCol; c <= b.maxCol; c++) {
+      const colLetter = getColLetter(c);
+      for (let r = b.minRow; r <= b.maxRow; r++) {
+        const id = `${colLetter}${r}`;
+        if (!seen.has(id)) { seen.add(id); cellIds.push(id); }
+      }
     }
   }
   return cellIds;
@@ -1220,6 +1253,39 @@ const updateRangeSelectionUI = () => {
     }
   }
 
+  // Paint the extra (Ctrl+click) header ranges: same cell fill and header
+  // geometry rules as the active range, but no anchor border and no overlay —
+  // those stay on the active range. A cell shared with the active range just
+  // re-adds the same classes.
+  for (const range of extraSelectionRanges) {
+    const b = rangeBounds(range.startId, range.endId);
+    if (!b) continue;
+    const bSpansAllRows = b.minRow === 1 && b.maxRow === TOTAL_ROWS;
+    const bSpansAllCols = b.minCol === 0 && b.maxCol === getColCount() - 1;
+    for (let c = b.minCol; c <= b.maxCol; c++) {
+      const colLetter = getColLetter(c);
+      const extraColHeader = getColHeaderEl(colLetter);
+      if (extraColHeader) {
+        extraColHeader.classList.add(bSpansAllRows ? 'header-selected' : 'active-header');
+        highlightedEls.push(extraColHeader);
+      }
+      for (let r = b.minRow; r <= b.maxRow; r++) {
+        if (c === b.minCol) {
+          const extraRowHeader = getRowHeaderEl(r);
+          if (extraRowHeader) {
+            extraRowHeader.classList.add(bSpansAllCols ? 'header-selected' : 'active-header');
+            highlightedEls.push(extraRowHeader);
+          }
+        }
+        const cellEl = getCellEl(`${colLetter}${r}`);
+        if (cellEl) {
+          cellEl.classList.add('grid-cell-selected');
+          highlightedEls.push(cellEl);
+        }
+      }
+    }
+  }
+
   // Draw selection-range-overlay
   let overlay = document.getElementById('selection-range-overlay');
   if (!overlay) {
@@ -1299,7 +1365,9 @@ const writeSystemClipboard = (text) => {
  * Copies values, formulas, and styles of the currently selected range of cells.
  */
 const copySelectedCells = () => {
-  const cellIds = getSelectedCellIds();
+  // Offset math needs one rectangle; a Ctrl+click multi-selection copies its
+  // active range only.
+  const cellIds = getSelectedCellIds({ activeRangeOnly: true });
   if (cellIds.length === 0) return;
 
   const coords = cellIds.map(id => parseCellCoord(id)).filter(c => c !== null);
@@ -1330,7 +1398,8 @@ const copySelectedCells = () => {
  * Copies the current selection and clears the source cells.
  */
 const cutSelectedCells = () => {
-  const cellIds = getSelectedCellIds();
+  // Like copy: cut works on the active rectangle only.
+  const cellIds = getSelectedCellIds({ activeRangeOnly: true });
   if (cellIds.length === 0) return;
 
   // First copy them
@@ -2269,6 +2338,7 @@ const onGridCellMouseDown = (e) => {
   isSelecting = true;
   isColumnSelection = false; // a cell click is never a full-column/row selection
   isRowSelection = false;
+  extraSelectionRanges = [];
   selectionStartCellId = cellId;
   selectionEndCellId = cellId;
   handleCellSelect(cellId, cellEl);
@@ -2549,11 +2619,25 @@ const renderSpreadsheetGrid = () => {
     gridColHeaderIndex.set(colLetter, colHeader);
     // Clicking a column header selects the entire column: the cells fill with
     // the selection colour, the active anchor is the top cell, and the header
-    // is highlighted in solid blue.
+    // is highlighted in solid blue. Shift+click selects the whole span of
+    // columns from the anchor to this one; Ctrl/Cmd+click keeps the current
+    // selection and adds this column to it.
     colHeader.addEventListener('mousedown', (e) => {
       if (isHistoryMode) return;
       if (e.button !== 0) return;
       e.preventDefault();
+      if (e.shiftKey && (selectionStartCellId || activeCellId)) {
+        extendSelectionToColumn(colLetter);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && selectionStartCellId) {
+        extraSelectionRanges.push({
+          startId: selectionStartCellId,
+          endId: selectionEndCellId || selectionStartCellId,
+        });
+      } else {
+        extraSelectionRanges = [];
+      }
       selectColumn(colLetter);
     });
 
@@ -2581,6 +2665,7 @@ const renderSpreadsheetGrid = () => {
         e.preventDefault();
         e.stopPropagation();
         if (isHistoryMode) return;
+        extraSelectionRanges = []; // the menu acts on this column alone
         selectColumn(colLetter);
         const r = menuBtn.getBoundingClientRect();
         showColumnMenu(colLetter, r.left, r.bottom);
@@ -2697,11 +2782,25 @@ const renderSpreadsheetGrid = () => {
     if (useExplicitPlacement) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
     // Clicking a row header selects the entire row: the cells fill with the
     // selection colour, the active anchor is the first cell, and the header is
-    // highlighted in solid blue (mirrors the column-header click).
+    // highlighted in solid blue (mirrors the column-header click). Shift+click
+    // selects the whole span of rows from the anchor to this one; Ctrl/Cmd+
+    // click keeps the current selection and adds this row to it.
     rowHeader.addEventListener('mousedown', (e) => {
       if (isHistoryMode) return;
       if (e.button !== 0) return;
       e.preventDefault();
+      if (e.shiftKey && (selectionStartCellId || activeCellId)) {
+        extendSelectionToRow(rowNum);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && selectionStartCellId) {
+        extraSelectionRanges.push({
+          startId: selectionStartCellId,
+          endId: selectionEndCellId || selectionStartCellId,
+        });
+      } else {
+        extraSelectionRanges = [];
+      }
       selectRow(rowNum);
     });
 
@@ -3270,6 +3369,7 @@ const selectCellBelow = (cellId) => {
   // matching what a plain click on the cell would do.
   isColumnSelection = false;
   isRowSelection = false;
+  extraSelectionRanges = [];
   selectionStartCellId = nextCellId;
   selectionEndCellId = nextCellId;
   // The target may be outside the current window (off-DOM); handleCellSelect works
@@ -3311,6 +3411,40 @@ const selectRow = (rowNum) => {
   selectionEndCellId = `${getColLetter(getColCount() - 1)}${rowNum}`;
   const firstCellEl = document.querySelector(`[data-cell-id="A${rowNum}"]`);
   handleCellSelect(`A${rowNum}`, firstCellEl);
+};
+
+/**
+ * Shift+click on a column header: selects the whole span of columns between
+ * the current anchor's column and the clicked one (e.g. A then Shift+C → A:C),
+ * keeping the anchor. Falls back to a plain column selection with no anchor.
+ * @param {string} colLetter - The clicked column letter.
+ */
+const extendSelectionToColumn = (colLetter) => {
+  if (isHistoryMode) return;
+  const anchor = parseCellCoord(selectionStartCellId || activeCellId);
+  if (!anchor) { selectColumn(colLetter); return; }
+  isColumnSelection = true;
+  isRowSelection = false;
+  selectionEndCellId = `${colLetter}${TOTAL_ROWS}`;
+  const anchorTopId = `${anchor.colLetter}1`;
+  handleCellSelect(anchorTopId, document.querySelector(`[data-cell-id="${anchorTopId}"]`));
+};
+
+/**
+ * Shift+click on a row header: selects the whole span of rows between the
+ * current anchor's row and the clicked one (e.g. 2 then Shift+4 → 2:4),
+ * keeping the anchor. Falls back to a plain row selection with no anchor.
+ * @param {number} rowNum - The clicked 1-based row number.
+ */
+const extendSelectionToRow = (rowNum) => {
+  if (isHistoryMode) return;
+  const anchor = parseCellCoord(selectionStartCellId || activeCellId);
+  if (!anchor) { selectRow(rowNum); return; }
+  isRowSelection = true;
+  isColumnSelection = false;
+  selectionEndCellId = `${getColLetter(getColCount() - 1)}${rowNum}`;
+  const anchorFirstId = `A${anchor.row}`;
+  handleCellSelect(anchorFirstId, document.querySelector(`[data-cell-id="${anchorFirstId}"]`));
 };
 
 /**
@@ -4529,7 +4663,8 @@ const commitMergeMutation = (ids, mutate) => {
  */
 const mergeSelectedCells = (mode) => {
   if (!canEditWorkbook || isHistoryMode) return;
-  const ids = getSelectedCellIds();
+  // Merging is defined on one rectangle; ignore Ctrl+click extra ranges.
+  const ids = getSelectedCellIds({ activeRangeOnly: true });
   const coords = ids.map(parseCellCoord).filter(Boolean);
   if (coords.length < 2) return;
   const minRow = Math.min(...coords.map(c => c.row));
@@ -4569,7 +4704,7 @@ const mergeSelectedCells = (mode) => {
 /** Removes any merges intersecting the selection (re-splits them into cells). */
 const unmergeSelectedCells = () => {
   if (!canEditWorkbook || isHistoryMode) return;
-  const ids = getSelectedCellIds();
+  const ids = getSelectedCellIds({ activeRangeOnly: true });
   if (!ids.length) return;
   const hasAny = ids.some(id => styleHasMerge(localCells[id] && localCells[id].style));
   if (!hasAny) return;
@@ -5021,7 +5156,9 @@ const applyCellBorders = (cellEl, style, cellId) => {
  * @param {('all'|'inner'|'horizontal'|'vertical'|'outer'|'left'|'top'|'right'|'bottom'|'clear')} mode
  */
 const applyBordersToSelection = (mode) => {
-  const ids = getSelectedCellIds();
+  // Perimeter/interior edges are defined against one rectangle's bounds;
+  // ignore Ctrl+click extra ranges.
+  const ids = getSelectedCellIds({ activeRangeOnly: true });
   if (!ids.length) return;
 
   let minCol = Infinity, maxCol = -Infinity, minRow = Infinity, maxRow = -Infinity;
@@ -7679,9 +7816,11 @@ document.addEventListener('keydown', (e) => {
     selectionEndCellId = allSelected ? activeCellId : allEnd;
     // Whichever way it toggles, this is a plain range selection, not a
     // column/row-header one — reset the flags so the name box reads A1:Z1000
-    // (or the bare cell), not A:Z.
+    // (or the bare cell), not A:Z. It also covers everything, so any extra
+    // Ctrl+click header ranges are redundant.
     isColumnSelection = false;
     isRowSelection = false;
+    extraSelectionRanges = [];
     updateRangeSelectionUI();
     return;
   }
@@ -8237,6 +8376,7 @@ const switchSheet = (sheetName) => {
   selectionEndCellId = null;
   isColumnSelection = false;
   isRowSelection = false;
+  extraSelectionRanges = [];
 
   activeSheetName = sheetName;
   saveActiveSheetPref(sheetName); // remember across reloads (client-side)
@@ -8969,7 +9109,7 @@ const setMenuEnabled = (el, on) => {
 const updateMergeMenuState = () => {
   const group = document.getElementById('fmt-merge-group');
   if (!group) return;
-  const coords = getSelectedCellIds().map(parseCellCoord).filter(Boolean);
+  const coords = getSelectedCellIds({ activeRangeOnly: true }).map(parseCellCoord).filter(Boolean);
   let rows = 0, cols = 0;
   if (coords.length) {
     const rs = coords.map(c => c.row), cs = coords.map(c => c.colIndex);
