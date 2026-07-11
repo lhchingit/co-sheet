@@ -152,8 +152,13 @@ function createSandbox() {
   };
   const painterArmed = () =>
     body.classList.contains('paint-format-mode') && paintBtn.classList.contains('bg-surface-variant');
+  /** Whether the given cell currently wears the dashed source outline. */
+  const sourceOutlined = (cellId) => {
+    const el = cellById.get(cellId);
+    return !!el && el.classList.contains('paint-format-source');
+  };
 
-  return { sandbox, cellById, paintBtn, body, fire, fireWindow, fireDocument, clickPaintButton, clickCell, painterArmed };
+  return { sandbox, cellById, paintBtn, body, fire, fireWindow, fireDocument, clickPaintButton, clickCell, painterArmed, sourceOutlined };
 }
 
 /** Renders a sheet with the given cells and returns the sandbox helpers. */
@@ -175,13 +180,15 @@ test('clicking Apply format arms the painter and the next cell click receives th
     A1: { formula: '', value: 'src', style: { bold: true, textColor: '#ff0000', fontSize: 14 } },
     B1: { formula: '', value: 'dst', style: {} },
   });
-  const { clickCell, clickPaintButton, fireWindow, painterArmed } = ctx;
+  const { clickCell, clickPaintButton, fireWindow, painterArmed, sourceOutlined } = ctx;
 
   clickCell('A1'); // the source becomes the active cell
   assert.strictEqual(painterArmed(), false, 'the painter must start idle');
+  assert.strictEqual(sourceOutlined('A1'), false, 'no dashed outline while idle');
 
   clickPaintButton();
   assert.strictEqual(painterArmed(), true, 'clicking the roller must arm the painter (pressed button + mode class)');
+  assert.strictEqual(sourceOutlined('A1'), true, 'the source cell must wear the dashed outline while armed');
 
   // A mouseup that doesn't finish a grid selection (e.g. on the toolbar) must
   // NOT fire the painter.
@@ -192,6 +199,7 @@ test('clicking Apply format arms the painter and the next cell click receives th
   assert.deepStrictEqual(cellStyle(ctx, 'B1'), { bold: true, textColor: '#ff0000', fontSize: 14 },
     'the target must receive a copy of the source style');
   assert.strictEqual(painterArmed(), false, 'the painter must disarm after painting once');
+  assert.strictEqual(sourceOutlined('A1'), false, 'the dashed outline must leave the source once painted');
 
   // The copy must be deep: mutating the target may not bleed into the source.
   cellStyle(ctx, 'B1').bold = false;
@@ -255,12 +263,13 @@ test('a second click on the button and Escape both cancel without painting', () 
   const ctx = setUpGrid({
     A1: { formula: '', value: '', style: { bold: true } },
   });
-  const { clickCell, clickPaintButton, fireDocument, painterArmed } = ctx;
+  const { clickCell, clickPaintButton, fireDocument, painterArmed, sourceOutlined } = ctx;
 
   clickCell('A1');
   clickPaintButton();
   clickPaintButton(); // toggle off
   assert.strictEqual(painterArmed(), false, 'a second click must disarm the painter');
+  assert.strictEqual(sourceOutlined('A1'), false, 'cancelling must clear the dashed source outline');
   clickCell('B1');
   assert.ok(!cellStyle(ctx, 'B1') || Object.keys(cellStyle(ctx, 'B1')).length === 0,
     'no painting after cancel');
@@ -270,9 +279,27 @@ test('a second click on the button and Escape both cancel without painting', () 
   assert.strictEqual(painterArmed(), true);
   fireDocument('keydown', { key: 'Escape' });
   assert.strictEqual(painterArmed(), false, 'Escape must disarm the painter');
+  assert.strictEqual(sourceOutlined('A1'), false, 'Escape must clear the dashed source outline');
   clickCell('C1');
   assert.ok(!cellStyle(ctx, 'C1') || Object.keys(cellStyle(ctx, 'C1')).length === 0,
     'no painting after Escape');
+});
+
+test('the dashed source outline survives a full grid re-render', () => {
+  const ctx = setUpGrid({
+    A1: { formula: '', value: '', style: { bold: true } },
+  });
+  const { clickCell, clickPaintButton, sourceOutlined, sandbox } = ctx;
+
+  clickCell('A1');
+  clickPaintButton();
+  assert.strictEqual(sourceOutlined('A1'), true);
+
+  // A full rebuild (remote edit, resize, sheet ops…) replaces every cell
+  // element; the outline must be re-applied onto the fresh source cell.
+  sandbox.renderSpreadsheetGrid();
+  assert.strictEqual(sourceOutlined('A1'), true,
+    'the outline must be re-applied after renderSpreadsheetGrid rebuilds the DOM');
 });
 
 test('the toolbar button markup is enabled and localized in both bundled locales', async () => {
@@ -282,6 +309,13 @@ test('the toolbar button markup is enabled and localized in both bundled locales
   assert.ok(btn, 'private/index.html must contain the toolbar-paint-format button');
   assert.ok(!/\bdisabled\b/.test(btn[0]), 'the roller button must no longer be disabled');
   assert.ok(btn[0].includes('data-i18n-title="tip.paintFormat"'), 'the tooltip must go through i18n');
+
+  // The armed painter shows a dashed outline on the source cell, and must NOT
+  // change the pointer over target cells (it stays the normal arrow).
+  const outlineRule = /\.grid-cell\.paint-format-source\s*\{[^}]*dashed[^}]*\}/.exec(html);
+  assert.ok(outlineRule, 'the dashed source-cell outline rule must exist');
+  assert.ok(!/paint-format-mode[^{]*\{[^}]*cursor/.test(html),
+    'no paint-mode cursor override may remain — the pointer stays an arrow');
 
   const en = JSON.parse(readFileSync(new URL('../public/locales/en.json', import.meta.url), 'utf8'));
   const zh = JSON.parse(readFileSync(new URL('../public/locales/zh-TW.json', import.meta.url), 'utf8'));
