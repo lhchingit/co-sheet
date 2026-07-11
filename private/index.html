@@ -502,6 +502,9 @@
            leaves the 8px dot — same pattern as the resize drags above. */
         body.fill-dragging, body.fill-dragging * { cursor: crosshair !important; }
         body.fill-dragging { user-select: none; }
+        /* Armed format painter ("Apply format" roller): the grid advertises
+           that the next click will paint the copied format onto the cell. */
+        body.paint-format-mode #grid-root .grid-cell { cursor: cell; }
         /* Find/Replace Tailwind custom styles */
         /* Secondary button styling for less prominent actions */
         .btn-secondary {
@@ -1324,7 +1327,7 @@
 <button id="toolbar-undo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Undo (Ctrl+Z)" data-i18n-title="tip.undo"><span class="material-symbols-outlined">undo</span></button>
 <button id="toolbar-redo" class="p-1 hover:bg-surface-variant rounded transition-colors opacity-40 cursor-not-allowed" disabled title="Redo (Ctrl+Y)" data-i18n-title="tip.redo"><span class="material-symbols-outlined">redo</span></button>
 <button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">print</span></button>
-<button disabled class="p-1 rounded transition-colors opacity-40 cursor-not-allowed"><span class="material-symbols-outlined">imagesearch_roller</span></button>
+<button id="toolbar-paint-format" title="套用格式" data-i18n-title="tip.paintFormat" class="p-1 hover:bg-surface-variant rounded transition-colors"><span class="material-symbols-outlined">imagesearch_roller</span></button>
 <div class="w-px h-5 bg-outline-variant mx-1"></div>
   <!-- Zoom Selector Container -->
   <div class="relative inline-block">
