@@ -2742,6 +2742,10 @@ const resolveCachedWorkbook = (fileId) => {
   return workbooks.get(fileId) || null;
 };
 
+// Largest cell-edit-bulk a single message may carry. Mirrored by the client's
+// CELL_EDIT_BULK_MAX, which chunks longer bursts.
+const MAX_BULK_CELL_EDITS = 500;
+
 /**
  * Apply a state-changing op to `workbook` and return the client messages to emit.
  * This is the single source of truth for how each op mutates state, run identically
@@ -2764,6 +2768,33 @@ const applyStateOp = (workbook, type, payload) => {
     const result = cellService.writeCellValue(workbook, { cellId, formula, value, style, sheetName: sheet });
     if (result.ok) {
       out.push({ all: false, msg: { type: 'cell-update', payload: { cellId, formula, value, style, sheetName: result.sheet } } });
+    }
+  } else if (type === 'cell-edit-bulk') {
+    // One message for a whole bulk edit (a paste, a format applied over a
+    // selection). Each entry is validated exactly as a lone cell-edit is, and the
+    // whole batch produces ONE cell-update-bulk — so the caller persists once and
+    // fans out once instead of doing both per cell.
+    const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
+    // A client never exceeds its own chunk size; a hand-rolled message might, and
+    // WebSocket traffic is not covered by the HTTP rate limiters, so cap the work
+    // one message can ask for rather than trusting the sender. Rejected whole
+    // rather than clamped, so a client can never quietly lose half a paste.
+    if (cells.length > MAX_BULK_CELL_EDITS) {
+      wsLog.warn(`Rejected cell-edit-bulk of ${cells.length} cells (cap ${MAX_BULK_CELL_EDITS})`);
+      return out;
+    }
+    const updates = [];
+    for (const cell of cells) {
+      if (!cell || typeof cell !== 'object') continue;
+      const { cellId, formula, value, style } = cell;
+      const sheet = cell.sheetName || payload.sheetName || 'Sheet1';
+      const result = cellService.writeCellValue(workbook, { cellId, formula, value, style, sheetName: sheet });
+      // An invalid entry is skipped, not fatal: one bad cell must not discard the
+      // rest of a paste the user already sees applied locally.
+      if (result.ok) updates.push({ cellId, formula, value, style, sheetName: result.sheet });
+    }
+    if (updates.length) {
+      out.push({ all: false, msg: { type: 'cell-update-bulk', payload: { cells: updates } } });
     }
   } else if (type === 'add-sheet') {
     const result = sheetService.addSheet(workbook, payload);
@@ -3015,6 +3046,7 @@ wss.on('connection', async (ws, req) => {
   // write-permission gate, autosave bookkeeping, and cross-instance fan-out.
   const stateChangingTypes = [
     'cell-edit',
+    'cell-edit-bulk',
     'add-sheet',
     'delete-sheet',
     'copy-sheet',
