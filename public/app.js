@@ -625,11 +625,46 @@ function markSaving() {
   }, 700);
 }
 
-// Wrap socket.send to automatically inject sheetName in outgoing events. Applied
-// to each freshly (re)connected socket by connectSocket() so the behavior survives
-// reconnects.
+// Outgoing cell edits are batched here rather than at their ~29 call sites: a
+// bulk edit (a paste, a format applied over a selection) is written one cell at a
+// time, and each `cell-edit` used to cost the server a validate + whole-workbook
+// write + a fan-out to every peer, and each peer a message. Edits are collected
+// for the rest of the current task and flushed as one `cell-edit-bulk`, mirroring
+// the microtask coalescing scheduleRecalc / scheduleRowOverflow already use on the
+// receive side. A lone edit still goes out as a plain `cell-edit`, so the
+// interactive path and the single-cell wire format are unchanged.
+// Must not exceed the server's own cap (see MAX_BULK_CELL_EDITS in server.js).
+const CELL_EDIT_BULK_MAX = 500;
+let pendingCellEdits = [];
+let cellEditFlushScheduled = false;
+
+/**
+ * Send everything queued since the last flush. Called on the scheduled microtask,
+ * and eagerly before any other message goes out so a later op can never overtake
+ * the edits queued before it.
+ * @param {WebSocket} sock
+ * @param {(data: string) => any} rawSend - the socket's un-wrapped send.
+ */
+function flushCellEdits(sock, rawSend) {
+  cellEditFlushScheduled = false;
+  if (!pendingCellEdits.length) return;
+  const edits = pendingCellEdits;
+  pendingCellEdits = [];
+  if (!sock || sock.readyState !== WebSocket.OPEN) return; // dropped, as an unbatched send would be
+  for (let i = 0; i < edits.length; i += CELL_EDIT_BULK_MAX) {
+    const chunk = edits.slice(i, i + CELL_EDIT_BULK_MAX);
+    rawSend(JSON.stringify(chunk.length === 1
+      ? { type: 'cell-edit', payload: chunk[0] }
+      : { type: 'cell-edit-bulk', payload: { cells: chunk } }));
+  }
+}
+
+// Wrap socket.send to automatically inject sheetName in outgoing events, and to
+// batch cell edits (see above). Applied to each freshly (re)connected socket by
+// connectSocket() so the behavior survives reconnects.
 function applySendWrapper(sock) {
   const originalSend = sock.send;
+  const rawSend = (data) => originalSend.call(sock, data);
   sock.send = function(data) {
     try {
       const msg = JSON.parse(data);
@@ -640,13 +675,26 @@ function applySendWrapper(sock) {
       if (msg && (msg.type === 'cell-edit' || msg.type === 'cursor-move' || msg.type === 'resize') && msg.payload) {
         msg.payload.sheetName = activeSheetName;
       }
-      const result = originalSend.call(this, JSON.stringify(msg));
+      // Queue a cell edit; everything else flushes the queue first so ordering
+      // between an edit and a following op (a column insert, a resize) is kept.
+      if (msg && msg.type === 'cell-edit' && msg.payload) {
+        pendingCellEdits.push(msg.payload);
+        if (!cellEditFlushScheduled) {
+          cellEditFlushScheduled = true;
+          queueMicrotask(() => flushCellEdits(sock, rawSend));
+        }
+        if (this.readyState === WebSocket.OPEN) markSaving();
+        return;
+      }
+      flushCellEdits(sock, rawSend);
+      const result = rawSend(JSON.stringify(msg));
       // A successfully broadcast state-changing edit means a save is in flight.
       if (msg && WB_STATE_CHANGING_TYPES.includes(msg.type) && this.readyState === WebSocket.OPEN) {
         markSaving();
       }
       return result;
     } catch (e) {
+      flushCellEdits(sock, rawSend);
       return originalSend.call(this, data);
     }
   };
@@ -692,6 +740,46 @@ function applyWorkbookAccessUI() {
     badge.classList.add('hidden');
   }
 }
+
+/**
+ * Apply one peer cell update to local state and the grid. Shared by the
+ * single-cell `cell-update` message and by each entry of a `cell-update-bulk`,
+ * so a bulk edit lands exactly as the same sequence of single edits would.
+ * @param {{cellId: string, formula: string, value: string, style: object, sheetName?: string}} payload
+ */
+const applyRemoteCellUpdate = (payload) => {
+  const { cellId, formula, value, style, sheetName } = payload;
+  const sheet = sheetName || 'Sheet1';
+  const cellMap = ensureKey(localSheets, sheet, () => Object.create(null));
+  setKey(cellMap, cellId, { formula, value, style: style || {} });
+  
+  if (sheet === activeSheetName) {
+    // Propagate dependencies once per burst, not once per applied cell (see
+    // scheduleRecalc) — a bulk edit applies many cells in one go.
+    scheduleRecalc();
+    updateGridDOMCell(cellId, getCellValue(cellId), style);
+    // Borders are drawn neighbour-aware: every cell draws its own copy of each
+    // shared edge, resolved with pick() against the facing neighbour. A remote
+    // border edit thus changes what all FOUR neighbours should paint on their
+    // facing side, so refresh each so the coincident copies stay in sync.
+    const coord = parseCellCoord(cellId);
+    if (coord) {
+      const neighbourIds = [
+        coord.colIndex - 1 >= 0 ? `${getColLetter(coord.colIndex - 1)}${coord.row}` : null,
+        `${getColLetter(coord.colIndex + 1)}${coord.row}`,
+        coord.row - 1 >= 1 ? `${getColLetter(coord.colIndex)}${coord.row - 1}` : null,
+        `${getColLetter(coord.colIndex)}${coord.row + 1}`,
+      ];
+      neighbourIds.forEach((nId) => {
+        if (!nId) return;
+        const nStyle = localCells[nId] ? localCells[nId].style : null;
+        if (styleHasBorders(style) || styleHasBorders(nStyle)) {
+          updateGridDOMCell(nId, getCellValue(nId), nStyle || {});
+        }
+      });
+    }
+  }
+};
 
 /**
  * Handle incoming WebSocket messages from the server.
@@ -806,39 +894,14 @@ function handleSocketMessage(event) {
       }
     }
 
-    // Cell updates propagated from other peers
+    // Cell updates propagated from other peers. A bulk edit (a paste, a format
+    // applied across a selection) arrives as ONE cell-update-bulk instead of one
+    // message per cell; both land through the same per-cell application.
     if (type === 'cell-update') {
-      const { cellId, formula, value, style, sheetName } = payload;
-      const sheet = sheetName || 'Sheet1';
-      const cellMap = ensureKey(localSheets, sheet, () => Object.create(null));
-      setKey(cellMap, cellId, { formula, value, style: style || {} });
-      
-      if (sheet === activeSheetName) {
-        // Propagate dependencies once per burst, not once per message — a remote
-        // bulk edit echoes one cell-update per cell (see scheduleRecalc).
-        scheduleRecalc();
-        updateGridDOMCell(cellId, getCellValue(cellId), style);
-        // Borders are drawn neighbour-aware: every cell draws its own copy of each
-        // shared edge, resolved with pick() against the facing neighbour. A remote
-        // border edit thus changes what all FOUR neighbours should paint on their
-        // facing side, so refresh each so the coincident copies stay in sync.
-        const coord = parseCellCoord(cellId);
-        if (coord) {
-          const neighbourIds = [
-            coord.colIndex - 1 >= 0 ? `${getColLetter(coord.colIndex - 1)}${coord.row}` : null,
-            `${getColLetter(coord.colIndex + 1)}${coord.row}`,
-            coord.row - 1 >= 1 ? `${getColLetter(coord.colIndex)}${coord.row - 1}` : null,
-            `${getColLetter(coord.colIndex)}${coord.row + 1}`,
-          ];
-          neighbourIds.forEach((nId) => {
-            if (!nId) return;
-            const nStyle = localCells[nId] ? localCells[nId].style : null;
-            if (styleHasBorders(style) || styleHasBorders(nStyle)) {
-              updateGridDOMCell(nId, getCellValue(nId), nStyle || {});
-            }
-          });
-        }
-      }
+      applyRemoteCellUpdate(payload);
+    } else if (type === 'cell-update-bulk') {
+      const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
+      cells.forEach((c) => applyRemoteCellUpdate(c));
     }
 
     // Handle new sheet added broadcast
