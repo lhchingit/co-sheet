@@ -280,6 +280,12 @@ let fpOriginCell = null;        // cell being edited (commit target across sheet
 let fpHandoff = false;          // true while moving an inline edit to the formula bar
 let socket = null; // WebSocket connection
 let clipboardData = null; // Stores copied cell data offset details
+// True between a Ctrl+V keydown and the paste event it should produce. The
+// keydown handler deliberately lets the key through so the browser delivers the
+// system clipboard; this flag lets it detect the case where no paste event
+// arrives (a browser that only fires it for editable targets) and fall back to
+// the in-app buffer.
+let awaitingNativePaste = false;
 let frozenRows = 0; // Number of top rows frozen via View > Freeze (0 = none)
 let frozenCols = 0; // Number of left columns frozen via View > Freeze (0 = none)
 
@@ -1485,6 +1491,193 @@ const pasteSelectedCells = () => {
     }
   }
 };
+
+/**
+ * Parses clipboard text laid out as a table into a grid of strings. Excel,
+ * Google Sheets and friends all put the same TSV dialect on the clipboard:
+ * columns separated by tabs, rows by newlines, and any field containing a tab,
+ * newline or quote wrapped in double quotes with embedded quotes doubled.
+ * @param {string} text - Raw `text/plain` clipboard payload.
+ * @returns {Array<Array<string>>} Rows of column values (at least one row).
+ */
+const parseClipboardTable = (text) => {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch !== '"') { field += ch; continue; }
+      // A doubled quote inside a quoted field is a literal quote; a lone one
+      // closes the field.
+      if (text[i + 1] === '"') { field += '"'; i++; } else { quoted = false; }
+      continue;
+    }
+    // Quoting only opens at the start of a field; a quote anywhere else is data.
+    if (ch === '"' && field === '') { quoted = true; continue; }
+    if (ch === '\t') { row.push(field); field = ''; continue; }
+    if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && text[i + 1] === '\n') i++; // CRLF is one row break
+      row.push(field);
+      field = '';
+      rows.push(row);
+      row = [];
+      continue;
+    }
+    field += ch;
+  }
+  row.push(field);
+  rows.push(row);
+
+  // Excel terminates the block with a newline, which leaves a phantom empty row.
+  while (rows.length > 1 && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === '') {
+    rows.pop();
+  }
+  return rows;
+};
+
+/**
+ * Normalizes clipboard text for comparison against copiedCellsToText output:
+ * the OS clipboard hands back CRLF line breaks on Windows and often a trailing
+ * one, neither of which the in-app serialization emits.
+ * @param {string} text - Raw clipboard text.
+ * @returns {string} Text with LF line breaks and no trailing blank lines.
+ */
+const normalizeClipboardText = (text) => text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+
+/**
+ * Writes a grid of plain-text values into the sheet with the active cell as its
+ * top-left corner. Used for pastes originating outside co-sheet, which carry no
+ * formulas or styling — so each destination cell keeps the style it already had
+ * and the text is committed exactly as a typed entry would be.
+ * @param {Array<Array<string>>} rows - Rows of column values.
+ */
+const pasteTextGrid = (rows) => {
+  if (!canEditWorkbook || !activeCellId) return;
+
+  const target = parseCellCoord(activeCellId);
+  if (!target) return;
+
+  const historyChanges = [];
+  rows.forEach((cols, rowOffset) => {
+    cols.forEach((text, colOffset) => {
+      const newRow = target.row + rowOffset;
+      const newColIndex = target.colIndex + colOffset;
+      if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
+
+      const newCellId = `${getColLetter(newColIndex)}${newRow}`;
+      const before = localCells[newCellId] ? JSON.parse(JSON.stringify(localCells[newCellId])) : { formula: '', value: '', style: {} };
+      const cell = { formula: '', value: '', style: before.style ? JSON.parse(JSON.stringify(before.style)) : {} };
+      applyCellText(cell, text, newCellId);
+      localCells[newCellId] = cell;
+
+      historyChanges.push({ cellId: newCellId, before, after: JSON.parse(JSON.stringify(cell)) });
+
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: 'cell-edit',
+          payload: { cellId: newCellId, formula: cell.formula, value: cell.value, style: cell.style }
+        }));
+      }
+    });
+  });
+
+  if (historyChanges.length === 0) return;
+
+  recordHistoryAction({ type: 'multi', changes: historyChanges });
+  // A pasted formula may reference another cell in the same block, so evaluate
+  // the whole sheet once the block is in place rather than cell by cell.
+  recalculateSheet();
+  historyChanges.forEach(({ cellId }) => {
+    updateGridDOMCell(cellId, getCellValue(cellId), localCells[cellId].style);
+  });
+  // Pasted text can grow a row (wrapping, a taller font), so re-measure the
+  // selection overlay the same way an in-app paste does.
+  updateRangeSelectionUI();
+
+  const formulaBar = document.getElementById('formula-bar-input');
+  if (formulaBar && localCells[activeCellId]) {
+    formulaBar.value = localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value;
+  }
+};
+
+/**
+ * Inserts plain text at the caret of the focused contenteditable, replacing any
+ * selected text. Used instead of the browser's own paste so a cell being edited
+ * receives the clipboard's text flavour rather than Excel's `text/html` one,
+ * which would drop an entire <table> of markup into the cell.
+ * @param {string} text - Text to insert.
+ */
+const insertPlainTextAtCaret = (text) => {
+  try {
+    // execCommand is deprecated but remains the only insertion browsers fold
+    // into the contenteditable's own undo stack and input events.
+    if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, text)) return;
+  } catch { /* execCommand unavailable; fall through to the manual insertion */ }
+
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  // execCommand would have fired this for us; the cell editor listens on it to
+  // drive the formula autocomplete.
+  const el = document.activeElement;
+  if (el && typeof el.oninput === 'function') el.oninput();
+};
+
+/**
+ * Handles a native paste — the only path that can see what another application
+ * put on the system clipboard. Routes it three ways: an in-app copy replays
+ * through the internal buffer (keeping formulas and styles), a cell being
+ * edited takes the text at its caret, and anything else lands on the grid as a
+ * block of cells starting at the active cell.
+ * @param {ClipboardEvent} e - The native paste event.
+ */
+const handleDocumentPaste = (e) => {
+  // Whatever happens below, the browser did deliver a paste event, so the
+  // Ctrl+V fallback in the keydown handler must stand down.
+  awaitingNativePaste = false;
+
+  if (isHistoryMode || !canEditWorkbook) return;
+
+  const clip = e.clipboardData;
+  const text = clip && typeof clip.getData === 'function' ? clip.getData('text/plain') : '';
+
+  const activeEl = document.activeElement;
+  if (activeEl && typeof activeEl.getAttribute === 'function' && activeEl.getAttribute('contenteditable') === 'true') {
+    if (!text) return; // nothing textual to insert; leave the editor alone
+    e.preventDefault();
+    insertPlainTextAtCaret(text);
+    return;
+  }
+  // Inputs and textareas (formula bar, dialogs) already paste text/plain
+  // natively, which is exactly what they want.
+  if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
+
+  if (!activeCellId) return;
+  e.preventDefault();
+
+  // No text flavour on the clipboard (an image, or a mirror-out that failed):
+  // keep pasting the in-app buffer, exactly as before this handler existed.
+  // Same when the payload is still the text an in-app copy mirrored out — the
+  // internal buffer carries the formulas and styling that text has flattened.
+  if (!text || (clipboardData && copiedCellsToText(clipboardData.copiedCells) === normalizeClipboardText(text))) {
+    pasteSelectedCells();
+    return;
+  }
+
+  pasteTextGrid(parseClipboardTable(text));
+};
+
+document.addEventListener('paste', handleDocumentPaste);
 
 // Find & Replace lives in find-replace.js (window.CoSheet.findReplace); it is
 // wired to the core via window.CoSheet.app near the bottom of this file.
@@ -3563,18 +3756,16 @@ const handleCellInlineEdit = (cellId, cellEl) => {
 };
 
 /**
- * Processes cell updates from formula input or inline changes,
- * recalculates formulas, propagates locally, and syncs via WS.
- * @param {string} cellId - The target cell identifier.
+ * Resolves committed text into a cell's formula/value pair, mutating the cell in
+ * place: a leading "=" makes it a formula (evaluated, inheriting its references'
+ * decimal places), anything else a literal value. Shared by single-cell commits
+ * and block pastes so both interpret typed text identically.
+ * @param {Object} cell - Cell object to update ({formula, value, style}).
  * @param {string} text - Entered value or formula.
+ * @param {string} cellId - The target cell identifier (formula evaluation context).
+ * @returns {Object} The same cell object, updated.
  */
-const saveCellUpdate = (cellId, text) => {
-  if (!canEditWorkbook) return; // read-only: ignore any cell mutation
-  // Capture cell state before update for undo/redo history
-  const before = localCells[cellId] ? JSON.parse(JSON.stringify(localCells[cellId])) : { formula: '', value: '', style: {} };
-
-  const cell = localCells[cellId] || { formula: '', value: '', style: {} };
-  
+const applyCellText = (cell, text, cellId) => {
   if (text.startsWith('=')) {
     cell.formula = text;
     cell.value = evaluateFormula(text, 0, cellId);
@@ -3594,6 +3785,21 @@ const saveCellUpdate = (cellId, text) => {
     const isPlainText = cell.style && cell.style.numberFormat === 'text';
     cell.value = isPlainText ? text : stripLeadingZeros(text);
   }
+  return cell;
+};
+
+/**
+ * Processes cell updates from formula input or inline changes,
+ * recalculates formulas, propagates locally, and syncs via WS.
+ * @param {string} cellId - The target cell identifier.
+ * @param {string} text - Entered value or formula.
+ */
+const saveCellUpdate = (cellId, text) => {
+  if (!canEditWorkbook) return; // read-only: ignore any cell mutation
+  // Capture cell state before update for undo/redo history
+  const before = localCells[cellId] ? JSON.parse(JSON.stringify(localCells[cellId])) : { formula: '', value: '', style: {} };
+
+  const cell = applyCellText(localCells[cellId] || { formula: '', value: '', style: {} }, text, cellId);
 
   localCells[cellId] = cell;
 
@@ -7885,8 +8091,18 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     if (e.key.toLowerCase() === 'v') {
-      e.preventDefault();
-      pasteSelectedCells();
+      // Deliberately not preventDefault()'d: cancelling the key also cancels the
+      // browser's paste event, which is the only way to see what an external app
+      // (Excel, another sheet) put on the system clipboard. handleDocumentPaste
+      // does the work and clears the flag below. The fallback covers browsers
+      // that only deliver paste events to editable targets — there the in-app
+      // buffer still pastes, as it always did.
+      awaitingNativePaste = true;
+      setTimeout(() => {
+        if (!awaitingNativePaste) return;
+        awaitingNativePaste = false;
+        pasteSelectedCells();
+      }, 0);
       return;
     }
     if (e.key.toLowerCase() === 'b') {
