@@ -8,6 +8,7 @@ import 'dotenv/config';
  */
 
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -407,6 +408,14 @@ const signJwt = (payload) => {
   const signature = sign.sign(privateKey, 'base64url');
   return `${base64Header}.${base64Payload}.${signature}`;
 };
+
+// Compress every text response (the client bundle, the editor HTML, JSON APIs).
+// Registered before the routes so it wraps all of them. Nothing sits in front of
+// this process in the shipped compose file, so without it `public/` goes out as
+// raw bytes: app.js alone is 506 KB uncompressed against 129 KB gzipped, and the
+// whole JS+CSS set 861 KB against 216 KB. `compression` skips responses that are
+// already compressed or too small to be worth it.
+app.use(compression());
 
 // Middleware to parse incoming request bodies as JSON.
 app.use(express.json());
@@ -980,7 +989,7 @@ const ASSET_VERSION = (() => {
 
 // Serve the login page.
 app.get('/login', (req, res) => {
-  res.type('html').send(loginPageHtml);
+  res.set('Cache-Control', 'no-cache').type('html').send(loginPageHtml);
 });
 
 // Redirect direct requests for index.html to the home (drive) route, so they are subject to auth.
@@ -992,6 +1001,7 @@ app.get('/index.html', (req, res) => {
 // private directory. This is the first screen users see after signing in.
 // Protected: unauthenticated users are redirected to /login.
 app.get('/', ensureAuthenticated, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'private', 'drive.html'));
 });
 
@@ -1023,7 +1033,9 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
     const html = template
       .split('{{FILE_NAME}}').join(escapeHtml(name))
       .split('{{ASSET_VERSION}}').join(ASSET_VERSION);
-    res.type('html').send(html);
+    // Always revalidated, so a deploy's new asset hashes always reach the browser.
+    // That is what lets the assets those hashes name be cached indefinitely.
+    res.set('Cache-Control', 'no-cache').type('html').send(html);
   } catch (err) {
     logger.error({ err: err }, 'Error serving editor');
     res.sendFile(path.join(__dirname, 'private', 'index.html'));
@@ -2433,12 +2445,27 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
   }
 });
 
+// Static client assets. Caching is decided per request by whether the URL carries
+// the content-hash version query (`?v=<hash>`, see ASSET_VERSION):
+//
+//   with ?v=   the hash IS the cache key — any change to any file in public/ mints
+//              a new one, and the HTML naming it is itself revalidated — so the
+//              response can be cached indefinitely and never revalidated. This is
+//              the editor's path: /sheet stamps all 13 of its modules, ~861 KB of
+//              JS+CSS that a returning user then re-fetches zero bytes of.
+//   without    nothing proves the URL is current (drive.html and login.html still
+//              reference their scripts unstamped), so the browser must revalidate.
+//              express.static's ETag/Last-Modified turn that into a 304 with no
+//              body — still far cheaper than the `no-store` this replaced, which
+//              re-sent every byte on every load even though the ?v= hash had
+//              already made that unnecessary.
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, _filePath) => {
-    // Disable caching to guarantee immediate client updates during testing/development.
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    const versioned = typeof res.req.query.v === 'string' && res.req.query.v !== '';
+    res.setHeader(
+      'Cache-Control',
+      versioned ? 'public, max-age=31536000, immutable' : 'no-cache'
+    );
   }
 }));
 
