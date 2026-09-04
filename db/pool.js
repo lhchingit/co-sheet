@@ -25,7 +25,13 @@ pg.types.setTypeParser(1114, (val) =>
 
 /** @type {{ query(text: string, params?: any[]): Promise<{ rows: any[], rowCount?: number }>, end(): Promise<void> }} */
 const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  // Stated rather than inherited. This is the ceiling on concurrent database work
+  // for the whole process, so it belongs in the code as a decision: a burst of
+  // workbook writes queues behind it, and everything else — sign-in, the drive
+  // listing — queues behind that. node-postgres' own default is 10; keeping that
+  // value here changes nothing today but makes the bound visible and tunable.
+  max: Number.parseInt(process.env.PG_POOL_MAX || '10', 10)
 });
 
 export { pool };

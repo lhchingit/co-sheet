@@ -41,6 +41,7 @@ import { isExternalOidcUserinfoSkipped } from './services/oidc-profile.js';
 import { createRealtimeBus, resolveRedisOptions, createRedisClient } from './services/realtime-bus.js';
 import { parseXlsx } from './services/xlsx-import.js';
 import { createRateLimiters } from './services/rate-limit.js';
+import { createWriteCoalescer } from './services/workbook-writer.js';
 import { logger, component } from './services/logger.js';
 import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware } from './services/metrics.js';
 
@@ -1521,35 +1522,6 @@ const sanitizeHiddenCols = (raw) => {
 // Initialize the in-memory sheetState to null, to be populated on boot.
 let sheetState = null;
 
-// State locks and write queue variables to prevent file write race conditions and corruption.
-let isSaving = false;
-let pendingSave = false;
-
-/**
- * Saves the in-memory spreadsheet cell state back to the PostgreSQL database.
- * This function persists updates asynchronously and atomically to prevent data corruption.
- */
-const saveState = async () => {
-  // If a save operation is already in progress, queue another one to run next.
-  if (isSaving) {
-    pendingSave = true;
-    return;
-  }
-  isSaving = true;
-
-  try {
-    await workbookRepo.updateDefaultWorkbookState(JSON.stringify(sheetState));
-  } catch (err) {
-    logger.error({ err: err }, 'Failed to save state to PostgreSQL');
-  } finally {
-    isSaving = false;
-    if (pendingSave) {
-      pendingSave = false;
-      saveState();
-    }
-  }
-};
-
 // In-memory cache of non-default workbooks, keyed by file id. The 'default'
 // workbook always lives in the global `sheetState` binding (so existing
 // single-document behavior and tests are untouched).
@@ -1611,28 +1583,43 @@ const getWorkbook = async (fileId) => {
 };
 
 /**
- * Persist a non-default workbook's state to its own key in workbook_state.
- * The default workbook is persisted through saveState() instead.
- * @param {string} fileId
- * @param {Object} state
+ * Serialize and write a workbook's CURRENT state to its own key in
+ * workbook_state. Reads the live object at call time rather than taking a
+ * snapshot from the caller, which is what lets a coalesced trailing write cover
+ * everything that landed while the previous write was in flight — including a
+ * version restore, which swaps the object out entirely.
+ * @param {string} key 'default' or a file id.
+ * @returns {Promise<void>}
  */
-const saveWorkbook = async (fileId, state) => {
-  try {
-    await workbookRepo.updateWorkbookState(JSON.stringify(state), fileId);
-  } catch (err) {
-    logger.error({ err: err }, `Failed to save workbook ${fileId}`);
+const writeWorkbookNow = async (key) => {
+  const state = key === 'default' ? getDefaultState() : workbooks.get(key);
+  if (!state) return; // not loaded / not served on this instance
+  if (key === 'default') {
+    await workbookRepo.updateDefaultWorkbookState(JSON.stringify(state));
+  } else {
+    await workbookRepo.updateWorkbookState(JSON.stringify(state), key);
   }
 };
 
+// Every state-changing op persists the whole workbook, so a bulk edit — one
+// message per cell today — used to queue one full serialization and one UPDATE
+// per cell, of a document the burst was itself growing, on the event loop and
+// against a bounded pool. Coalescing keeps that at ~2 writes per burst. The
+// default workbook had a hand-rolled version of this latch and every real user
+// file had none; both now go through the same path.
+const workbookWriter = createWriteCoalescer(writeWorkbookNow, (err, key) => {
+  logger.error({ err }, `Failed to save workbook ${key}`);
+});
+
 /**
- * Persist whichever workbook a file id refers to (default vs. a cached file).
+ * Persist whichever workbook a file id refers to (default vs. a cached file),
+ * coalescing against any write already in flight for it.
  * @param {string} fileId
+ * @returns {Promise<void>} Settles once a write including the caller's change has
+ *   completed, so a caller that needs durability before proceeding can await it.
  */
-const persistWorkbook = (fileId) => {
-  if (!fileId || fileId === 'default') return saveState();
-  const state = workbooks.get(fileId);
-  if (state) return saveWorkbook(fileId, state);
-};
+const persistWorkbook = (fileId) =>
+  workbookWriter.schedule((!fileId || fileId === 'default') ? 'default' : fileId);
 
 /**
  * GET /api/files
@@ -2410,11 +2397,11 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
     // in the `workbooks` map.
     if (fileId === 'default') {
       sheetState = restored;
-      await saveState();
     } else {
       workbooks.set(fileId, restored);
-      await saveWorkbook(fileId, restored);
     }
+    // Awaited: the restore is only announced once it is durable.
+    await persistWorkbook(fileId);
 
     // Log the restoration event in this file's version history.
     const creator = req.user ? req.user.username : 'anonymous';
