@@ -4167,6 +4167,37 @@ const saveCellUpdate = (cellId, text) => {
   }
 };
 
+/**
+ * Abandons an in-progress formula bar edit: the mirror image of
+ * commitFormulaToOrigin, restoring instead of writing. The bar goes back to what
+ * the origin cell holds, the pick state and reference highlights are cleared, and
+ * focus returns to the grid — which is also what gets the user out of point mode,
+ * where every click would otherwise append another reference.
+ */
+const cancelFormulaBarEdit = () => {
+  const cellId = fpOriginCell || activeCellId;
+  const originSheet = fpOriginSheet;
+  window.CoSheet.fnAutocomplete.close();
+  resetFormulaPick();
+  activeFormulaEditor = null;
+  refreshFormulaRefHighlights(); // no editor left, so this clears them
+
+  if (originSheet && originSheet !== activeSheetName) {
+    switchSheet(originSheet); // back to the sheet the edit started on
+  }
+  const formulaBar = document.getElementById('formula-bar-input');
+  if (formulaBar) formulaBar.blur();
+  if (!cellId) return;
+
+  activeCellId = cellId;
+  // Restore from stored state directly, so the bar is right even when the cell
+  // has no element to re-select (scrolled out of a windowed grid).
+  const cellData = localCells[cellId] || { formula: '', value: '' };
+  if (formulaBar) formulaBar.value = cellData.formula ? cellData.formula : cellData.value;
+  const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
+  if (cellEl) handleCellSelect(cellId, cellEl);
+};
+
 // Hook up changes from the top Formula Bar when hitting Enter
 const formulaBarInput = document.getElementById('formula-bar-input');
 if (formulaBarInput) {
@@ -4183,6 +4214,15 @@ if (formulaBarInput) {
     if (e.key === 'Escape' && cancelFormulaPick()) {
       e.preventDefault();
       e.stopPropagation();
+      return;
+    }
+    // With nothing left for it to close, Escape abandons the edit. Without this
+    // the typed text stays in the bar and an Enter after it commits exactly what
+    // the user discarded.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelFormulaBarEdit();
       return;
     }
     if (e.key === 'Enter' && (activeCellId || fpOriginCell)) {
