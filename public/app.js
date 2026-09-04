@@ -1555,16 +1555,57 @@ const HTML_STYLE_KEYS = ['bold', 'italic', 'underline', 'strikethrough', 'color'
 
 /**
  * Converts a CSS colour to the `#rrggbb` form the cell style schema and the
- * server-side validator both require. The CSSOM serializes inline colours to
- * `rgb()` / `rgba()`, so those and hex literals are the forms worth handling;
- * anything else (a keyword the parser kept, Excel's `windowtext`, a gradient)
- * yields null and is dropped rather than guessed at.
+ * server-side validator both require. Hex and `rgb()`/`rgba()` literals are read
+ * directly; a keyword is resolved through the browser first. Anything CSS does
+ * not accept as a colour — a gradient, a stray token — yields null and is
+ * dropped rather than guessed at.
  * @param {string} raw - Colour as read from an inline style declaration.
  * @returns {string|null} `#rrggbb`, or null when there is nothing usable.
  */
+const cssColorProbe = { el: null, cache: new Map() };
+
+/**
+ * Resolves a CSS colour the CSSOM left as written — `red`, `yellow`, Excel's
+ * `windowtext` — into the `rgb()` form the parser below understands, by letting
+ * the browser compute it on a throwaway element. Only a property value is ever
+ * assigned, never markup, so untrusted clipboard text cannot escape into the
+ * page; a value CSS rejects simply doesn't stick and yields null.
+ * @param {string} value - Colour keyword or function as authored.
+ * @returns {string|null} A computed `rgb()`/`rgba()` string, or null.
+ */
+const computeCssColor = (value) => {
+  if (cssColorProbe.cache.has(value)) return cssColorProbe.cache.get(value);
+
+  let computed = null;
+  try {
+    if (document.body && typeof getComputedStyle === 'function') {
+      if (!cssColorProbe.el) {
+        cssColorProbe.el = document.createElement('span');
+        cssColorProbe.el.style.display = 'none';
+        document.body.appendChild(cssColorProbe.el);
+      }
+      const probe = cssColorProbe.el;
+      probe.style.color = '';
+      probe.style.color = value;
+      if (probe.style.color) computed = getComputedStyle(probe).color || null;
+    }
+  } catch { /* no live document to compute against */ }
+
+  cssColorProbe.cache.set(value, computed);
+  return computed;
+};
+
 const cssColorToHex = (raw) => {
   if (!raw) return null;
-  const value = raw.trim().toLowerCase();
+  let value = raw.trim().toLowerCase();
+
+  // Spreadsheets emit colour keywords as often as hex, and the CSSOM hands those
+  // back unchanged, so resolve anything that isn't already a literal.
+  if (!/^(#|rgba?\()/.test(value)) {
+    const computed = computeCssColor(value);
+    if (!computed) return null;
+    value = computed.trim().toLowerCase();
+  }
 
   const rgb = value.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.%]+)\s*)?\)$/);
   if (rgb) {

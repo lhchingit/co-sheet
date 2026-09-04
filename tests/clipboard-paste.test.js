@@ -18,6 +18,17 @@ import assert from 'node:assert';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
 
+// The colour keywords the stub browser below knows how to compute, and what it
+// computes them to. Spreadsheets emit keywords freely and the CSSOM hands them
+// back as written, so resolving them is part of the paste path.
+const CSS_COLOR_KEYWORDS = {
+  red: 'rgb(255, 0, 0)',
+  green: 'rgb(0, 128, 0)',
+  yellow: 'rgb(255, 255, 0)',
+  white: 'rgb(255, 255, 255)',
+  windowtext: 'rgb(0, 0, 0)'
+};
+
 /** Minimal DOM element stub good enough for the grid/formula-bar lookups. */
 function createMockElement() {
   return {
@@ -71,9 +82,22 @@ function createSandbox() {
       addEventListener(event, cb) {
         (documentListeners[event] = documentListeners[event] || []).push(cb);
       },
-      createElement() { return createMockElement(); },
+      // Elements model the one CSSOM behaviour the colour probe relies on: a
+      // value CSS does not accept never sticks, so the property stays empty.
+      createElement() {
+        const el = createMockElement();
+        let color = '';
+        Object.defineProperty(el.style, 'color', {
+          get: () => color,
+          set: (v) => { if (v === '' || CSS_COLOR_KEYWORDS[v]) color = v; },
+          configurable: true
+        });
+        return el;
+      },
+      body: { appendChild() {}, classList: { add() {}, remove() {} } },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
     },
+    getComputedStyle: (el) => ({ color: CSS_COLOR_KEYWORDS[el.style.color] || '' }),
     window: {
       location: { protocol: 'http:', host: 'localhost:3000' },
       addEventListener() {}
@@ -478,15 +502,31 @@ test('converts the colour forms the CSSOM and Excel actually emit', () => {
   assert.strictEqual(s.cssColorToHex('#f00'), '#ff0000');
 });
 
+test('resolves the colour keywords the CSSOM hands back as written', () => {
+  // The CSSOM does NOT normalize `color:red` to rgb() — it returns "red" — so a
+  // keyword has to be computed before it can become the #rrggbb the schema needs.
+  const s = createSandbox();
+  assert.strictEqual(s.cssColorToHex('red'), '#ff0000');
+  assert.strictEqual(s.cssColorToHex('green'), '#008000');
+  // Excel's own system-colour keyword resolves like any other.
+  assert.strictEqual(s.cssColorToHex('windowtext'), '#000000');
+});
+
 test('drops colours it cannot turn into the #rrggbb the server requires', () => {
   const s = createSandbox();
   // A fully transparent colour is "no colour", not black.
   assert.strictEqual(s.cssColorToHex('rgba(0, 0, 0, 0)'), null);
-  // Excel's own keyword, and anything else that never became a real colour.
-  assert.strictEqual(s.cssColorToHex('windowtext'), null);
+  // Not a colour at all: CSS rejects it, so nothing is computed.
   assert.strictEqual(s.cssColorToHex('linear-gradient(red, blue)'), null);
+  assert.strictEqual(s.cssColorToHex('notacolour'), null);
   assert.strictEqual(s.cssColorToHex(''), null);
   assert.strictEqual(s.cssColorToHex(undefined), null);
+});
+
+test('a keyword fill goes through the same white-fill exclusion as a hex one', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'yellow' }).color, '#ffff00');
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'white' }).color, undefined);
 });
 
 test('maps a source cell\'s CSS onto the cell style schema', () => {
