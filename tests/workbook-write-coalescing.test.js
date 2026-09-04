@@ -77,6 +77,20 @@ test('a burst of cell edits is fully persisted, on a user file and on default', 
       }
 
       // --- Assert ---
+      // The claim is about THIS burst's cells, not about the size of the sheet.
+      // The suite gives every spawned server the same Redis, so an op on the
+      // shared 'default' workbook published by another test file is relayed here
+      // and persisted into this test's database too — counting the sheet made the
+      // test fail on a burst that had landed perfectly (see #194).
+      const missingCells = (cells) => {
+        const missing = [];
+        for (let r = 1; r <= BURST; r++) {
+          const cell = cells[`A${r}`];
+          if (!cell || cell.value !== `v${r}`) missing.push(`A${r}`);
+        }
+        return missing;
+      };
+
       // Poll rather than sleep a fixed amount: the trailing write lands once the
       // in-flight one finishes, and how long that takes is the DB's business.
       let cells = {};
@@ -84,14 +98,14 @@ test('a burst of cell edits is fully persisted, on a user file and on default', 
       do {
         await new Promise((r) => setTimeout(r, 100));
         cells = await db.getCells(target.id, 'Sheet1');
-      } while (Object.keys(cells).length < BURST && Date.now() < deadline);
+      } while (missingCells(cells).length && Date.now() < deadline);
 
-      assert.strictEqual(
-        Object.keys(cells).length, BURST,
+      assert.deepStrictEqual(
+        missingCells(cells), [],
         `every cell of the burst reached the database for ${target.id} (the trailing write is not dropped)`
       );
-      // Not just the count — the last edit specifically, since a dropped trailing
-      // write would lose precisely the newest values.
+      // Called out separately: a dropped trailing write would lose precisely the
+      // newest values, so the last edit is the one that matters most here.
       assert.strictEqual(cells[`A${BURST}`].value, `v${BURST}`, 'the final edit is the one on disk');
       assert.deepStrictEqual(cells.A1.style, { bold: true }, 'and the first is intact too');
 
