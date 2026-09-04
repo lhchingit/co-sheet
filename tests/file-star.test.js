@@ -15,6 +15,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 function makeRequest(url, method, body = null, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -55,7 +56,7 @@ test('File starring - per-user favourites, view-access gating, and starred flag'
     env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'boss' }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitForServer(PORT);
 
   try {
     const alice = await loginAndRegister(PORT, 'Alice');

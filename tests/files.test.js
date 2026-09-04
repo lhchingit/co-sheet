@@ -13,6 +13,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 /** Make a JSON HTTP request, optionally with headers (e.g. Cookie). */
 function makeRequest(url, method, body = null, headers = {}) {
@@ -53,7 +54,7 @@ test('Files API - CRUD, unique URL, and per-file workbook isolation', async () =
     env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitForServer(PORT);
 
   try {
     // Unauthenticated access is rejected.
@@ -126,7 +127,7 @@ test('Files API - copy duplicates workbook data into an independent file', async
     env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitForServer(PORT);
 
   try {
     const cookie = await loginAndGetCookie(PORT, 'Copy User');

@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 import http from 'http';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 import { createTestDb } from './helpers/db.js';
 
 
@@ -136,8 +137,8 @@ test('Version History API Endpoints - retrieve and restore', async () => {
     env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
-  // Wait 1.5 seconds for the Express server to boot up and start listening.
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let cookie = '';
   let wsClient = null;
@@ -265,8 +266,8 @@ test('Backend Autosave Engine - periodic version snapshots on cell edit', async 
     }
   });
 
-  // Wait 1.5 seconds for the Express server to boot up and start listening.
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let cookie = '';
   let wsClient = null;
@@ -372,7 +373,7 @@ test('Backend Autosave Engine - snapshots non-default workbooks, scoped per file
     }
   });
 
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await waitForServer(PORT);
 
   let cookie = '';
   let wsClient = null;

@@ -10,6 +10,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 /** Minimal JSON HTTP helper (mirrors store.test.js). */
 function makeRequest(url, method, body = null, headers = {}) {
@@ -65,7 +66,7 @@ test('POST /api/files names the starter sheet in the creator\'s language', async
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: String(PORT), NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'Test User' }
   });
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await waitForServer(PORT);
 
   try {
     const cookie = await loginAndGetCookie(PORT);
