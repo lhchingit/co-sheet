@@ -1,7 +1,9 @@
 /**
  * @file escape-cancels-edit.test.js
- * @description Escape must abandon an inline cell edit (#174): the cell goes back
- * to what it held and the blur that follows commits nothing. Escape keeps its
+ * @description Escape must abandon an in-progress edit — in a cell (#174) and in
+ * the formula bar (#176). For the cell editor that means the cell goes back
+ * to what it held and the blur that follows commits nothing; for the formula bar,
+ * that the bar is restored and a following Enter commits nothing. Escape keeps its
  * existing higher-priority jobs — closing the function autocomplete, ending a
  * formula range pick — so only a press with nothing left to close cancels.
  *
@@ -30,7 +32,10 @@ function createMockElement() {
  */
 function createSandbox(cellState) {
   const documentListeners = {};
+  // The formula bar captures its own listeners so a key can be pressed on it.
+  const barListeners = {};
   const formulaBar = createMockElement();
+  formulaBar.addEventListener = (type, cb) => { (barListeners[type] = barListeners[type] || []).push(cb); };
 
   // The cell under edit. blur() runs the handler startCellInlineEdit installed,
   // which is what a real blur does and what commits (or, after Escape, does not).
@@ -97,6 +102,10 @@ function createSandbox(cellState) {
   sandbox.pressKey = (key) => cell.onkeydown({
     key, preventDefault() {}, stopPropagation() {}
   });
+  /** Presses a key on the formula bar, as a browser would deliver it. */
+  sandbox.pressBarKey = (key) => (barListeners['keydown'] || []).forEach((cb) => cb({
+    key, preventDefault() {}, stopPropagation() {}
+  }));
   return sandbox;
 }
 
@@ -203,4 +212,94 @@ test('Escape closes the function autocomplete before it cancels anything', () =>
   assert.strictEqual(s.cell.getAttribute('contenteditable'), null, 'the edit should have been abandoned');
   assert.strictEqual(s.localCells['A1'].value, '100');
   assert.strictEqual(s.localCells['A1'].formula, '');
+});
+
+// --- The formula bar (#176) --------------------------------------------------
+// Same contract, a different editor: the bar commits on Enter rather than blur,
+// so an Escape that does nothing leaves text a later Enter will save.
+
+test('Escape restores the formula bar to what the cell holds', () => {
+  // --- Arrange: A1 holds 100 and the bar has been edited to 999 ---
+  const s = createSandbox({ value: '100', formula: '', style: {} });
+  s.formulaBar.value = '999';
+
+  // --- Act ---
+  s.pressBarKey('Escape');
+
+  // --- Assert ---
+  assert.strictEqual(s.formulaBar.value, '100', 'the bar should show the stored value again');
+  assert.strictEqual(s.localCells['A1'].value, '100');
+});
+
+test('Enter after Escape commits nothing from the formula bar', () => {
+  // --- Arrange ---
+  const s = createSandbox({ value: '100', formula: '', style: {} });
+  s.formulaBar.value = '999';
+
+  // --- Act: this is the data-loss case — Escape then Enter used to save 999 ---
+  s.pressBarKey('Escape');
+  s.pressBarKey('Enter');
+
+  // --- Assert ---
+  assert.strictEqual(s.localCells['A1'].value, '100');
+});
+
+test('an abandoned formula bar entry leaves an empty cell empty', () => {
+  const s = createSandbox({ value: '', formula: '', style: {} });
+  s.formulaBar.value = 'draft';
+
+  s.pressBarKey('Escape');
+  s.pressBarKey('Enter');
+
+  assert.strictEqual(s.localCells['A1'].value, '');
+  assert.strictEqual(s.localCells['A1'].formula, '');
+});
+
+test('an abandoned formula is not committed from the bar either', () => {
+  const s = createSandbox({ value: '100', formula: '', style: {} });
+  s.formulaBar.value = '=A1+';
+
+  s.pressBarKey('Escape');
+  s.pressBarKey('Enter');
+
+  assert.strictEqual(s.localCells['A1'].formula, '');
+  assert.strictEqual(s.localCells['A1'].value, '100');
+});
+
+test('the formula bar still commits on Enter, so the happy path is intact', () => {
+  const s = createSandbox({ value: '100', formula: '', style: {} });
+  s.formulaBar.value = '250';
+
+  s.pressBarKey('Enter');
+
+  assert.strictEqual(s.localCells['A1'].value, '250');
+});
+
+test('Escape closes the formula bar autocomplete before it cancels anything', () => {
+  // --- Arrange: an edit in the bar with the suggestion popup open ---
+  const s = createSandbox({ value: '100', formula: '', style: {} });
+  s.formulaBar.value = '=SU';
+  s.fnAutocomplete.update({
+    getValue: () => '=SU',
+    getCaret: () => 3,
+    setValue() {},
+    setCaret() {},
+    getRect: () => ({ left: 0, bottom: 20, width: 100 }),
+    el: s.formulaBar
+  });
+  assert.ok(s.fnAutocomplete.isOpen(), 'precondition: the popup is open');
+
+  // --- Act: the first Escape belongs to the popup ---
+  s.pressBarKey('Escape');
+
+  // --- Assert: the edit is untouched ---
+  assert.ok(!s.fnAutocomplete.isOpen());
+  assert.strictEqual(s.formulaBar.value, '=SU', 'the edit should still be in the bar');
+
+  // --- Act: a second Escape has nothing left to close ---
+  s.pressBarKey('Escape');
+
+  // --- Assert ---
+  assert.strictEqual(s.formulaBar.value, '100');
+  assert.strictEqual(s.localCells['A1'].value, '100');
 });
