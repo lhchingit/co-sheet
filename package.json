@@ -16,6 +16,7 @@
     "build:css": "tailwindcss -c tailwind/editor.config.cjs -i tailwind/base.css -o public/styles-editor.css --minify && tailwindcss -c tailwind/drive.config.cjs -i tailwind/base.css -o public/styles-drive.css --minify && tailwindcss -c tailwind/login.config.cjs -i tailwind/base.css -o public/styles-login.css --minify"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "connect-redis": "^9.0.0",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
