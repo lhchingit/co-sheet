@@ -1634,6 +1634,52 @@ const insertPlainTextAtCaret = (text) => {
 };
 
 /**
+ * Routes clipboard text onto the grid, shared by every paste that targets cells
+ * rather than a text field: text an in-app copy mirrored out replays through the
+ * internal buffer so formulas and styling survive, and anything else is parsed
+ * as a table and written as a block from the active cell.
+ * @param {string} text - Clipboard text, or '' when there is no text flavour.
+ */
+const pasteClipboardTextOntoGrid = (text) => {
+  // No text flavour on the clipboard (an image, or a mirror-out that failed):
+  // keep pasting the in-app buffer, exactly as before there was a paste handler.
+  // Same when the payload is still the text an in-app copy mirrored out — the
+  // internal buffer carries the formulas and styling that text has flattened.
+  if (!text || (clipboardData && copiedCellsToText(clipboardData.copiedCells) === normalizeClipboardText(text))) {
+    pasteSelectedCells();
+    return;
+  }
+  pasteTextGrid(parseClipboardTable(text));
+};
+
+/**
+ * Pastes for the menu entries, which produce no native paste event and so have
+ * to ask for the system clipboard explicitly. The read is permission-gated
+ * (Chrome confirms it, Firefox shows a paste button) and absent outside a secure
+ * context, so every failure lands on the in-app buffer — the menus never do less
+ * than they did before.
+ */
+const pasteFromSystemClipboard = () => {
+  if (!canEditWorkbook || !activeCellId) return;
+
+  let read = null;
+  try {
+    if (navigator && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+      read = navigator.clipboard.readText();
+    }
+  } catch { /* clipboard API unavailable */ }
+
+  if (!read || typeof read.then !== 'function') {
+    pasteSelectedCells();
+    return;
+  }
+  read.then(
+    (text) => pasteClipboardTextOntoGrid(text),
+    () => pasteSelectedCells() // denied, dismissed, or no document focus
+  );
+};
+
+/**
  * Handles a native paste — the only path that can see what another application
  * put on the system clipboard. Routes it three ways: an in-app copy replays
  * through the internal buffer (keeping formulas and styles), a cell being
@@ -1664,17 +1710,7 @@ const handleDocumentPaste = (e) => {
 
   if (!activeCellId) return;
   e.preventDefault();
-
-  // No text flavour on the clipboard (an image, or a mirror-out that failed):
-  // keep pasting the in-app buffer, exactly as before this handler existed.
-  // Same when the payload is still the text an in-app copy mirrored out — the
-  // internal buffer carries the formulas and styling that text has flattened.
-  if (!text || (clipboardData && copiedCellsToText(clipboardData.copiedCells) === normalizeClipboardText(text))) {
-    pasteSelectedCells();
-    return;
-  }
-
-  pasteTextGrid(parseClipboardTable(text));
+  pasteClipboardTextOntoGrid(text);
 };
 
 document.addEventListener('paste', handleDocumentPaste);
@@ -6690,7 +6726,7 @@ const showContextMenu = (cellId, x, y) => {
   // Hook action handlers — each maps to an existing app function.
   document.getElementById('menu-cut').onclick = () => { cutSelectedCells(); menu.remove(); };
   document.getElementById('menu-copy').onclick = () => { copySelectedCells(); menu.remove(); };
-  document.getElementById('menu-paste').onclick = () => { pasteSelectedCells(); menu.remove(); };
+  document.getElementById('menu-paste').onclick = () => { pasteFromSystemClipboard(); menu.remove(); };
   document.getElementById('menu-insert-row').onclick = () => {
     // Insert as many rows as the selection spans, above the topmost selected row.
     const at = ctxBounds ? ctxBounds.minRow : (parseCellCoord(cellId) || {}).row;
@@ -6878,7 +6914,7 @@ const showColumnMenu = (colLetter, x, y) => {
   // live selection (the whole column, already selected by the header button).
   document.getElementById('col-cut').onclick = () => { cutSelectedCells(); menu.remove(); };
   document.getElementById('col-copy').onclick = () => { copySelectedCells(); menu.remove(); };
-  document.getElementById('col-paste').onclick = () => { pasteSelectedCells(); menu.remove(); };
+  document.getElementById('col-paste').onclick = () => { pasteFromSystemClipboard(); menu.remove(); };
   document.getElementById('col-insert-left').onclick = () => { performStructuralInsert('col', colIndex); menu.remove(); };
   document.getElementById('col-insert-right').onclick = () => { performStructuralInsert('col', colIndex + 1); menu.remove(); };
   document.getElementById('col-delete').onclick = () => { deleteColumn(topCellId); menu.remove(); };
@@ -9741,7 +9777,7 @@ if (editCopyBtn) {
 const editPasteBtn = document.getElementById('edit-paste');
 if (editPasteBtn) {
   editPasteBtn.onclick = () => {
-    pasteSelectedCells();
+    pasteFromSystemClipboard();
     if (menuEditDropdown) menuEditDropdown.classList.add('hidden');
   };
 }

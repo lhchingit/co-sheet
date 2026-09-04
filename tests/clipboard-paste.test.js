@@ -3,7 +3,9 @@
  * @description Covers pasting content that originated outside co-sheet (#168):
  * the TSV dialect Excel/Google Sheets put on the system clipboard, and the
  * document-level `paste` handler that routes a payload to the grid, to the cell
- * being edited, or back through the in-app clipboard buffer.
+ * being edited, or back through the in-app clipboard buffer. Also covers the
+ * menu-driven paste (#170), which has no native paste event to work from and so
+ * reads the clipboard through navigator.clipboard.readText().
  *
  * The client bundle is run in a VM sandbox, exporting the paste helpers and the
  * registered `paste` listener.
@@ -48,6 +50,7 @@ function createSandbox() {
   // Deferred timers, so the Ctrl+V fallback can be ordered against the paste
   // event the way a browser orders them.
   const pendingTimers = [];
+  let systemClipboard = { readable: true, text: '' };
 
   const sandbox = {
     document: {
@@ -72,7 +75,16 @@ function createSandbox() {
       location: { protocol: 'http:', host: 'localhost:3000' },
       addEventListener() {}
     },
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    // A stand-in for the OS clipboard: an in-app copy really does mirror onto it
+    // via writeSystemClipboard, and the menu paste path really does read it back.
+    navigator: {
+      clipboard: {
+        writeText: (t) => { systemClipboard = { readable: true, text: t }; return Promise.resolve(); },
+        readText: () => (systemClipboard.readable
+          ? Promise.resolve(systemClipboard.text)
+          : Promise.reject(new Error('clipboard read denied')))
+      }
+    },
     WebSocket: class {
       static OPEN = 1;
       constructor() { this.readyState = 1; }
@@ -98,6 +110,7 @@ function createSandbox() {
     });
     globalThis.parseClipboardTable = parseClipboardTable;
     globalThis.copySelectedCells = copySelectedCells;
+    globalThis.pasteFromSystemClipboard = pasteFromSystemClipboard;
   `;
   vm.runInContext(readAppBundle() + exportSuffix, sandbox);
 
@@ -125,6 +138,14 @@ function createSandbox() {
     return { prevented };
   };
   sandbox.dispatchKeydown = (evt) => (documentListeners['keydown'] || []).forEach((cb) => cb(evt));
+  /** Puts text on the stand-in OS clipboard, readable by the menu paste path. */
+  sandbox.setSystemClipboard = (text) => { systemClipboard = { readable: true, text }; };
+  /** Makes readText() reject, as a denied or dismissed permission prompt does. */
+  sandbox.denySystemClipboard = () => { systemClipboard = { readable: false, text: '' }; };
+  /** Removes the Clipboard API entirely (an insecure context, an old browser). */
+  sandbox.removeClipboardApi = () => { sandbox.navigator.clipboard = undefined; };
+  /** Lets the readText() promise and its handlers settle. */
+  sandbox.settle = () => new Promise((resolve) => setImmediate(resolve));
   return sandbox;
 }
 
@@ -348,4 +369,91 @@ test('an empty clipboard leaves an edited cell untouched', () => {
 
   assert.ok(!prevented);
   assert.strictEqual(s.localCells['B2'], undefined);
+});
+
+// --- Menu-driven paste (#170) ------------------------------------------------
+// The context menus and the Edit menu produce no native paste event, so they ask
+// for the system clipboard explicitly via navigator.clipboard.readText().
+
+test('the menu paste reads the system clipboard and spreads it across cells', async () => {
+  // --- Arrange: Excel content on the OS clipboard, nothing copied in-app ---
+  const s = createSandbox();
+  s.localCells = {};
+  s.activeCellId = 'B2';
+  s.clipboardData = null;
+  s.setSystemClipboard('Name\tQty\r\nWidget\t7\r\n');
+
+  // --- Act ---
+  s.pasteFromSystemClipboard();
+  await s.settle();
+
+  // --- Assert: same block placement a Ctrl+V would produce ---
+  assert.strictEqual(s.localCells['B2'].value, 'Name');
+  assert.strictEqual(s.localCells['C2'].value, 'Qty');
+  assert.strictEqual(s.localCells['B3'].value, 'Widget');
+  assert.strictEqual(s.localCells['C3'].value, '7');
+});
+
+test('the menu paste keeps formulas and styling for the app\'s own copy', async () => {
+  // --- Arrange: an in-app copy, which mirrors its text onto the OS clipboard ---
+  const s = createSandbox();
+  s.localCells = { 'A1': { value: 'Styled', formula: '', style: { bold: true } } };
+  s.activeCellId = 'A1';
+  s.copySelectedCells();
+
+  // --- Act ---
+  s.activeCellId = 'B2';
+  s.pasteFromSystemClipboard();
+  await s.settle();
+
+  // --- Assert: routed through the in-app buffer, not flattened to text ---
+  assert.strictEqual(s.localCells['B2'].value, 'Styled');
+  assert.strictEqual(s.localCells['B2'].style.bold, true);
+});
+
+test('a denied clipboard permission falls back to the in-app buffer', async () => {
+  // --- Arrange: an in-app copy, and a read the user denies or dismisses ---
+  const s = createSandbox();
+  s.localCells = { 'A1': { value: 'In-app', formula: '', style: { italic: true } } };
+  s.activeCellId = 'A1';
+  s.copySelectedCells();
+  s.denySystemClipboard();
+
+  // --- Act ---
+  s.activeCellId = 'B2';
+  s.pasteFromSystemClipboard();
+  await s.settle();
+
+  // --- Assert: the menus never do less than they did before #170 ---
+  assert.strictEqual(s.localCells['B2'].value, 'In-app');
+  assert.strictEqual(s.localCells['B2'].style.italic, true);
+});
+
+test('no Clipboard API at all still pastes the in-app buffer', async () => {
+  // --- Arrange: an insecure context or a browser without readText ---
+  const s = createSandbox();
+  s.localCells = { 'A1': { value: 'In-app', formula: '', style: {} } };
+  s.activeCellId = 'A1';
+  s.copySelectedCells();
+  s.removeClipboardApi();
+
+  // --- Act ---
+  s.activeCellId = 'B2';
+  s.pasteFromSystemClipboard();
+  await s.settle();
+
+  // --- Assert ---
+  assert.strictEqual(s.localCells['B2'].value, 'In-app');
+});
+
+test('the menu paste does nothing without an active cell', async () => {
+  const s = createSandbox();
+  s.localCells = {};
+  s.activeCellId = null;
+  s.setSystemClipboard('Name\tQty');
+
+  s.pasteFromSystemClipboard();
+  await s.settle();
+
+  assert.deepEqual(Object.keys(s.localCells), []);
 });
