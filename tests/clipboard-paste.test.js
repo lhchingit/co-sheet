@@ -5,15 +5,29 @@
  * document-level `paste` handler that routes a payload to the grid, to the cell
  * being edited, or back through the in-app clipboard buffer. Also covers the
  * menu-driven paste (#170), which has no native paste event to work from and so
- * reads the clipboard through navigator.clipboard.readText().
+ * reads the clipboard through the navigator.clipboard API, and the mapping of a
+ * source's `text/html` formatting onto the cell style schema (#171).
  *
  * The client bundle is run in a VM sandbox, exporting the paste helpers and the
- * registered `paste` listener.
+ * registered `paste` listener. The sandbox has no DOMParser, so walking a pasted
+ * HTML table is covered end-to-end in a browser instead; what is unit-tested here
+ * is the pure mapping and how a styled block lands on the grid.
  */
 import test from 'node:test';
 import assert from 'node:assert';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
+
+// The colour keywords the stub browser below knows how to compute, and what it
+// computes them to. Spreadsheets emit keywords freely and the CSSOM hands them
+// back as written, so resolving them is part of the paste path.
+const CSS_COLOR_KEYWORDS = {
+  red: 'rgb(255, 0, 0)',
+  green: 'rgb(0, 128, 0)',
+  yellow: 'rgb(255, 255, 0)',
+  white: 'rgb(255, 255, 255)',
+  windowtext: 'rgb(0, 0, 0)'
+};
 
 /** Minimal DOM element stub good enough for the grid/formula-bar lookups. */
 function createMockElement() {
@@ -68,9 +82,22 @@ function createSandbox() {
       addEventListener(event, cb) {
         (documentListeners[event] = documentListeners[event] || []).push(cb);
       },
-      createElement() { return createMockElement(); },
+      // Elements model the one CSSOM behaviour the colour probe relies on: a
+      // value CSS does not accept never sticks, so the property stays empty.
+      createElement() {
+        const el = createMockElement();
+        let color = '';
+        Object.defineProperty(el.style, 'color', {
+          get: () => color,
+          set: (v) => { if (v === '' || CSS_COLOR_KEYWORDS[v]) color = v; },
+          configurable: true
+        });
+        return el;
+      },
+      body: { appendChild() {}, classList: { add() {}, remove() {} } },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
     },
+    getComputedStyle: (el) => ({ color: CSS_COLOR_KEYWORDS[el.style.color] || '' }),
     window: {
       location: { protocol: 'http:', host: 'localhost:3000' },
       addEventListener() {}
@@ -111,6 +138,10 @@ function createSandbox() {
     globalThis.parseClipboardTable = parseClipboardTable;
     globalThis.copySelectedCells = copySelectedCells;
     globalThis.pasteFromSystemClipboard = pasteFromSystemClipboard;
+    globalThis.cssColorToHex = cssColorToHex;
+    globalThis.cellStyleFromCss = cellStyleFromCss;
+    globalThis.parseClipboardHtmlTable = parseClipboardHtmlTable;
+    globalThis.pasteCellGrid = pasteCellGrid;
   `;
   vm.runInContext(readAppBundle() + exportSuffix, sandbox);
 
@@ -456,4 +487,160 @@ test('the menu paste does nothing without an active cell', async () => {
   await s.settle();
 
   assert.deepEqual(Object.keys(s.localCells), []);
+});
+
+// --- Pasting formatting from a source's text/html flavour (#171) -------------
+// Walking the markup needs a real DOMParser, so the table parser itself is
+// covered end-to-end in a browser; these cover the pure mapping onto co-sheet's
+// style schema and how a styled block lands on the grid.
+
+test('converts the colour forms the CSSOM and Excel actually emit', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.cssColorToHex('rgb(255, 255, 0)'), '#ffff00');
+  assert.strictEqual(s.cssColorToHex('rgba(0, 0, 255, 0.5)'), '#0000ff');
+  assert.strictEqual(s.cssColorToHex('#AABBCC'), '#aabbcc');
+  assert.strictEqual(s.cssColorToHex('#f00'), '#ff0000');
+});
+
+test('resolves the colour keywords the CSSOM hands back as written', () => {
+  // The CSSOM does NOT normalize `color:red` to rgb() — it returns "red" — so a
+  // keyword has to be computed before it can become the #rrggbb the schema needs.
+  const s = createSandbox();
+  assert.strictEqual(s.cssColorToHex('red'), '#ff0000');
+  assert.strictEqual(s.cssColorToHex('green'), '#008000');
+  // Excel's own system-colour keyword resolves like any other.
+  assert.strictEqual(s.cssColorToHex('windowtext'), '#000000');
+});
+
+test('drops colours it cannot turn into the #rrggbb the server requires', () => {
+  const s = createSandbox();
+  // A fully transparent colour is "no colour", not black.
+  assert.strictEqual(s.cssColorToHex('rgba(0, 0, 0, 0)'), null);
+  // Not a colour at all: CSS rejects it, so nothing is computed.
+  assert.strictEqual(s.cssColorToHex('linear-gradient(red, blue)'), null);
+  assert.strictEqual(s.cssColorToHex('notacolour'), null);
+  assert.strictEqual(s.cssColorToHex(''), null);
+  assert.strictEqual(s.cssColorToHex(undefined), null);
+});
+
+test('a keyword fill goes through the same white-fill exclusion as a hex one', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'yellow' }).color, '#ffff00');
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'white' }).color, undefined);
+});
+
+test('maps a source cell\'s CSS onto the cell style schema', () => {
+  const s = createSandbox();
+  assert.deepEqual(s.cellStyleFromCss({
+    fontWeight: '700',
+    fontStyle: 'italic',
+    textDecoration: 'underline line-through',
+    color: 'rgb(255, 0, 0)',
+    backgroundColor: 'rgb(255, 255, 0)',
+    textAlign: 'center',
+    fontFamily: '"Calibri", sans-serif',
+    fontSize: '14.0pt'
+  }), {
+    bold: true,
+    italic: true,
+    underline: true,
+    strikethrough: true,
+    textColor: '#ff0000',
+    color: '#ffff00',
+    align: 'center',
+    fontFamily: 'Calibri',
+    fontSize: 14
+  });
+});
+
+test('a source that specifies no formatting maps to no style', () => {
+  const s = createSandbox();
+  assert.deepEqual(s.cellStyleFromCss({}), {});
+  assert.deepEqual(s.cellStyleFromCss(null), {});
+  // font-weight:normal and text-align:general are not formatting to carry over.
+  assert.deepEqual(s.cellStyleFromCss({ fontWeight: 'normal', textAlign: 'general' }), {});
+});
+
+test('converts px font sizes to the integer points the schema requires', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.cellStyleFromCss({ fontSize: '16px' }).fontSize, 12);
+  assert.strictEqual(s.cellStyleFromCss({ fontSize: '11.0pt' }).fontSize, 11);
+  // Out of the 1-400 range the server accepts, and a unit that says nothing.
+  assert.strictEqual(s.cellStyleFromCss({ fontSize: '900pt' }).fontSize, undefined);
+  assert.strictEqual(s.cellStyleFromCss({ fontSize: 'larger' }).fontSize, undefined);
+});
+
+test('drops a white fill so a pasted block does not paint every cell', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'rgb(255, 255, 255)' }).color, undefined);
+  assert.strictEqual(s.cellStyleFromCss({ backgroundColor: 'rgb(255, 255, 254)' }).color, '#fffffe');
+});
+
+test('a styled paste replaces the destination formatting it can express', () => {
+  // --- Arrange: B2 is bold, right-aligned, and has a border ---
+  const s = createSandbox();
+  s.localCells = {
+    'B2': { value: '', formula: '', style: { bold: true, align: 'right', borders: { top: { color: '#000000', style: 'thin' } } } }
+  };
+  s.activeCellId = 'B2';
+
+  // --- Act: paste a cell whose source is italic and specifies nothing else ---
+  s.pasteCellGrid([[{ text: 'x', style: { italic: true } }]]);
+
+  // --- Assert: the source's formatting wins outright for the properties HTML
+  // models, and the border — which it does not model — is left alone ---
+  assert.strictEqual(s.localCells['B2'].style.italic, true);
+  assert.strictEqual(s.localCells['B2'].style.bold, undefined, 'a plain source should clear a bold destination');
+  assert.strictEqual(s.localCells['B2'].style.align, undefined);
+  assert.deepEqual(s.localCells['B2'].style.borders, { top: { color: '#000000', style: 'thin' } });
+});
+
+test('a plain-text paste leaves the destination formatting untouched', () => {
+  // --- Arrange: same bold, right-aligned cell ---
+  const s = createSandbox();
+  s.localCells = { 'B2': { value: '', formula: '', style: { bold: true, align: 'right' } } };
+  s.activeCellId = 'B2';
+
+  // --- Act: a null style is "the source specified nothing" ---
+  s.pasteCellGrid([[{ text: 'x', style: null }]]);
+
+  // --- Assert ---
+  assert.strictEqual(s.localCells['B2'].style.bold, true);
+  assert.strictEqual(s.localCells['B2'].style.align, 'right');
+});
+
+test('a styled paste still commits its text as a typed entry would', () => {
+  const s = createSandbox();
+  s.localCells = { 'A1': { value: '5', formula: '', style: {} } };
+  s.activeCellId = 'B1';
+
+  s.pasteCellGrid([[{ text: '=A1+5', style: { bold: true } }]]);
+
+  assert.strictEqual(s.localCells['B1'].formula, '=A1+5');
+  assert.strictEqual(s.localCells['B1'].value, '10');
+  assert.strictEqual(s.localCells['B1'].style.bold, true);
+});
+
+test('unparseable HTML falls back to the plain-text table', () => {
+  // --- Arrange: no DOMParser in this sandbox, so every HTML payload is unusable ---
+  const s = createSandbox();
+  s.localCells = {};
+  s.activeCellId = 'B2';
+  s.clipboardData = null;
+
+  // --- Act: a paste carrying both flavours ---
+  const { prevented } = s.dispatchPaste('Name\tQty');
+
+  // --- Assert: the values still land, from the text flavour ---
+  assert.ok(prevented);
+  assert.strictEqual(s.localCells['B2'].value, 'Name');
+  assert.strictEqual(s.localCells['C2'].value, 'Qty');
+});
+
+test('parseClipboardHtmlTable declines a payload it cannot use', () => {
+  const s = createSandbox();
+  assert.strictEqual(s.parseClipboardHtmlTable(''), null);
+  assert.strictEqual(s.parseClipboardHtmlTable(undefined), null);
+  // No DOMParser here, which is itself a decline rather than a throw.
+  assert.strictEqual(s.parseClipboardHtmlTable('<table><tr><td>a</td></tr></table>'), null);
 });

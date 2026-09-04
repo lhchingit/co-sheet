@@ -1547,14 +1547,249 @@ const parseClipboardTable = (text) => {
  */
 const normalizeClipboardText = (text) => text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
 
+
+// Style properties a pasted HTML table can express. A rich paste replaces all of
+// them so a bold destination and a plain source end up plain; anything HTML does
+// not model (borders, number format, vertical alignment, links) is left alone.
+const HTML_STYLE_KEYS = ['bold', 'italic', 'underline', 'strikethrough', 'color', 'textColor', 'align', 'fontFamily', 'fontSize'];
+
 /**
- * Writes a grid of plain-text values into the sheet with the active cell as its
- * top-left corner. Used for pastes originating outside co-sheet, which carry no
- * formulas or styling — so each destination cell keeps the style it already had
- * and the text is committed exactly as a typed entry would be.
- * @param {Array<Array<string>>} rows - Rows of column values.
+ * Converts a CSS colour to the `#rrggbb` form the cell style schema and the
+ * server-side validator both require. Hex and `rgb()`/`rgba()` literals are read
+ * directly; a keyword is resolved through the browser first. Anything CSS does
+ * not accept as a colour — a gradient, a stray token — yields null and is
+ * dropped rather than guessed at.
+ * @param {string} raw - Colour as read from an inline style declaration.
+ * @returns {string|null} `#rrggbb`, or null when there is nothing usable.
  */
-const pasteTextGrid = (rows) => {
+const cssColorProbe = { el: null, cache: new Map() };
+
+/**
+ * Resolves a CSS colour the CSSOM left as written — `red`, `yellow`, Excel's
+ * `windowtext` — into the `rgb()` form the parser below understands, by letting
+ * the browser compute it on a throwaway element. Only a property value is ever
+ * assigned, never markup, so untrusted clipboard text cannot escape into the
+ * page; a value CSS rejects simply doesn't stick and yields null.
+ * @param {string} value - Colour keyword or function as authored.
+ * @returns {string|null} A computed `rgb()`/`rgba()` string, or null.
+ */
+const computeCssColor = (value) => {
+  if (cssColorProbe.cache.has(value)) return cssColorProbe.cache.get(value);
+
+  let computed = null;
+  try {
+    if (document.body && typeof getComputedStyle === 'function') {
+      if (!cssColorProbe.el) {
+        cssColorProbe.el = document.createElement('span');
+        cssColorProbe.el.style.display = 'none';
+        document.body.appendChild(cssColorProbe.el);
+      }
+      const probe = cssColorProbe.el;
+      probe.style.color = '';
+      probe.style.color = value;
+      if (probe.style.color) computed = getComputedStyle(probe).color || null;
+    }
+  } catch { /* no live document to compute against */ }
+
+  cssColorProbe.cache.set(value, computed);
+  return computed;
+};
+
+const cssColorToHex = (raw) => {
+  if (!raw) return null;
+  let value = raw.trim().toLowerCase();
+
+  // Spreadsheets emit colour keywords as often as hex, and the CSSOM hands those
+  // back unchanged, so resolve anything that isn't already a literal.
+  if (!/^(#|rgba?\()/.test(value)) {
+    const computed = computeCssColor(value);
+    if (!computed) return null;
+    value = computed.trim().toLowerCase();
+  }
+
+  const rgb = value.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.%]+)\s*)?\)$/);
+  if (rgb) {
+    // A fully transparent colour is "no colour", not black.
+    if (rgb[4] !== undefined && parseFloat(rgb[4]) === 0) return null;
+    const channels = [rgb[1], rgb[2], rgb[3]].map((c) => {
+      const n = Math.round(parseFloat(c));
+      return Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+    });
+    return `#${channels.join('')}`;
+  }
+
+  const hex6 = value.match(/^#([0-9a-f]{6})$/);
+  if (hex6) return `#${hex6[1]}`;
+  const hex3 = value.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/);
+  if (hex3) return `#${hex3[1]}${hex3[1]}${hex3[2]}${hex3[2]}${hex3[3]}${hex3[3]}`;
+
+  return null;
+};
+
+/**
+ * Maps the CSS a spreadsheet puts on a pasted cell onto co-sheet's own style
+ * schema, dropping everything that has no equivalent or that the server-side
+ * validator would reject. Every input is optional — a source that specifies
+ * nothing produces an empty object.
+ * @param {Object} css - Inline CSS values (fontWeight, fontStyle, textDecoration,
+ *   color, backgroundColor, textAlign, fontFamily, fontSize), each possibly ''.
+ * @returns {Object} A cell style object holding only the recognized properties.
+ */
+const cellStyleFromCss = (css) => {
+  const style = {};
+  if (!css) return style;
+
+  const weight = (css.fontWeight || '').trim().toLowerCase();
+  // Excel writes `font-weight:700`, Google Sheets `bold`; anything at or above
+  // semibold reads as bold here.
+  if (weight === 'bold' || weight === 'bolder' || (/^\d+$/.test(weight) && Number(weight) >= 600)) style.bold = true;
+
+  const fontStyle = (css.fontStyle || '').trim().toLowerCase();
+  if (fontStyle === 'italic' || fontStyle === 'oblique') style.italic = true;
+
+  const decoration = `${css.textDecoration || ''} ${css.textDecorationLine || ''}`.toLowerCase();
+  if (decoration.includes('underline')) style.underline = true;
+  if (decoration.includes('line-through')) style.strikethrough = true;
+
+  const textColor = cssColorToHex(css.color);
+  if (textColor) style.textColor = textColor;
+  // `color` is the cell's fill in this schema; `textColor` is the glyph colour.
+  const fill = cssColorToHex(css.backgroundColor);
+  // White fills are dropped: a spreadsheet's default background arrives as an
+  // explicit white on every cell, which would otherwise paint the whole block.
+  if (fill && fill !== '#ffffff') style.color = fill;
+
+  const align = (css.textAlign || '').trim().toLowerCase();
+  if (align === 'left' || align === 'center' || align === 'right') style.align = align;
+
+  const family = (css.fontFamily || '').split(',')[0].trim().replace(/^["']|["']$/g, '');
+  if (family && family.length <= 100) style.fontFamily = family;
+
+  const size = (css.fontSize || '').trim().toLowerCase();
+  const sizeMatch = size.match(/^([\d.]+)(pt|px)$/);
+  if (sizeMatch) {
+    const raw = parseFloat(sizeMatch[1]);
+    const points = Math.round(sizeMatch[2] === 'px' ? raw * 0.75 : raw);
+    if (points >= 1 && points <= 400) style.fontSize = points;
+  }
+
+  return style;
+};
+
+/**
+ * Reads the CSS that applies to a table cell. The declarations sit on the <td>
+ * itself and on the wrappers spreadsheets nest inside it (<span>, <font>, <b>),
+ * so descendants are merged over the cell's own values — the innermost element
+ * is the most specific. Presentational tags and attributes are folded in too,
+ * since Excel still emits them.
+ * @param {Element} td - A <td>/<th> from the parsed (inert) clipboard document.
+ * @returns {Object} Inline CSS values for cellStyleFromCss.
+ */
+const cssFromTableCell = (td) => {
+  const css = {};
+  const absorb = (el) => {
+    const s = el.style;
+    if (s) {
+      for (const prop of ['fontWeight', 'fontStyle', 'textDecoration', 'textDecorationLine', 'color', 'backgroundColor', 'textAlign', 'fontFamily', 'fontSize']) {
+        if (s[prop]) css[prop] = s[prop];
+      }
+    }
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'b' || tag === 'strong') css.fontWeight = 'bold';
+    if (tag === 'i' || tag === 'em') css.fontStyle = 'italic';
+    if (tag === 'u') css.textDecoration = `${css.textDecoration || ''} underline`;
+    if (tag === 's' || tag === 'strike' || tag === 'del') css.textDecoration = `${css.textDecoration || ''} line-through`;
+    // Excel's legacy presentational attributes.
+    const bg = typeof el.getAttribute === 'function' ? el.getAttribute('bgcolor') : null;
+    if (bg) css.backgroundColor = bg;
+    const fontColor = tag === 'font' && typeof el.getAttribute === 'function' ? el.getAttribute('color') : null;
+    if (fontColor) css.color = fontColor;
+    const alignAttr = typeof el.getAttribute === 'function' ? el.getAttribute('align') : null;
+    if (alignAttr) css.textAlign = alignAttr;
+  };
+
+  absorb(td);
+  td.querySelectorAll('*').forEach(absorb);
+  return css;
+};
+
+/**
+ * Parses the `text/html` flavour a spreadsheet puts on the clipboard into a grid
+ * of cells with their formatting. Returns null when the payload holds no table
+ * (copied prose, a link, an image), leaving the caller on the plain-text path.
+ *
+ * The markup is parsed into an inert document and only read from — never
+ * inserted into the page — because clipboard content is untrusted.
+ * @param {string} html - Raw `text/html` clipboard payload.
+ * @returns {Array<Array<{text: string, style: Object}>>|null} Rows of cells.
+ */
+const parseClipboardHtmlTable = (html) => {
+  if (!html || typeof DOMParser !== 'function') return null;
+
+  let doc = null;
+  try {
+    doc = new DOMParser().parseFromString(html, 'text/html');
+  } catch { return null; }
+  const table = doc && doc.querySelector ? doc.querySelector('table') : null;
+  if (!table) return null;
+
+  const htmlRows = table.querySelectorAll('tr');
+  if (htmlRows.length === 0) return null;
+
+  // Merged source cells carry colspan/rowspan, so track which slots are already
+  // spoken for; without it every row after a merge would shift left.
+  const grid = [];
+  const taken = new Set();
+  const claim = (r, c) => taken.add(`${r},${c}`);
+  const isTaken = (r, c) => taken.has(`${r},${c}`);
+  const put = (r, c, cell) => {
+    while (grid.length <= r) grid.push([]);
+    const row = grid[r];
+    while (row.length <= c) row.push({ text: '', style: {} });
+    row[c] = cell;
+  };
+
+  htmlRows.forEach((tr, r) => {
+    let c = 0;
+    tr.querySelectorAll('td, th').forEach((td) => {
+      while (isTaken(r, c)) c++;
+
+      // <br> is a line break inside one cell, not a new row.
+      td.querySelectorAll('br').forEach((br) => br.replaceWith(doc.createTextNode('\n')));
+      // Spreadsheets pad cells with non-breaking spaces; they are ordinary
+      // spacing here, and an all-nbsp cell should read as empty.
+      const text = (td.textContent || '').replace(/\u00a0/g, ' ').trim();
+      put(r, c, { text, style: cellStyleFromCss(cssFromTableCell(td)) });
+
+      const span = (name) => Math.max(1, Math.min(50, parseInt(td.getAttribute(name), 10) || 1));
+      const colSpan = span('colspan');
+      const rowSpan = span('rowspan');
+      for (let dr = 0; dr < rowSpan; dr++) {
+        for (let dc = 0; dc < colSpan; dc++) claim(r + dr, c + dc);
+      }
+      c += colSpan;
+    });
+  });
+
+  // Pad short rows so every row is the same width, matching the TSV path.
+  const width = grid.reduce((max, row) => Math.max(max, row.length), 0);
+  if (width === 0) return null;
+  grid.forEach((row) => { while (row.length < width) row.push({ text: '', style: {} }); });
+  return grid;
+};
+
+/**
+ * Writes a grid of pasted cells into the sheet with the active cell as its
+ * top-left corner, committing each cell's text exactly as a typed entry would be.
+ *
+ * A cell's `style` says what the source specified. Plain text specifies nothing
+ * (null), so the destination keeps the formatting it already had; an HTML paste
+ * specifies formatting, so it replaces every property HTML can express —
+ * a bold destination and a plain source end up plain — while leaving properties
+ * HTML does not model (borders, number format, links) in place.
+ * @param {Array<Array<{text: string, style: ?Object}>>} rows - Rows of cells.
+ */
+const pasteCellGrid = (rows) => {
   if (!canEditWorkbook || !activeCellId) return;
 
   const target = parseCellCoord(activeCellId);
@@ -1562,14 +1797,19 @@ const pasteTextGrid = (rows) => {
 
   const historyChanges = [];
   rows.forEach((cols, rowOffset) => {
-    cols.forEach((text, colOffset) => {
+    cols.forEach(({ text, style: sourceStyle }, colOffset) => {
       const newRow = target.row + rowOffset;
       const newColIndex = target.colIndex + colOffset;
       if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
 
       const newCellId = `${getColLetter(newColIndex)}${newRow}`;
       const before = localCells[newCellId] ? JSON.parse(JSON.stringify(localCells[newCellId])) : { formula: '', value: '', style: {} };
-      const cell = { formula: '', value: '', style: before.style ? JSON.parse(JSON.stringify(before.style)) : {} };
+      const style = before.style ? JSON.parse(JSON.stringify(before.style)) : {};
+      if (sourceStyle) {
+        HTML_STYLE_KEYS.forEach((key) => delete style[key]);
+        Object.assign(style, sourceStyle);
+      }
+      const cell = { formula: '', value: '', style };
       applyCellText(cell, text, newCellId);
       localCells[newCellId] = cell;
 
@@ -1634,13 +1874,14 @@ const insertPlainTextAtCaret = (text) => {
 };
 
 /**
- * Routes clipboard text onto the grid, shared by every paste that targets cells
- * rather than a text field: text an in-app copy mirrored out replays through the
- * internal buffer so formulas and styling survive, and anything else is parsed
- * as a table and written as a block from the active cell.
- * @param {string} text - Clipboard text, or '' when there is no text flavour.
+ * Routes a clipboard payload onto the grid, shared by every paste that targets
+ * cells rather than a text field: content an in-app copy mirrored out replays
+ * through the internal buffer, an HTML table is pasted with its formatting, and
+ * anything else falls back to the plain-text table.
+ * @param {string} text - `text/plain` payload, or '' when there is none.
+ * @param {string} [html] - `text/html` payload, when the source offers one.
  */
-const pasteClipboardTextOntoGrid = (text) => {
+const pasteClipboardOntoGrid = (text, html) => {
   // No text flavour on the clipboard (an image, or a mirror-out that failed):
   // keep pasting the in-app buffer, exactly as before there was a paste handler.
   // Same when the payload is still the text an in-app copy mirrored out — the
@@ -1649,7 +1890,35 @@ const pasteClipboardTextOntoGrid = (text) => {
     pasteSelectedCells();
     return;
   }
-  pasteTextGrid(parseClipboardTable(text));
+  // Prefer the HTML flavour: it carries the source's formatting, and its cell
+  // boundaries are explicit, so a value holding tabs or newlines survives
+  // without depending on the plain-text dialect's quoting.
+  const styled = parseClipboardHtmlTable(html);
+  if (styled) {
+    pasteCellGrid(styled);
+    return;
+  }
+  pasteCellGrid(parseClipboardTable(text).map((cols) => cols.map((value) => ({ text: value, style: null }))));
+};
+
+/**
+ * Pulls the text and HTML flavours out of what navigator.clipboard.read()
+ * returned. A flavour that is absent or refuses to be read yields '', leaving
+ * the caller to fall back.
+ * @param {Array} items - ClipboardItems from navigator.clipboard.read().
+ * @returns {Promise<{text: string, html: string}>} The two flavours.
+ */
+const readClipboardItems = async (items) => {
+  let text = '';
+  let html = '';
+  for (const item of items || []) {
+    const types = item && item.types ? item.types : [];
+    try {
+      if (!html && types.includes('text/html')) html = await (await item.getType('text/html')).text();
+      if (!text && types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+    } catch { /* a flavour that refuses to be read is simply skipped */ }
+  }
+  return { text, html };
 };
 
 /**
@@ -1664,8 +1933,13 @@ const pasteFromSystemClipboard = () => {
 
   let read = null;
   try {
-    if (navigator && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-      read = navigator.clipboard.readText();
+    const clip = navigator && navigator.clipboard;
+    if (clip && typeof clip.read === 'function') {
+      // read() exposes every flavour, so a menu paste keeps the source's
+      // formatting just as Ctrl+V does.
+      read = clip.read().then(readClipboardItems);
+    } else if (clip && typeof clip.readText === 'function') {
+      read = clip.readText().then((text) => ({ text, html: '' }));
     }
   } catch { /* clipboard API unavailable */ }
 
@@ -1674,7 +1948,7 @@ const pasteFromSystemClipboard = () => {
     return;
   }
   read.then(
-    (text) => pasteClipboardTextOntoGrid(text),
+    ({ text, html }) => pasteClipboardOntoGrid(text, html),
     () => pasteSelectedCells() // denied, dismissed, or no document focus
   );
 };
@@ -1695,7 +1969,8 @@ const handleDocumentPaste = (e) => {
   if (isHistoryMode || !canEditWorkbook) return;
 
   const clip = e.clipboardData;
-  const text = clip && typeof clip.getData === 'function' ? clip.getData('text/plain') : '';
+  const readFlavour = (type) => (clip && typeof clip.getData === 'function' ? clip.getData(type) : '');
+  const text = readFlavour('text/plain');
 
   const activeEl = document.activeElement;
   if (activeEl && typeof activeEl.getAttribute === 'function' && activeEl.getAttribute('contenteditable') === 'true') {
@@ -1710,7 +1985,7 @@ const handleDocumentPaste = (e) => {
 
   if (!activeCellId) return;
   e.preventDefault();
-  pasteClipboardTextOntoGrid(text);
+  pasteClipboardOntoGrid(text, readFlavour('text/html'));
 };
 
 document.addEventListener('paste', handleDocumentPaste);
