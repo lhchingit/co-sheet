@@ -4227,6 +4227,12 @@ if (formulaBarInput) {
     }
     if (e.key === 'Enter' && (activeCellId || fpOriginCell)) {
       e.preventDefault(); // Prevent default enter key behavior
+      // Stop the keydown bubbling to the document-level handler, which treats
+      // Enter on a selected cell as "start editing it". The blur below runs
+      // first, so by the time the event reached document its "a text field has
+      // focus" guard no longer applied and the just-committed cell was re-opened
+      // for editing, showing its formula source with the caret in it.
+      e.stopPropagation();
       // Commit to the cell the edit started in. For a cross-sheet pick this also
       // returns to that cell's sheet; balanceFormulaParens auto-closes any "(".
       commitFormulaToOrigin(formulaBarInput.value);

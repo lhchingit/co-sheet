@@ -7,107 +7,11 @@
  * existing higher-priority jobs — closing the function autocomplete, ending a
  * formula range pick — so only a press with nothing left to close cancels.
  *
- * The client bundle runs in a VM sandbox; the cell is a mock element whose
- * blur() fires the handler the editor installed, as a browser would.
+ * The sandbox lives in helpers/cell-editor-sandbox.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import vm from 'vm';
-import { readAppBundle } from './helpers/app-bundle.js';
-
-/** Generic element stub for the bits of the DOM the bundle touches on start-up. */
-function createMockElement() {
-  return {
-    value: '', innerText: '', innerHTML: '', className: '', style: {},
-    classList: { add() {}, remove() {}, contains() { return false; } },
-    querySelectorAll: () => [], appendChild() {}, remove() {},
-    setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {}, blur() {}
-  };
-}
-
-/**
- * Boots the bundle with one editable cell wired up.
- * @param {Object} cellState - The stored state of A1 before the edit.
- * @returns {Object} sandbox plus the mock cell element.
- */
-function createSandbox(cellState) {
-  const documentListeners = {};
-  // The formula bar captures its own listeners so a key can be pressed on it.
-  const barListeners = {};
-  const formulaBar = createMockElement();
-  formulaBar.addEventListener = (type, cb) => { (barListeners[type] = barListeners[type] || []).push(cb); };
-
-  // The cell under edit. blur() runs the handler startCellInlineEdit installed,
-  // which is what a real blur does and what commits (or, after Escape, does not).
-  const cell = {
-    attributes: {},
-    setAttribute(name, val) { this.attributes[name] = val; },
-    removeAttribute(name) { delete this.attributes[name]; },
-    getAttribute(name) { return this.attributes[name] != null ? this.attributes[name] : null; },
-    innerText: '',
-    innerHTML: '',
-    className: '',
-    style: {},
-    classList: { add() {}, remove() {}, contains() { return false; } },
-    querySelectorAll: () => [],
-    appendChild() {}, focus() {},
-    blur() { if (typeof this.onblur === 'function') this.onblur(); }
-  };
-
-  const sandbox = {
-    document: {
-      getElementById: (id) => (id === 'formula-bar-input' ? formulaBar : createMockElement()),
-      querySelectorAll: () => [],
-      querySelector: (selector) => (selector === '[data-cell-id="A1"]' ? cell : null),
-      addEventListener(event, cb) { (documentListeners[event] = documentListeners[event] || []).push(cb); },
-      createElement: () => createMockElement(),
-      createRange: () => ({ selectNodeContents() {}, collapse() {} }),
-      body: { appendChild() {}, classList: { add() {}, remove() {} } },
-      activeElement: { tagName: 'BODY', getAttribute: () => null }
-    },
-    window: {
-      location: { protocol: 'http:', host: 'localhost:3000' },
-      addEventListener: () => {},
-      getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
-      // The autocomplete positions its dropdown against the viewport.
-      innerWidth: 1280,
-      innerHeight: 720
-    },
-    WebSocket: class { static OPEN = 1; constructor() { this.readyState = 1; } send() {} },
-    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init ? init.detail : null; } },
-    setTimeout: (fn) => fn(), clearTimeout: () => {}, queueMicrotask: (fn) => fn(),
-    console, Math, parseFloat, parseInt, isNaN, isFinite,
-    String, Object, Array, JSON, Date, Number, Set, Map, RegExp
-  };
-
-  vm.createContext(sandbox);
-  vm.runInContext(readAppBundle() + `
-    Object.defineProperty(globalThis, 'localCells', {
-      get: () => localCells, set: (v) => { localCells = v; }, configurable: true
-    });
-    Object.defineProperty(globalThis, 'activeCellId', {
-      get: () => activeCellId, set: (v) => { activeCellId = v; }, configurable: true
-    });
-    globalThis.startCellInlineEdit = startCellInlineEdit;
-    globalThis.fnAutocomplete = window.CoSheet.fnAutocomplete;
-  `, sandbox);
-
-  // Only now: the bundle declares its own localCells/activeCellId, which shadow
-  // anything seeded on the sandbox before it runs.
-  sandbox.localCells = { 'A1': cellState };
-  sandbox.activeCellId = 'A1';
-  sandbox.cell = cell;
-  sandbox.formulaBar = formulaBar;
-  /** Presses a key on the cell being edited. */
-  sandbox.pressKey = (key) => cell.onkeydown({
-    key, preventDefault() {}, stopPropagation() {}
-  });
-  /** Presses a key on the formula bar, as a browser would deliver it. */
-  sandbox.pressBarKey = (key) => (barListeners['keydown'] || []).forEach((cb) => cb({
-    key, preventDefault() {}, stopPropagation() {}
-  }));
-  return sandbox;
-}
+import { createCellEditorSandbox as createSandbox } from './helpers/cell-editor-sandbox.js';
 
 test('Escape abandons the edit and the blur that follows commits nothing', () => {
   // --- Arrange: A1 holds 100 and is being edited ---
