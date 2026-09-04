@@ -2282,6 +2282,19 @@ const performRedo = () => {
   updateUndoRedoButtonsState();
 };
 
+// Coords whose formula is currently being evaluated, as `sheet!coord`. A
+// reference back into this set is a genuine circular reference — the check that
+// replaced the engine's recursion-depth counter, which reported #REF! for long
+// but perfectly legal chains (see #191). Always active: it is a stack, emptied as
+// evaluation unwinds, so it can never hold a stale entry.
+const evaluatingCells = new Set();
+
+// Computed formula values for the recalc pass in progress, or null between
+// passes. Scoped to a pass on purpose: within one, a cell's value cannot change,
+// so evaluating each cell once is safe; outside one the sheet can change under
+// us, and a stale value would be far worse than a slow one. See recalculateSheet.
+let activeValueMemo = null;
+
 /**
  * Gets cell display value, evaluating formulas if present.
  * @param {string} coord - Cell coordinates.
@@ -2298,16 +2311,52 @@ const getCellValue = (coord, depth = 0, sheetName = null) => {
   const cell = cells[coord];
   if (!cell) return '';
   if (cell.formula) {
-    // Imported .xlsx formulas can use functions this engine doesn't implement.
-    // Re-evaluating those would overwrite Excel's cached result with #NAME? (or a
-    // blank, when the formula wraps the call in IFERROR), so when the cell carries
-    // a cached value, keep displaying it for any formula the engine can't fully
-    // compute. With no cached value to preserve (e.g. a formula typed into an empty
-    // cell), fall through and show the engine's honest error instead of a blank.
-    if (cell.value && !formulaIsSupported(cell.formula)) return cell.value;
-    return evaluateFormula(cell.formula, depth, coord, sheetName != null ? sheetName : null);
+    // Identity of this cell across sheets, for the memo and the cycle stack.
+    const key = `${sheetName != null ? sheetName : activeSheetName}!${coord}`;
+    // A cell already being evaluated further down the stack is a true circular
+    // reference — the only thing that should report #REF!. This replaces the
+    // engine's old depth counter, which could not tell a cycle from a long legal
+    // chain and so failed both ways (see #191).
+    if (evaluatingCells.has(key)) return '#REF!';
+    // Within a recalc pass a cell's value cannot change, so evaluate each one
+    // once. Without this, a cell referencing two others doubles the work per
+    // level: 30 rows of =A(n-1)+A(n-2) took 2.18M evaluations and five seconds.
+    if (activeValueMemo) {
+      const memoized = activeValueMemo.get(key);
+      if (memoized !== undefined) return memoized;
+    }
+    let result;
+    evaluatingCells.add(key);
+    try {
+      result = evaluateCellFormula(cell, coord, depth, sheetName);
+    } finally {
+      evaluatingCells.delete(key);
+    }
+    if (activeValueMemo) activeValueMemo.set(key, result);
+    return result;
   }
   return cell.value || '';
+};
+
+/**
+ * Evaluate one cell's formula, honouring the imported-result protection.
+ * Split out of getCellValue so the memo/cycle bookkeeping there reads in one
+ * piece; the behaviour is unchanged.
+ * @param {{formula: string, value: string}} cell
+ * @param {string} coord
+ * @param {number} depth
+ * @param {string|null} sheetName
+ * @returns {string}
+ */
+const evaluateCellFormula = (cell, coord, depth, sheetName) => {
+  // Imported .xlsx formulas can use functions this engine doesn't implement.
+  // Re-evaluating those would overwrite Excel's cached result with #NAME? (or a
+  // blank, when the formula wraps the call in IFERROR), so when the cell carries
+  // a cached value, keep displaying it for any formula the engine can't fully
+  // compute. With no cached value to preserve (e.g. a formula typed into an empty
+  // cell), fall through and show the engine's honest error instead of a blank.
+  if (cell.value && !formulaIsSupported(cell.formula)) return cell.value;
+  return evaluateFormula(cell.formula, depth, coord, sheetName != null ? sheetName : null);
 };
 
 /**
@@ -2437,21 +2486,32 @@ window.CoSheet.formula.setCellResolver(getCellValue);
  * Triggers cascading recalculation of all formula cells in the sheet.
  */
 const recalculateSheet = () => {
-  Object.keys(localCells).forEach(coord => {
-    const cell = localCells[coord];
-    if (cell && cell.formula) {
-      // Leave a formula the engine can't compute untouched when it carries an
-      // imported cached value, so that value survives (see getCellValue):
-      // re-evaluating would clobber it. Without a cached value there's nothing to
-      // protect, so fall through and let the engine produce its result/error.
-      if (cell.value && !formulaIsSupported(cell.formula)) return;
-      const newVal = evaluateFormula(cell.formula, 0, coord);
-      if (newVal !== cell.value) {
-        cell.value = newVal;
-        updateGridDOMCell(coord, newVal, cell.style);
+  // One memo for the whole pass, so a cell referenced by several formulas — or by
+  // a chain of them — is evaluated once rather than once per path to it. Torn down
+  // in the finally so nothing outside the pass can read a value the sheet has
+  // since moved past.
+  // Saved and restored rather than simply cleared, so a nested pass (none today,
+  // but the DOM updates below run arbitrary rendering code) can never tear down
+  // the outer pass's memo.
+  const outerMemo = activeValueMemo;
+  activeValueMemo = new Map();
+  try {
+    Object.keys(localCells).forEach(coord => {
+      const cell = localCells[coord];
+      if (cell && cell.formula) {
+        // getCellValue applies the same imported-result protection this loop used
+        // to repeat inline: a formula the engine can't compute keeps its cached
+        // value, so the comparison below sees no change and leaves it alone.
+        const newVal = getCellValue(coord);
+        if (newVal !== cell.value) {
+          cell.value = newVal;
+          updateGridDOMCell(coord, newVal, cell.style);
+        }
       }
-    }
-  });
+    });
+  } finally {
+    activeValueMemo = outerMemo;
+  }
 };
 
 /**

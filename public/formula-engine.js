@@ -906,7 +906,7 @@ const formulaIsSupported = (formula) => {
   if (cached !== undefined) return cached;
   let ok;
   try {
-    ok = nodeIsSupported(parseFormula(tokenizeFormula(formula.slice(1))));
+    ok = nodeIsSupported(parsedFormula(formula));
   } catch (e) {
     ok = false; // won't parse -> the engine can't evaluate it either
   }
@@ -915,11 +915,41 @@ const formulaIsSupported = (formula) => {
   return ok;
 };
 
+// Parsed formulas, keyed by their source text. A formula is evaluated many times —
+// once per reference to its cell, and again on every full-sheet recalc — and
+// tokenizing + parsing it each time was pure repetition: the text has not changed.
+// Bounded and cleared wholesale like supportCache above; formula texts are short
+// and stable, so the cache is small in practice and the reset is cheap.
+const astCache = new Map();
+const AST_CACHE_MAX = 20000;
+
+/** The parsed tree for a formula's text (without the leading '='), cached. */
+const parsedFormula = (formula) => {
+  const cached = astCache.get(formula);
+  if (cached !== undefined) return cached;
+  const ast = parseFormula(tokenizeFormula(formula.slice(1)));
+  if (astCache.size >= AST_CACHE_MAX) astCache.clear();
+  astCache.set(formula, ast);
+  return ast;
+};
+
+// Ceiling on nested cell evaluation. This is NOT the circular-reference check —
+// the host's resolver detects a true cycle by the coords on its stack, and a
+// counter cannot tell a cycle from a long legal chain anyway. It used to be 50,
+// which meant a plain chain of `=B(n-1)+1` reported #REF! from B53 down even
+// though nothing was circular. It survives only to keep a pathological chain from
+// overflowing the JS stack, so it sits far above any realistic sheet (a column is
+// 1000 rows) while staying well inside the engine's stack budget.
+const MAX_EVAL_DEPTH = 500;
+
 /**
  * Evaluates a formula string (e.g. =SUM(A1:A5), =IF(A1>0,"y","n")) to a display
  * string. Returns spreadsheet-style error codes (#DIV/0!, #N/A, …) on failure.
  * @param {string} formula - Formula text starting with '='.
- * @param {number} [recursionDepth=0] - Guards against circular references.
+ * @param {number} [recursionDepth=0] - Nesting depth, as a JS-stack backstop only.
+ *   Circular references are detected by the host's cell resolver (which knows
+ *   which coords are on the stack); this counter only stops a pathologically deep
+ *   chain from overflowing the stack. See MAX_EVAL_DEPTH.
  * @param {string|null} [ownerCoord=null] - Coord of the cell holding this formula
  *   (lets ROW()/COLUMN() with no argument resolve their own position).
  * @param {string|null} [baseSheet=null] - Sheet the formula lives on; unqualified
@@ -928,10 +958,10 @@ const formulaIsSupported = (formula) => {
  * @returns {string} Evaluated display value.
  */
 const evaluateFormula = (formula, recursionDepth = 0, ownerCoord = null, baseSheet = null) => {
-  if (recursionDepth > 50) return '#REF!'; // circular / excessively deep reference
+  if (recursionDepth > MAX_EVAL_DEPTH) return '#REF!';
   if (typeof formula !== 'string' || !formula.startsWith('=')) return formula;
   try {
-    const ast = parseFormula(tokenizeFormula(formula.slice(1)));
+    const ast = parsedFormula(formula);
     const result = evalNode(ast, { depth: recursionDepth, owner: ownerCoord, sheet: baseSheet });
     if (isRange(result)) return flattenRange(result).map(formatScalar).join(', ');
     return formatScalar(result);
