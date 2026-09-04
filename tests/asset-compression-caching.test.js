@@ -4,8 +4,9 @@ process.env.NODE_ENV = 'test';
  * @file asset-compression-caching.test.js
  * @description Client assets are compressed on the wire, and their caching policy
  * follows the content-hash version query: a `?v=<hash>` URL is immutable (the hash
- * is the cache key, so it never needs revalidating), while an unstamped URL — the
- * form drive.html and login.html still use — must revalidate. Replaces the blanket
+ * is the cache key, so it never needs revalidating), while an unstamped URL — which
+ * no page emits any more, but a direct hit can still ask for — must revalidate.
+ * Replaces the blanket
  * `no-store` that re-sent every byte of the ~861 KB bundle on every page load.
  * See tests/asset-cache-busting.test.js for the stamping itself.
  */
@@ -77,7 +78,9 @@ test('assets are gzipped, and cached by their content-hash version', async () =>
     );
 
     // An unstamped URL carries no freshness proof, so it must be revalidated —
-    // but as a 304, not the full body the old no-store forced.
+    // but as a 304, not the full body the old no-store forced. No page references
+    // assets this way any more (see asset-stamping.test.js), but a direct or
+    // bookmarked hit must still never be pinned for a year.
     const plain = await get(`http://localhost:${PORT}/drive.js`);
     assert.strictEqual(plain.statusCode, 200);
     assert.strictEqual(plain.headers['cache-control'], 'no-cache', 'an unstamped asset revalidates');
