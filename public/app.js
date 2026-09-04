@@ -4014,6 +4014,9 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   refreshFormulaRefHighlights();
   cellEl.oninput = () => { onFormulaEditorTyped(); window.CoSheet.fnAutocomplete.update(makeCellEditor(cellEl)); };
 
+  // Set by Escape so the blur it triggers tears the editor down without saving.
+  let editAbandoned = false;
+
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
     window.CoSheet.fnAutocomplete.close();
@@ -4023,6 +4026,13 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     const text = balanceFormulaParens(cellEl.innerText.trim());
     activeFormulaEditor = null;
     resetFormulaPick();
+    if (editAbandoned) {
+      // Escape discarded this edit: re-render the cell from the state it still
+      // holds, so the typed text leaves no trace and nothing is committed.
+      const cellData = localCells[cellId] || { formula: '', value: '', style: {} };
+      updateGridDOMCell(cellId, getCellValue(cellId), cellData.style || {});
+      return;
+    }
     saveCellUpdate(cellId, text);
   };
 
@@ -4041,6 +4051,16 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     if (e.key === 'Escape' && cancelFormulaPick()) {
       e.preventDefault();
       e.stopPropagation();
+      return;
+    }
+    // With nothing left for it to close, Escape abandons the edit: the cell goes
+    // back to what it held and nothing is written. Without this the typed text
+    // stays put and the next blur commits exactly what the user discarded.
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      editAbandoned = true;
+      cellEl.blur(); // runs saveInlineEdit, which restores instead of saving
       return;
     }
     if (e.key === 'Enter') {
