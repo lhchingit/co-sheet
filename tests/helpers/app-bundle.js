@@ -17,6 +17,7 @@ export function readAppBundle() {
     read('sheet-utils.js'),
     read('formula-engine.js'),
     read('i18n.js'),
+    read('sheet-functions.js'),
     read('version-history.js'),
     read('find-replace.js'),
     read('color-palette.js'),
