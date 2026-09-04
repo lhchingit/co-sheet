@@ -1836,7 +1836,10 @@ test('Formula Bar - Selecting a cell updates input value and pressing Enter upda
   mockFormulaBar.value = '=B1+30';
   mockFormulaBar.listeners['keydown']({
     key: 'Enter',
-    preventDefault() {}
+    preventDefault() {},
+    // The bar stops the key here so it cannot bubble to the document handler and
+    // re-open the committed cell for editing (#177).
+    stopPropagation() {}
   });
 
   // --- Assert 2 ---
