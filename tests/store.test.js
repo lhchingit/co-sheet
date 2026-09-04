@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 /**
  * Helper to make a JSON HTTP request, optionally passing headers (like Cookie).
@@ -110,8 +111,8 @@ test('Sheet cell state is correctly loaded from and saved to the database', asyn
     env: { ...process.env, PORT: '31260', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
-  // Wait 1.5 seconds for the Express server to boot up and start listening.
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer('31260');
 
   try {
     // Authenticate and obtain the session cookie
@@ -156,8 +157,8 @@ test('Sheet cell state is correctly loaded from and saved to the database', asyn
       env: { ...process.env, PORT: '31260', NODE_ENV: 'test', DATABASE_URL: db.url }
     });
 
-    // Wait for the server to boot up.
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Poll until the server is listening, rather than racing a fixed sleep.
+    await waitForServer('31260');
 
     try {
       // Authenticate against the restarted server to get a new session
@@ -192,7 +193,7 @@ test('Access to /api/cells requires authentication when not authenticated', asyn
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: '31261', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await waitForServer('31261');
 
   try {
     // --- Act ---
@@ -217,7 +218,7 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
   const child = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: '31262', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await waitForServer('31262');
 
   try {
     // Login to obtain authentication cookie.

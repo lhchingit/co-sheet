@@ -16,6 +16,7 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 /** Make a JSON HTTP request, optionally with headers (e.g. Cookie). */
 function makeRequest(url, method, body = null, headers = {}) {
@@ -64,7 +65,7 @@ test('Permissions - RBAC roles, env super admin bootstrap, and role-change guard
     env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url, SUPER_ADMIN_EMAILS: 'boss,root' }
   });
   child.stderr.on('data', (d) => console.error(`[Server ${PORT} STDERR] ${d.toString().trim()}`));
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitForServer(PORT);
 
   try {
     // Super admins are bootstrapped from the environment.

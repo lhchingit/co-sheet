@@ -14,6 +14,7 @@ import { spawn } from 'child_process';
 import WebSocket from 'ws';
 import http from 'http';
 import { createTestDb } from './helpers/db.js';
+import { waitForServer } from './helpers/wait-for-server.js';
 
 /**
  * Helper to make a JSON HTTP request, optionally passing headers (like Cookie).
@@ -94,8 +95,8 @@ test('WebSocket - Client receives init payload on connect', async () => {
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
-  // Wait 1.5 seconds for the server to start listening.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let ws;
   try {
@@ -144,8 +145,8 @@ test('WebSocket - Active cursor presence and cursor-move events are broadcasted 
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
-  // Wait 1.5 seconds for the server to start listening.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let wsA, wsB;
   try {
@@ -226,8 +227,8 @@ test('WebSocket - Cell-edit events are processed, saved to store, and broadcaste
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
-  // Wait 1.5 seconds for the server to start listening.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let wsA, wsB;
   try {
@@ -316,8 +317,8 @@ test('WebSocket - Client disconnect broadcasts user-leave event to remaining cli
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
-  // Wait 1.5 seconds for the server to start listening.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer(PORT);
 
   let wsA, wsB;
   try {
@@ -403,7 +404,7 @@ test('WebSocket - Heartbeat reaps a silently-dropped connection and broadcasts u
   });
   child.stderr.on('data', (data) => console.error(`[Server ${PORT} STDERR] ${data.toString().trim()}`));
 
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await waitForServer(PORT);
 
   let wsDead, wsObserver;
   try {
@@ -469,7 +470,7 @@ test('WebSocket - Collaborative sheet additions, sheet isolation, and sheet-spec
     env: { ...process.env, PORT: '31305', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await waitForServer('31305');
 
   const clientA = new WebSocket(wsUrl);
   const clientB = new WebSocket(wsUrl);
@@ -536,8 +537,8 @@ test('WebSocket - Collaborative sheet delete, copy, rename, color, hide, and reo
     env: { ...process.env, PORT: '31306', NODE_ENV: 'test', DATABASE_URL: db.url }
   });
 
-  // Wait 1.5 seconds for the server to start listening
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  // Poll until the server is listening, rather than racing a fixed sleep.
+  await waitForServer('31306');
 
   // Initialize two WebSocket client instances to verify broadcasts
   const clientA = new WebSocket(wsUrl);
