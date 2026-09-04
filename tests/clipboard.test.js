@@ -201,8 +201,11 @@ test('Clipboard - Copy, Cut, and Paste logic with keyboard shortcuts', () => {
     preventDefault() { preventDefaultCalled = true; }
   });
 
-  // --- Assert 6: Verify paste was called via keyboard shortcut ---
-  assert.ok(preventDefaultCalled, 'preventDefault should be called for Ctrl+V');
+  // --- Assert 6: Ctrl+V must NOT cancel the key (#168): the browser's own paste
+  // event is the only way to read the system clipboard, and preventDefault would
+  // stop it firing. The deferred fallback still pastes the in-app buffer when no
+  // paste event arrives — the sandbox's setTimeout shim runs it synchronously.
+  assert.ok(!preventDefaultCalled, 'preventDefault should NOT be called for Ctrl+V');
   assert.strictEqual(sandbox.localCells['B2'].value, 'Keyboard Value', 'B2 should now contain pasted value');
   assert.strictEqual(sandbox.localCells['B2'].style.italic, true, 'B2 should retain style from A1');
 
