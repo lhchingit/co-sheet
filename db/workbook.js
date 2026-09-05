@@ -16,7 +16,13 @@ import { pool } from './pool.js';
 export async function getWorkbookState(key) {
   const r = await pool.query('SELECT state FROM workbook_state WHERE key = $1', [key]);
   if (!r.rows || r.rows.length === 0) return undefined;
-  return r.rows[0].state;
+  const state = r.rows[0].state;
+  // The column is TEXT (see db/schema.js), so the driver hands back a string; it
+  // used to be JSONB, where the driver parsed it for us. Callers want the state
+  // object either way — which storage format holds it is this layer's business, and
+  // tolerating both keeps the repository correct against a database whose migration
+  // has not run yet.
+  return typeof state === 'string' ? JSON.parse(state) : state;
 }
 
 /**
