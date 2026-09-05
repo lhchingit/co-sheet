@@ -3729,7 +3729,13 @@ const renderSpreadsheetGrid = () => {
     // cursor; dragging resizes the whole column (see startDimensionResize).
     if (!isHistoryMode && !colIsHidden) {
       const resizeHandle = document.createElement('div');
-      resizeHandle.className = 'col-resize-handle';
+      // The rightmost column's handle sits fully inside its track: the usual
+      // straddling offset would hang 3px past the last one, and that overhang
+      // counts towards the viewport's scrollWidth, keeping the column from
+      // reaching the vertical scrollbar's reserved lane (#226).
+      resizeHandle.className = c === colCount - 1
+        ? 'col-resize-handle col-resize-handle-last'
+        : 'col-resize-handle';
       resizeHandle.addEventListener('mousedown', (e) => {
         if (e.button !== 0 || !canEditWorkbook) return;
         // Swallow the event so the header's column-select mousedown doesn't fire.
@@ -11435,8 +11441,23 @@ function initGridScrollbars() {
     hbar.style.left = `${gw}px`;
 
     const vScrollable = viewport.scrollHeight - viewport.clientHeight;
-    const hScrollable = viewport.scrollWidth - viewport.clientWidth;
     const vVisible = vScrollable > 1;
+    // Reserve the vertical bar's lane rather than letting the bar cover scrollable
+    // content: the viewport's right edge stops where the bar begins, so the last
+    // column can never scroll underneath it (#68) and ends flush against it, the
+    // way Google Sheets does. Before #226 the bar was drawn over the viewport and
+    // a 42px padding on #grid-root pushed the last column clear of it, which left
+    // a blank strip that grew with the grid's zoom.
+    //
+    // Written before any width is read below. The decision comes from the height
+    // metrics, which the reservation cannot affect (grid rows never reflow with
+    // the width), so reserving the lane can't feed back into whether it is needed.
+    // It follows vVisible rather than the vShown computed further down, whose extra
+    // minimum-track condition can only differ in a viewport a few dozen pixels
+    // tall — there the lane is empty but harmless.
+    viewport.style.right = vVisible ? `${BAR}px` : '';
+
+    const hScrollable = viewport.scrollWidth - viewport.clientWidth;
     const hVisible = hScrollable > 1;
 
     // Reserve the shared far corner only when the perpendicular bar is present;
