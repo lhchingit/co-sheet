@@ -1285,7 +1285,7 @@ const updateRangeSelectionUI = () => {
   // full-height drag all qualify), a row header when it spans every rendered
   // column. Anything less keeps the light active-header tint.
   const spansAllRows = minRow === 1 && maxRow === TOTAL_ROWS;
-  const spansAllCols = minColIndex === 0 && maxColIndex === getColCount() - 1;
+  const spansAllCols = minColIndex === 0 && maxColIndex === renderedColCount - 1;
 
   // Highlight cells and headers in range. Lookups go through the O(1) render
   // indexes (getColHeaderEl / getRowHeaderEl / getCellEl), and each highlighted
@@ -1335,7 +1335,7 @@ const updateRangeSelectionUI = () => {
     const b = rangeBounds(range.startId, range.endId);
     if (!b) continue;
     const bSpansAllRows = b.minRow === 1 && b.maxRow === TOTAL_ROWS;
-    const bSpansAllCols = b.minCol === 0 && b.maxCol === getColCount() - 1;
+    const bSpansAllCols = b.minCol === 0 && b.maxCol === renderedColCount - 1;
     for (let c = b.minCol; c <= b.maxCol; c++) {
       const colLetter = getColLetter(c);
       const extraColHeader = getColHeaderEl(colLetter);
@@ -2701,7 +2701,7 @@ const flushPendingOverflow = () => {
   const rows = Array.from(pendingOverflowRows);
   pendingOverflowRows.clear();
   if (isHistoryMode) return;
-  const cols = getColCount();
+  const cols = renderedColCount;
   // Re-evaluate spill for every cell across the pending rows (a cleared/edited cell
   // can change whether its row-mates spill, so the whole row is reconsidered).
   const candidates = [];
@@ -2757,7 +2757,7 @@ const applyCellSpill = (cellEl, cellId) => {
   // Count consecutive empty neighbours available for the text to spill over.
   let rightCols = 0;
   if (spillRight) {
-    const cols = getColCount();
+    const cols = renderedColCount;
     for (let c = coord.colIndex + 1; c < cols; c++) {
       if (getCellValue(`${getColLetter(c)}${coord.row}`) !== '') break;
       rightCols++;
@@ -3092,26 +3092,68 @@ const WINDOW_OVERSCAN = 8;
 let activeSheetWindowed = false;
 let lastRenderedRowWindow = '';
 
-/** Whether the active sheet has any wrapped-text cell. A wrapped row's height
- *  depends on text layout (content x column width x font), which the model can't
- *  compute without measuring, so computeRowWindow's scroll->row mapping would be
- *  wrong; such sheets fall back to the full render. Font-driven growth, by
- *  contrast, is modelled deterministically (see rebuildAutoFontRowHeights). */
-const sheetHasWrappedRows = () => {
-  const cells = localSheets[activeSheetName];
-  if (!cells) return false;
-  for (const id in cells) {
-    const st = cells[id] && cells[id].style;
-    if (st && st.textWrap === 'wrap') return true;
-  }
-  return false;
-};
+// Column count of the grid as last rendered. Consumers that describe what is on
+// screen — the selection highlight, the overflow spill — read this instead of
+// re-deriving it from the model, which meant walking every cell of the sheet on
+// paths that run per mousemove and per spilling cell. It is also the more correct
+// source for them: a column the model has grown but no render has built yet is not
+// on screen to highlight or spill across.
+let renderedColCount = DEFAULT_COLS;
 
-/** Whether this render should window its rows. Merges are supported (the render
- *  force-includes anchor rows whose span reaches into the window); only wrapped
- *  text — whose row height isn't modelled — still forces the full render. */
-const shouldWindowRows = () =>
-  windowingEnabled && !isHistoryMode && !sheetHasWrappedRows();
+/**
+ * Everything a render derives from the active sheet's cells, in ONE pass.
+ *
+ * These three answers used to be three separate walks of every cell — the
+ * rightmost populated column (getColCount), the font-driven row heights
+ * (rebuildAutoFontRowHeights) and whether any cell wraps (sheetHasWrappedRows) —
+ * and a scroll that moves the row window re-renders, so all three ran on every
+ * scroll frame. On a full sheet that was most of the render's cost; fused they
+ * are one walk. The column index is parsed inline rather than through
+ * parseCellCoord, whose regex and result object are wasteful at this scale.
+ *
+ * @returns {{maxColIndex: number, fontRowHeights: Object, hasWrappedRows: boolean}}
+ *   maxColIndex is the rightmost populated column (floored at the default grid
+ *   width); fontRowHeights maps a row to the height a large-font cell grows it to;
+ *   hasWrappedRows is true if any cell wraps, whose height the model cannot
+ *   predict — such sheets fall back to the full render.
+ */
+const scanActiveSheetModel = () => {
+  const cells = localSheets[activeSheetName];
+  let maxColIndex = DEFAULT_COLS - 1;
+  const fontRowHeights = Object.create(null);
+  let hasWrappedRows = false;
+  if (!cells) return { maxColIndex, fontRowHeights, hasWrappedRows };
+
+  for (const id in cells) {
+    // Leading A-Z run -> 1-based column number, then the digits are the row.
+    // Ids that don't match that shape are skipped, as parseCellCoord's
+    // /^([A-Z]+)(\d+)$/ did.
+    let colNumber = 0;
+    let i = 0;
+    for (; i < id.length; i++) {
+      const ch = id.charCodeAt(i);
+      if (ch < 65 || ch > 90) break;
+      colNumber = colNumber * 26 + (ch - 64);
+    }
+    if (i === 0 || i === id.length) continue;
+    const firstDigit = id.charCodeAt(i);
+    if (firstDigit < 48 || firstDigit > 57) continue;
+    if (colNumber - 1 > maxColIndex) maxColIndex = colNumber - 1;
+
+    const cell = cells[id];
+    const style = cell && cell.style;
+    if (!style) continue;
+    if (style.textWrap === 'wrap') hasWrappedRows = true;
+    // Only a value-bearing cell above the default font grows its row (this
+    // mirrors the renderer's `val ?`); 0 / false count as present.
+    if (!style.fontSize || cell.value == null || cell.value === '') continue;
+    const minHeight = getCellMinHeight(style.fontSize);
+    if (!minHeight) continue;
+    const row = parseInt(id.slice(i), 10);
+    if (!(fontRowHeights[row] >= minHeight)) fontRowHeights[row] = minHeight;
+  }
+  return { maxColIndex, fontRowHeights, hasWrappedRows };
+};
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the
  *  overscan, derived from scrollTop and the model row heights. */
@@ -3191,8 +3233,20 @@ const renderSpreadsheetGrid = () => {
   gridRowHeaderIndex = new Map();
   gridColHeaderIndex = new Map();
 
+  // One walk of the active sheet's cells for everything this render derives from
+  // the model (see scanActiveSheetModel). History previews read their column count
+  // from the snapshot instead, which getColCount handles; that path re-renders only
+  // on user action, never on scroll.
+  const sheetModel = scanActiveSheetModel();
   // Column count for this render — grows past A-Z as data extends rightward.
-  const colCount = getColCount();
+  const colCount = isHistoryMode
+    ? getColCount()
+    : Math.min(Math.max(sheetModel.maxColIndex + 1, colCounts[activeSheetName] || 0), MAX_COLS);
+  // Published for the consumers that describe the RENDERED grid rather than the
+  // model — the selection highlight and the text-overflow spill. They ran
+  // getColCount themselves, which walked every cell again: once per mousemove of a
+  // drag-select, and once per spilling cell.
+  renderedColCount = colCount;
 
   // Merge coverage for this render. When the active sheet has merged cells we
   // switch the grid from auto-flow to explicit line placement so anchors can
@@ -3210,13 +3264,16 @@ const renderSpreadsheetGrid = () => {
   // its true track despite the skipped rows before it. The frozen band and the
   // active cell's row are always kept so freeze and cell editing keep working.
   // Recorded on module state so the scroll handler knows the current window.
-  // With windowing enabled, refresh font-driven row heights first so getRowHeight
+  // With windowing enabled, publish the font-driven row heights so getRowHeight
   // (used by the window math and the row template) is authoritative for large-font
-  // rows. Skipped when the flag is off: the empty map leaves getRowHeight at the
+  // rows. Left alone when the flag is off: the empty map leaves getRowHeight at the
   // default, and the row template's minmax(21px, auto) + the cell's min-height
-  // reproduce the old height — so the default path pays nothing.
-  if (windowingEnabled) rebuildAutoFontRowHeights();
-  const windowActive = shouldWindowRows();
+  // reproduce the old height — so the default path is unchanged.
+  if (windowingEnabled) autoFontRowHeights = sheetModel.fontRowHeights;
+  // Merges are windowed (the render force-includes anchor rows whose span reaches
+  // into the window); only wrapped text — whose row height isn't modelled — still
+  // forces the full render.
+  const windowActive = windowingEnabled && !isHistoryMode && !sheetModel.hasWrappedRows;
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
   lastRenderedRowWindow = windowActive ? `${rowWin.start}:${rowWin.end}` : '';
@@ -3621,7 +3678,7 @@ const renderSpreadsheetGrid = () => {
   gridIndexPopulated = true;
 
   // Apply per-sheet column widths / row heights to the freshly built grid.
-  applyGridTemplate(gridRoot);
+  applyGridTemplate(gridRoot, colCount);
 
   // Re-apply the selection highlight (cell fill, overlay and header styling)
   // after the grid is rebuilt, so it survives re-renders — including a
@@ -3696,19 +3753,32 @@ const FREEZE_BORDER = '2px solid #919191';
  * 1-row-per-grid-track mapping; the column template is still written there.
  * @param {HTMLElement} gridRoot
  */
-function applyGridTemplate(gridRoot) {
+// Last grid-template value written for each axis. A scroll that moves the row
+// window re-renders, and the row template is a TOTAL_ROWS-track string that is
+// identical across all of those renders — assigning it anyway invalidated style
+// and layout for the whole grid on every scroll frame. Comparing first is far
+// cheaper than the recalculation an identical write still triggers.
+const lastGridTemplate = { gridTemplateColumns: null, gridTemplateRows: null };
+
+/** Assign a grid-template axis only when its value actually changed. */
+const writeGridTemplate = (gridRoot, axis, value) => {
+  if (lastGridTemplate[axis] === value) return;
+  lastGridTemplate[axis] = value;
+  gridRoot.style[axis] = value;
+};
+
+function applyGridTemplate(gridRoot, colCount = getColCount()) {
   // Columns: gutter + each column's resolved width. Always written (even in
   // history mode) so a sheet grown past A-Z gets enough tracks for every column
   // — the base CSS only defines 26.
-  const colCount = getColCount();
   const cols = [`${GUTTER_WIDTH}px`];
   for (let c = 0; c < colCount; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
-  gridRoot.style.gridTemplateColumns = cols.join(' ');
+  writeGridTemplate(gridRoot, 'gridTemplateColumns', cols.join(' '));
 
   // Rows are skipped in history mode, where collapsed "unedited" bars break the
   // 1-row-per-grid-track mapping.
   if (isHistoryMode) {
-    gridRoot.style.gridTemplateRows = '';
+    writeGridTemplate(gridRoot, 'gridTemplateRows', '');
     return;
   }
   // Rows: emit an explicit track for the header band + every row, so each row has
@@ -3725,7 +3795,7 @@ function applyGridTemplate(gridRoot) {
     const h = m && m[r];
     rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : `minmax(${getRowHeight(r)}px, auto)`);
   }
-  gridRoot.style.gridTemplateRows = rows.join(' ');
+  writeGridTemplate(gridRoot, 'gridTemplateRows', rows.join(' '));
 }
 
 // Active drag-resize state ({ dimension, key, headerEl, start, startSize, guide,
@@ -5584,34 +5654,6 @@ const getCellMinHeight = (fontSize) => {
   const size = clampFontSize(fontSize);
   if (size === null || size <= DEFAULT_FONT_SIZE) return null;
   return Math.round(size * PT_TO_PX * CELL_LINE_HEIGHT_FACTOR) + CELL_VERTICAL_PADDING;
-};
-
-/**
- * Recompute the active sheet's font-driven row heights (see autoFontRowHeights)
- * from the model: a row grows to the tallest getCellMinHeight among its non-empty
- * cells. Deterministic and DOM-free — it mirrors the per-cell min-height the
- * renderer applies (only a value-bearing cell above the default font grows a row)
- * — so getRowHeight stays exact for these rows even when they are off-screen.
- * Called once per render; the map then serves the scroll handler between renders.
- */
-const rebuildAutoFontRowHeights = () => {
-  const next = Object.create(null);
-  const cells = localSheets[activeSheetName];
-  if (cells) {
-    for (const id in cells) {
-      const cell = cells[id];
-      // Only a value-bearing cell grows its row (matches the renderer's `val ?`);
-      // treat 0 / false as present, skip null / undefined / empty string.
-      if (!cell || !cell.style || !cell.style.fontSize) continue;
-      if (cell.value == null || cell.value === '') continue;
-      const mh = getCellMinHeight(cell.style.fontSize);
-      if (!mh) continue;
-      const coord = parseCellCoord(id);
-      if (!coord) continue;
-      if (!(next[coord.row] >= mh)) next[coord.row] = mh;
-    }
-  }
-  autoFontRowHeights = next;
 };
 
 /**
