@@ -2612,8 +2612,6 @@ const COLUMN_WIDTH = 100;
 // path. Rebuilt wholesale by each full render; targeted updates mutate cells in
 // place, so the cached element references stay live until the next full render.
 let gridCellIndex = new Map();
-const getCellEl = (cellId) =>
-  gridCellIndex.get(cellId) || document.querySelector(`[data-cell-id="${cellId}"]`);
 
 // Row/column header element indexes, populated by the same render that builds
 // gridCellIndex. The selection highlighter touches a header per row and per
@@ -2621,10 +2619,34 @@ const getCellEl = (cellId) =>
 // querySelector path (see #96), matching getCellEl for the cell grid.
 let gridRowHeaderIndex = new Map();
 let gridColHeaderIndex = new Map();
+
+// Whether a render has filled the three indexes above. `data-cell-id`,
+// `data-row-id` and `data-col-id` are written in exactly one place each — inside
+// renderSpreadsheetGrid — by the same pass that fills these maps, so once it has
+// run the maps and the DOM hold the same set and a miss means the element does
+// not exist. Only before the first render is the index legitimately empty while
+// markup might already be present, so that is the only case that scans.
+//
+// This matters because of windowing (on by default since #139): the index holds
+// only the rows the last render built, so every off-window row and cell misses,
+// and the old unconditional `|| document.querySelector(...)` turned each miss
+// into a full-document scan that could only ever return null. rowTop walks every
+// row above its target and runs on each mousemove of a drag-select, so dragging
+// at row 800 cost ~800 of those scans per mouse move (#197).
+let gridIndexPopulated = false;
+
+/** Element for a grid cell, or null when this render did not build it. */
+const getCellEl = (cellId) =>
+  gridCellIndex.get(cellId) ||
+  (gridIndexPopulated ? null : document.querySelector(`[data-cell-id="${cellId}"]`));
+/** Element for a row header, or null when this render did not build it. */
 const getRowHeaderEl = (row) =>
-  gridRowHeaderIndex.get(row) || document.querySelector(`[data-row-id="${row}"]`);
+  gridRowHeaderIndex.get(row) ||
+  (gridIndexPopulated ? null : document.querySelector(`[data-row-id="${row}"]`));
+/** Element for a column header, or null when this render did not build it. */
 const getColHeaderEl = (colLetter) =>
-  gridColHeaderIndex.get(colLetter) || document.querySelector(`[data-col-id="${colLetter}"]`);
+  gridColHeaderIndex.get(colLetter) ||
+  (gridIndexPopulated ? null : document.querySelector(`[data-col-id="${colLetter}"]`));
 
 // --- Grid geometry: prefix offsets in #grid-root's own layout space ---------
 // colLeft(colIndex) / rowTop(row) return the left / top edge of a track measured
@@ -2644,11 +2666,21 @@ const colLeft = (colIndex) => {
   return x;
 };
 
-/** Rendered height (px) of a row: the live row-header box when that row is in the
- *  DOM (so a content-auto-grown row measures at its true height), else the model
- *  height. The model fallback keeps geometry correct for rows a windowed render
- *  hasn't built. */
+/** Rendered height (px) of a row.
+ *
+ *  Under windowing the model is the authority and no box is measured: #138 made
+ *  getRowHeight exact for font-grown rows (autoFontRowHeights) and applyGridTemplate
+ *  emits `minmax(getRowHeight(r)px, auto)` for every track, and the one growth the
+ *  model can't predict — wrapped text — forces the full render instead. Skipping
+ *  the read keeps a whole-column sum consistent (it would otherwise mix measured
+ *  in-window heights with modelled off-window ones) and keeps the geometry off the
+ *  layout path, which matters because updateRangeSelectionUI writes classes before
+ *  reading it and would force a reflow on every drag tick.
+ *
+ *  Without windowing (wrapped text, history mode) every row is rendered, so the
+ *  live box is measured as before and picks up content-driven growth. */
 const resolvedRowHeight = (row) => {
+  if (activeSheetWindowed) return getRowHeight(row);
   const rh = getRowHeaderEl(row);
   const h = rh && rh.offsetHeight;
   return (typeof h === 'number' && h > 0) ? h : getRowHeight(row);
@@ -3581,6 +3613,12 @@ const renderSpreadsheetGrid = () => {
 
   // Attach the whole grid in one append (single layout pass — see frag above).
   gridRoot.appendChild(frag);
+
+  // From here the three element indexes describe exactly what is in the DOM, so
+  // the getters can trust a miss instead of scanning the document for something
+  // that isn't there (see gridIndexPopulated). Set before the selection redraw
+  // below, which is the first thing to use them.
+  gridIndexPopulated = true;
 
   // Apply per-sheet column widths / row heights to the freshly built grid.
   applyGridTemplate(gridRoot);
