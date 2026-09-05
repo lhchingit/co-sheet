@@ -6,21 +6,26 @@ process.env.NODE_ENV = 'test';
  * rightmost populated column, the font-driven row heights, and whether any cell
  * wraps — and a scroll that moves the row window re-renders, so those walks ran on
  * every scroll frame. They are now one pass (scanActiveSheetModel), the column
- * count is published for the consumers that describe the rendered grid, and the
- * grid-template is only assigned when it actually changed. These tests pin the
- * behaviour each of those depends on. Follows the AAA pattern.
+ * count is published for the consumers that describe the rendered grid, the
+ * grid-template is only assigned when it actually changed, and the text-overflow
+ * pass iterates whichever of the model / rendered-cell collections is smaller.
+ * These tests pin the behaviour each of those depends on. Follows the AAA pattern.
  */
 import test from 'node:test';
 import assert from 'node:assert';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
 
-/** DOM element stub with the surface renderSpreadsheetGrid touches. */
-function el(styleWrites) {
+/**
+ * DOM element stub with the surface renderSpreadsheetGrid touches. A cell whose
+ * id is in `overflowing` reports a scrollWidth wider than its box, which is how
+ * the render decides to spill it across empty neighbours.
+ */
+function el(styleWrites, overflowing) {
   const style = {};
   const node = {
     children: [], attributes: {}, textContent: '', innerText: '', className: '', value: '',
-    offsetHeight: 21, offsetWidth: 100, scrollWidth: 10, clientWidth: 100,
+    offsetHeight: 21, offsetWidth: 100, clientWidth: 100,
     scrollTop: 0, scrollLeft: 0, clientHeight: 600,
     classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
     setAttribute(n, v) { this.attributes[n] = String(v); },
@@ -42,6 +47,10 @@ function el(styleWrites) {
     });
   }
   node.style = style;
+  Object.defineProperty(node, 'scrollWidth', {
+    get() { return overflowing && overflowing.has(this.attributes['data-cell-id']) ? 400 : 10; },
+    configurable: true
+  });
   Object.defineProperty(node, 'innerHTML', {
     get() { return ''; }, set(_v) { this.children.length = 0; }, configurable: true
   });
@@ -50,12 +59,13 @@ function el(styleWrites) {
 
 function createSandbox() {
   const styleWrites = {};
+  const overflowing = new Set();
   const byId = {};
   const sandbox = {
     window: { location: { protocol: 'http:', host: 'localhost:3000' }, addEventListener() {} },
     document: {
-      getElementById: (id) => (byId[id] || (byId[id] = el(id === 'grid-root' ? styleWrites : null))),
-      createElement: () => el(), createDocumentFragment: () => el(),
+      getElementById: (id) => (byId[id] || (byId[id] = el(id === 'grid-root' ? styleWrites : null, overflowing))),
+      createElement: () => el(null, overflowing), createDocumentFragment: () => el(),
       querySelectorAll: () => [], querySelector: () => null, addEventListener() {},
       body: { appendChild() {}, classList: { add() {}, remove() {} } },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
@@ -83,10 +93,16 @@ function createSandbox() {
     globalThis.scanActiveSheetModel = scanActiveSheetModel;
     globalThis.getRowHeight = getRowHeight;
     globalThis.getColCount = getColCount;
+    globalThis.getCellEl = getCellEl;
+    // Size of the index the last render built, so a test can assert WHICH
+    // collection was the smaller one and therefore which branch ran.
+    Object.defineProperty(globalThis, 'renderedCellCount', { get: () => gridCellIndex.size, configurable: true });
   `, sandbox);
 
   sandbox.styleWrites = styleWrites;
-  sandbox.gridRoot = byId['grid-root'] || (byId['grid-root'] = el(styleWrites));
+  // Cell ids the stub DOM should report as too wide for their box.
+  sandbox.overflowing = overflowing;
+  sandbox.gridRoot = byId['grid-root'] || (byId['grid-root'] = el(styleWrites, overflowing));
   // Replace the active sheet's cells (both views of them stay in sync).
   sandbox.setCells = (cells) => { sandbox.localCells = cells; sandbox.localSheets.Sheet1 = cells; };
   return sandbox;
@@ -188,4 +204,73 @@ test('an unchanged re-render does not rewrite the grid template', () => {
     'further renders with the same model do not touch the row template');
   assert.strictEqual(s.styleWrites.gridTemplateColumns, afterFirst.gridTemplateColumns,
     'nor the column template');
+});
+
+test('the overflow pass finds the same spill either way round', () => {
+  // A spill candidate needs both an element and model content, so it can be found
+  // from either collection; the render walks the smaller one. Both branches have
+  // to reach the same cell, which is the whole point of being able to choose — so
+  // each case here is sized to force a different branch.
+
+  // --- Arrange: a sheet far bigger than one window, so the RENDERED set is the
+  // smaller collection ---
+  const windowed = createSandbox();
+  const many = {};
+  for (let r = 1; r <= 1000; r++) {
+    for (const col of ['C', 'D', 'E']) many[`${col}${r}`] = { formula: '', value: 'x', style: {} };
+  }
+  many.A1 = { formula: '', value: 'a very long label', style: {} };
+  windowed.setCells(many);
+  windowed.overflowing.add('A1');
+
+  // --- Act ---
+  windowed.renderSpreadsheetGrid();
+
+  // --- Assert ---
+  assert.strictEqual(windowed.activeSheetWindowed, true, 'the sheet is windowed');
+  assert.ok(
+    windowed.renderedCellCount < Object.keys(windowed.localCells).length,
+    `the rendered set is the smaller collection (${windowed.renderedCellCount} of 3001)`
+  );
+  assert.match(
+    windowed.getCellEl('A1').style.clipPath || '', /inset/,
+    'the overflowing cell spilled across its empty neighbours'
+  );
+
+  // --- Arrange: a wrapped cell forces the full render, so every row is built and
+  // the MODEL becomes the smaller collection instead ---
+  const full = createSandbox();
+  full.setCells({
+    A1: { formula: '', value: 'a very long label', style: {} },
+    Z9: { formula: '', value: 'wrapped', style: { textWrap: 'wrap' } }
+  });
+  full.overflowing.add('A1');
+
+  full.renderSpreadsheetGrid();
+
+  assert.strictEqual(full.activeSheetWindowed, false, 'the full render built every row');
+  assert.ok(
+    full.renderedCellCount > Object.keys(full.localCells).length,
+    `the model is the smaller collection (${full.renderedCellCount} rendered, 2 in the model)`
+  );
+  assert.match(
+    full.getCellEl('A1').style.clipPath || '', /inset/,
+    'and the same cell still spills'
+  );
+});
+
+test('a wrap or clip cell never becomes a spill candidate, either way round', () => {
+  // The filter has to survive the change of direction: wrapped and clipped cells
+  // keep their text inside their own box.
+  const s = createSandbox();
+  s.setCells({
+    A1: { formula: '', value: 'long but wrapped', style: { textWrap: 'wrap' } },
+    A2: { formula: '', value: 'long but clipped', style: { textWrap: 'clip' } }
+  });
+  s.overflowing.add('A1').add('A2');
+
+  s.renderSpreadsheetGrid();
+
+  assert.ok(!s.getCellEl('A1').style.clipPath, 'a wrapped cell does not spill');
+  assert.ok(!s.getCellEl('A2').style.clipPath, 'nor does a clipped one');
 });

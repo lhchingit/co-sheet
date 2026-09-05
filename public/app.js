@@ -3111,20 +3111,25 @@ let renderedColCount = DEFAULT_COLS;
  * are one walk. The column index is parsed inline rather than through
  * parseCellCoord, whose regex and result object are wasteful at this scale.
  *
- * @returns {{maxColIndex: number, fontRowHeights: Object, hasWrappedRows: boolean}}
+ * @returns {{maxColIndex: number, fontRowHeights: Object, hasWrappedRows: boolean,
+ *   cellCount: number}}
  *   maxColIndex is the rightmost populated column (floored at the default grid
  *   width); fontRowHeights maps a row to the height a large-font cell grows it to;
  *   hasWrappedRows is true if any cell wraps, whose height the model cannot
- *   predict — such sheets fall back to the full render.
+ *   predict — such sheets fall back to the full render; cellCount is how many
+ *   entries the sheet holds, reported here because this walk passes every one of
+ *   them anyway and a later `Object.keys(...).length` would walk them again.
  */
 const scanActiveSheetModel = () => {
   const cells = localSheets[activeSheetName];
   let maxColIndex = DEFAULT_COLS - 1;
   const fontRowHeights = Object.create(null);
   let hasWrappedRows = false;
-  if (!cells) return { maxColIndex, fontRowHeights, hasWrappedRows };
+  let cellCount = 0;
+  if (!cells) return { maxColIndex, fontRowHeights, hasWrappedRows, cellCount };
 
   for (const id in cells) {
+    cellCount++;
     // Leading A-Z run -> 1-based column number, then the digits are the row.
     // Ids that don't match that shape are skipped, as parseCellCoord's
     // /^([A-Z]+)(\d+)$/ did.
@@ -3152,7 +3157,7 @@ const scanActiveSheetModel = () => {
     const row = parseInt(id.slice(i), 10);
     if (!(fontRowHeights[row] >= minHeight)) fontRowHeights[row] = minHeight;
   }
-  return { maxColIndex, fontRowHeights, hasWrappedRows };
+  return { maxColIndex, fontRowHeights, hasWrappedRows, cellCount };
 };
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the
@@ -3688,27 +3693,44 @@ const renderSpreadsheetGrid = () => {
   }
 
   // After layout, let cells with overflowing text spill across empty neighbours.
-  // Only data-bearing cells can overflow, so iterate localCells rather than the
-  // whole grid. This pass is split into a read phase then a write phase to avoid
-  // layout thrashing: updateCellOverflow both reads geometry (scrollWidth) and
-  // writes style (clipPath/zIndex), so calling it in a loop forced a full reflow
-  // of the (non-virtualised, 1000-row) grid for every data cell — ~3s for a few
-  // hundred cells, the real cause of the borders-heavy-sheet freeze (#88). The
-  // freshly built cells carry no stale spill styling, so we can read every
-  // candidate's overflow first (one reflow for the batch) and only then write the
-  // spill on the few that overflow (writes + getCellValue, no layout reads).
+  // A spill candidate needs BOTH an element from this render and content in the
+  // model, so it can be found from either side — and the cheap side is whichever
+  // collection is smaller. Windowing inverted that: this used to iterate
+  // localCells because the render built every cell, but a windowed render builds
+  // ~1,000 of a sheet that can hold 26,000, so walking the model to filter it down
+  // to the rendered set meant ~25,000 lookups that miss, on every scroll frame
+  // (2.75ms vs 0.03ms, #202). Without windowing every row is rendered and the
+  // model is the smaller collection again, so the direction is chosen, not fixed.
+  //
+  // The pass is split into a read phase then a write phase to avoid layout
+  // thrashing: updateCellOverflow both reads geometry (scrollWidth) and writes
+  // style (clipPath/zIndex), so calling it in a loop forced a full reflow of the
+  // (non-virtualised, 1000-row) grid for every data cell — ~3s for a few hundred
+  // cells, the real cause of the borders-heavy-sheet freeze (#88). The freshly
+  // built cells carry no stale spill styling, so we can read every candidate's
+  // overflow first (one reflow for the batch) and only then write the spill on the
+  // few that overflow (writes + getCellValue, no layout reads).
   if (!isHistoryMode) {
     const candidates = [];
-    Object.keys(localCells).forEach(id => {
-      // Merged anchors already span their block, and covered cells are hidden —
-      // neither should spill across neighbours.
+    // Merged anchors already span their block, and covered cells are hidden —
+    // neither should spill across neighbours. Only a cell with model content can
+    // overflow, and only a rendered cell has a box to measure.
+    const considerCell = (id, el) => {
       if (hasMerges && (anchorSpan.has(id) || coveredTo.has(id))) return;
-      const el = cellElById.get(id); // O(1) lookup, not a per-cell querySelector
       if (!el || typeof el.scrollWidth !== 'number') return;
-      const wrapMode = localCells[id].style && localCells[id].style.textWrap;
+      const cell = localCells[id];
+      if (!cell) return;
+      const wrapMode = cell.style && cell.style.textWrap;
       if (wrapMode === 'wrap' || wrapMode === 'clip') return;
       candidates.push([id, el]);
-    });
+    };
+    // sheetModel.cellCount rather than Object.keys(localCells).length: building
+    // that array is itself the walk this is trying to avoid.
+    if (cellElById.size < sheetModel.cellCount) {
+      cellElById.forEach((el, id) => considerCell(id, el));
+    } else {
+      Object.keys(localCells).forEach((id) => considerCell(id, cellElById.get(id)));
+    }
     // Read phase: a single reflow resolves layout for the whole batch.
     const overflowing = candidates.filter(([, el]) => el.scrollWidth > el.clientWidth + 1);
     // Write phase: no geometry reads here, so these don't trigger further reflows.
