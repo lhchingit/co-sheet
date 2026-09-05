@@ -60,6 +60,9 @@ export async function applySchema(db) {
   // 'restricted' = only owner/admin/shared users may open the file; 'anyone' = any
   // signed-in user with the link may open it (view-only).
   await db.query(`ALTER TABLE files ADD COLUMN IF NOT EXISTS link_access TEXT NOT NULL DEFAULT 'restricted'`);
+  // listFileIdsByCreator backs the per-role file quota, checked on every file
+  // creation; without this it scans the whole registry to count one user's files.
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_files_created_by ON files (created_by)`);
 
   // Provision the users table backing the permissions page. Each row is a user
   // who has signed in at least once; `role` is one of 'user' | 'admin' |
@@ -96,6 +99,10 @@ export async function applySchema(db) {
   `);
   // Idempotent migration for databases provisioned before the role column existed.
   await db.query(`ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer'`);
+  // The primary key (file_id, user_id) serves the by-file lookups, but a btree can
+  // only seek on a key prefix, so it cannot serve a lookup by user_id — which is
+  // the direction the drive listing uses (listSharesByUser, on every load).
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_file_shares_user_id ON file_shares (user_id)`);
 
   // Provision the file_stars table: each row marks a file as "starred" (a personal
   // favourite) by a user. Starring is per-user — the same file may be starred by
@@ -109,6 +116,9 @@ export async function applySchema(db) {
       PRIMARY KEY (file_id, user_id)
     )
   `);
+  // Same as file_shares: the Starred view looks these up by user_id, which the
+  // (file_id, user_id) primary key cannot answer.
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_file_stars_user_id ON file_stars (user_id)`);
 }
 
 /**
