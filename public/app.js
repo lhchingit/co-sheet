@@ -338,11 +338,58 @@ const getColWidth = (colLetter, sheetName = activeSheetName) => {
 };
 // Font-driven row heights for the active sheet: row number -> px, for rows a
 // large-font cell grows past the default. Rebuilt from the model each render by
-// rebuildAutoFontRowHeights (deterministic via getCellMinHeight, no DOM), so
+// scanActiveSheetModel (deterministic via getCellMinHeight, no DOM), so
 // getRowHeight is authoritative for these rows and a windowed render can size and
 // map their off-screen tracks. Wrapped-text growth needs real text measurement
 // and is not modelled here (see sheetHasWrappedRows).
 let autoFontRowHeights = Object.create(null);
+// Set when a cell write would give its row a height the map above doesn't hold.
+// Most font-size changes never reach a render — setCellFontSize, a style paste,
+// the format painter, clearFormatting, undo/redo and a remote cell-update all
+// mutate the cell and re-measure the selection directly — so without this the map
+// stayed at the pre-change heights and every overlay below the edited row was
+// drawn too high (#224). The rebuild is deferred to the next geometry read rather
+// than run per write, which keeps a bulk edit to one rescan and leaves the
+// drag-select hot path at a single boolean test.
+let autoFontRowHeightsStale = false;
+
+/**
+ * Flags the font-driven row-height map stale when rendering `cellId` with `style`
+ * would need a row height the map doesn't already hold. Runs before the cell's
+ * element is looked up, so an off-window cell (a remote edit, a bulk paste) is
+ * caught too. A shrink can't be judged from one cell — a row-mate may still hold
+ * the row up — so it only flags, and the rescan decides.
+ * @param {string} cellId
+ * @param {*} value - The cell's raw value; an empty cell never grows its row.
+ * @param {{fontSize?: number}|null|undefined} style
+ */
+const markAutoFontRowHeightStale = (cellId, value, style) => {
+  if (autoFontRowHeightsStale) return;
+  const wanted = (style && style.fontSize && value != null && value !== '')
+    ? getCellMinHeight(style.fontSize)
+    : null;
+  const coord = parseCellCoord(cellId);
+  if (!coord) return;
+  const modelled = autoFontRowHeights[coord.row];
+  if (wanted === null ? modelled != null : !(modelled >= wanted)) autoFontRowHeightsStale = true;
+};
+
+/**
+ * Rebuilds the font-driven row heights if a cell write invalidated them, and
+ * re-emits the grid template so tracks no render has materialised carry the new
+ * heights (the invariant a windowed render depends on). A no-op — one boolean
+ * test — when nothing has changed, so geometry reads on the drag-select path pay
+ * nothing. Left alone when windowing is off: the map stays empty there and
+ * resolvedRowHeight measures the rendered box instead.
+ */
+const refreshAutoFontRowHeights = () => {
+  if (!autoFontRowHeightsStale) return;
+  autoFontRowHeightsStale = false;
+  if (!windowingEnabled) return;
+  autoFontRowHeights = scanActiveSheetModel().fontRowHeights;
+  const gridRoot = document.getElementById('grid-root');
+  if (gridRoot) applyGridTemplate(gridRoot);
+};
 
 /** Resolved model height (px) of a row (1-based) on the active (or given) sheet:
  *  an explicit (resized) height wins, else a font-driven auto height on the
@@ -2689,6 +2736,11 @@ const resolvedRowHeight = (row) => {
 /** Top edge (px) of row `row` (1-based): the column-header band (the first grid
  *  track, 21px per the base template) plus the rendered heights of the rows above. */
 const rowTop = (row) => {
+  // Pick up any font-driven height change made since the last render. Every
+  // caller reads its top edge from here before summing resolvedRowHeight over the
+  // range, so refreshing at this one point keeps both halves of a rect on the same
+  // model.
+  refreshAutoFontRowHeights();
   let y = DEFAULT_ROW_HEIGHT;
   for (let r = 1; r < row; r++) y += resolvedRowHeight(r);
   return y;
@@ -3540,6 +3592,8 @@ const renderSpreadsheetGrid = () => {
   // default, and the row template's minmax(21px, auto) + the cell's min-height
   // reproduce the old height — so the default path is unchanged.
   if (windowingEnabled) autoFontRowHeights = sheetModel.fontRowHeights;
+  // This render's scan is the rebuild any pending flag was asking for.
+  autoFontRowHeightsStale = false;
   // Merges are windowed (the render force-includes anchor rows whose span reaches
   // into the window); only wrapped text — whose row height isn't modelled — still
   // forces the full render.
@@ -4229,6 +4283,7 @@ const setFreeze = (rows, cols) => {
  * @param {Object} [style] - Custom styles object.
  */
 const updateGridDOMCell = (cellId, value, style) => {
+  markAutoFontRowHeightStale(cellId, value, style);
   const cellEl = getCellEl(cellId);
   if (!cellEl) return;
 
@@ -5905,23 +5960,32 @@ const clampFontSize = (size) => {
   return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, parsed));
 };
 
-// Vertical breathing room (px) kept between the text and the top/bottom cell
-// edges so larger fonts never butt up against the boundary.
-const CELL_VERTICAL_PADDING = 10;
-const CELL_LINE_HEIGHT_FACTOR = 1.2;
+// The .grid-cell box, in units of the cell's font size: one line box plus the
+// `padding: 0.2em 3px` above and below it, over a 1px bottom gridline. These
+// mirror the rule in private/index.html and must be kept in sync with it —
+// getCellMinHeight is not just a comfortable floor, it is the model the grid
+// template and every overlay measurement are built from (see rowTop), so a value
+// under the real box height lets `minmax(..., auto)` grow the track past what the
+// model believes and puts the selection frame in the wrong place.
+const CELL_LINE_HEIGHT_FACTOR = 1.2;   // .grid-cell `line-height`
+const CELL_VERTICAL_PADDING_EM = 0.4;  // .grid-cell `padding: 0.2em ...`, top + bottom
+const CELL_GRIDLINE_HEIGHT = 1;        // .grid-cell `border-bottom`
 const PT_TO_PX = 96 / 72;
 
 /**
- * Computes the minimum cell height (px) needed to comfortably fit a font size,
- * preserving breathing room from the cell boundary. Returns null for sizes at
- * or below the default so those rows keep the base grid height unchanged.
+ * Computes the height (px) a cell's box takes at a given font size, which is the
+ * height its row must have. Rounded up, so the modelled height is never below the
+ * rendered one. Returns null when the box still fits the default row height, so
+ * those rows keep the base grid height unchanged.
  * @param {number} fontSize - Font size in points.
  * @returns {number|null} Height in px, or null to use the default row height.
  */
 const getCellMinHeight = (fontSize) => {
   const size = clampFontSize(fontSize);
-  if (size === null || size <= DEFAULT_FONT_SIZE) return null;
-  return Math.round(size * PT_TO_PX * CELL_LINE_HEIGHT_FACTOR) + CELL_VERTICAL_PADDING;
+  if (size === null) return null;
+  const px = size * PT_TO_PX;
+  const height = Math.ceil(px * (CELL_LINE_HEIGHT_FACTOR + CELL_VERTICAL_PADDING_EM) + CELL_GRIDLINE_HEIGHT);
+  return height > DEFAULT_ROW_HEIGHT ? height : null;
 };
 
 /**
