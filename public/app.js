@@ -3263,6 +3263,215 @@ const onGridScrollWindow = () => {
 };
 
 /**
+ * Build one grid row — its header and every cell across the rendered columns —
+ * into `ctx.frag`.
+ *
+ * Extracted from renderSpreadsheetGrid unchanged: it is the same code, reading the
+ * render's per-pass values from `ctx` instead of closing over them. Splitting it
+ * out is what lets a later change rebuild only the rows that entered the window
+ * instead of the whole grid (#201); on its own this changes nothing.
+ *
+ * @param {number} r 1-based row to build.
+ * @param {{frag: DocumentFragment, useExplicitPlacement: boolean, colCount: number,
+ *   colLetters: string[], hiddenColLetters: Set<string>, anchorSpan: Map<string, any>,
+ *   coveredTo: Map<string, string>, cellElById: Map<string, HTMLElement>,
+ *   sheetName: string, showUneditedChecked: boolean, highlightChangesChecked: boolean,
+ *   editedRows: Set<number>}} ctx Values the current render pass computed once.
+ * @returns {number} The last row this call consumed. Normally `r`; in history mode a
+ *   run of unedited rows collapses into one bar, so it can be greater.
+ */
+const buildGridRow = (r, ctx) => {
+  const {
+    frag, useExplicitPlacement, colCount, colLetters, hiddenColLetters,
+    anchorSpan, coveredTo, cellElById, sheetName,
+    showUneditedChecked, highlightChangesChecked, editedRows
+  } = ctx;
+  // If we are in history mode, and "show unedited" is not checked, collapse consecutive unedited rows
+  if (isHistoryMode && !showUneditedChecked && !editedRows.has(r)) {
+    let startRow = r;
+    let endRow = r;
+    while (endRow + 1 <= TOTAL_ROWS && !editedRows.has(endRow + 1)) {
+      endRow++;
+    }
+    const count = endRow - startRow + 1;
+
+    // Create unedited row bar spanning columns
+    const uneditedBar = document.createElement('div');
+    uneditedBar.className = 'unedited-row-bar';
+    uneditedBar.innerHTML = `
+      <div class="unedited-row-gutter"></div>
+      <div class="unedited-row-label">有 ${count} 列未修改</div>
+    `;
+    frag.appendChild(uneditedBar);
+
+    // Skip to the end of the collapsed sequence; the caller resumes after it.
+    return endRow;
+  }
+
+  // Row Header
+  const rowNum = r;
+  const rowHeader = document.createElement('div');
+  // No cursor-pointer: same arrow-cursor rule as the column headers above.
+  rowHeader.className = 'grid-header sticky left-0 z-20';
+  rowHeader.innerText = r;
+  // Store row identifier for selection highlighting
+  rowHeader.setAttribute('data-row-id', r);
+  gridRowHeaderIndex.set(r, rowHeader);
+  // With explicit placement on, pin the row header to the gutter / its row track.
+  if (useExplicitPlacement) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
+  // Clicking a row header selects the entire row: the cells fill with the
+  // selection colour, the active anchor is the first cell, and the header is
+  // highlighted in solid blue (mirrors the column-header click). Shift+click
+  // selects the whole span of rows from the anchor to this one; Ctrl/Cmd+
+  // click keeps the current selection and adds this row to it. Holding the
+  // button and dragging across other row headers selects the whole swept span.
+  rowHeader.addEventListener('mousedown', (e) => {
+    if (isHistoryMode) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    headerDragType = 'row';
+    if (e.shiftKey && (selectionStartCellId || activeCellId)) {
+      extendSelectionToRow(rowNum);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && selectionStartCellId) {
+      extraSelectionRanges.push({
+        startId: selectionStartCellId,
+        endId: selectionEndCellId || selectionStartCellId,
+      });
+    } else {
+      extraSelectionRanges = [];
+    }
+    selectRow(rowNum);
+  });
+  rowHeader.addEventListener('mouseover', () => {
+    if (headerDragType !== 'row') return;
+    extendSelectionToRow(rowNum);
+  });
+
+  // Drag handle on the row's bottom boundary (mirrors the column handle).
+  if (!isHistoryMode) {
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'row-resize-handle';
+    resizeHandle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || !canEditWorkbook) return;
+      e.preventDefault();
+      e.stopPropagation();
+      startDimensionResize('row', rowNum, rowHeader, e.clientY);
+    });
+    rowHeader.appendChild(resizeHandle);
+  }
+
+  frag.appendChild(rowHeader);
+
+  // Cells for row (A-Z and any grown columns)
+  for (let c = 0; c < colCount; c++) {
+    const colLetter = colLetters[c];
+    const cellId = `${colLetter}${r}`;
+    
+    const cellData = isHistoryMode
+      ? (selectedVersionState?.sheets?.[sheetName]?.[cellId])
+      : localCells[cellId];
+
+    const cellEl = document.createElement('div');
+    cellEl.className = 'grid-cell text-body-sm font-body-sm select-none cursor-default';
+    // Cells in a hidden column sit on a zero-width track; clip their content so
+    // it can't paint outside the collapsed box (grid cells overflow visibly by
+    // default so long values spill into empty neighbours).
+    if (hiddenColLetters.has(colLetter)) cellEl.classList.add('col-hidden');
+    cellEl.setAttribute('data-cell-id', cellId);
+
+    // Display evaluated cell value
+    const rawVal = isHistoryMode
+      ? (cellData?.value || '')
+      : getCellValue(cellId);
+    const val = formatCellDisplay(rawVal, cellData && cellData.style);
+
+    if (cellData && cellData.style && cellData.style.link) {
+      // Fall back to the URL as link text when the cell has no value, so a link
+      // inserted into an empty cell is still visible (matches Google Sheets).
+      const escapedValue = escapeHtml(val || cellData.style.link);
+      const escapedLink = escapeHtml(cellData.style.link);
+      cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
+    } else {
+      cellEl.innerText = val;
+    }
+
+    // Apply saved cell styles
+    if (cellData && cellData.style) {
+      if (cellData.style.bold) cellEl.classList.add('font-bold');
+      if (cellData.style.italic) cellEl.classList.add('italic');
+      if (cellData.style.fontFamily) cellEl.style.fontFamily = resolveFontFamily(cellData.style.fontFamily);
+      if (cellData.style.fontSize) {
+        cellEl.style.fontSize = `${cellData.style.fontSize}pt`;
+        // Grow the row to fit larger fonts (no-op at or below the default size).
+        // Only an empty cell's font size is ignored: a blank cell keeps the base
+        // row height, and the row grows once text is actually entered.
+        const minHeight = val ? getCellMinHeight(cellData.style.fontSize) : null;
+        if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
+      }
+      if (cellData.style.color) cellEl.style.backgroundColor = cellData.style.color;
+      if (cellData.style.textColor) cellEl.style.color = cellData.style.textColor;
+      const deco = [];
+      if (cellData.style.underline) deco.push('underline');
+      if (cellData.style.strikethrough) deco.push('line-through');
+      if (deco.length) cellEl.style.textDecoration = deco.join(' ');
+      // Text wrapping mode: 'wrap' reflows within the cell (rows auto-grow),
+      // 'clip' truncates at the cell edge; the default spills across empties.
+      if (cellData.style.textWrap === 'wrap') {
+        cellEl.style.whiteSpace = 'normal';
+        cellEl.style.overflow = 'hidden';
+        cellEl.style.wordBreak = 'break-word';
+      } else if (cellData.style.textWrap === 'clip') {
+        cellEl.style.overflow = 'hidden';
+      }
+      // Apply vertical alignment style if present
+      if (cellData.style.verticalAlign) {
+        cellEl.style.justifyContent = cellData.style.verticalAlign === 'top' ? 'flex-start' :
+                                      (cellData.style.verticalAlign === 'center' ? 'center' : 'flex-end');
+      }
+    }
+
+    // Render borders for every cell, even blank ones: an interior boundary
+    // line is painted by the cell to its left/top, so a blank cell may still
+    // need to draw a bordered neighbour's right/bottom edge.
+    applyCellBorders(cellEl, (cellData && cellData.style) || EMPTY_STYLE, cellId);
+
+    // Horizontal alignment: explicit style wins, else numbers right-align
+    const cellAlign = resolveCellAlign(rawVal, cellData && cellData.style);
+    if (cellAlign) cellEl.style.textAlign = cellAlign;
+
+    // Highlight cell changes in history mode
+    if (isHistoryMode && highlightChangesChecked && isCellChanged(cellId, sheetName)) {
+      cellEl.classList.add('grid-cell-history-highlight');
+    }
+
+    // Cell mouse interactions (mousedown/mouseover/click/dblclick) are handled
+    // by delegated listeners on #grid-root — see ensureGridCellDelegation above.
+
+    // Explicit placement: anchors span their block; covered cells are hidden so
+    // the anchor shows through; everything else is pinned to its own track so the
+    // spans (merges) or skipped rows (windowing) don't shift it.
+    if (useExplicitPlacement) {
+      if (coveredTo.has(cellId)) {
+        cellEl.style.display = 'none';
+      } else if (anchorSpan.has(cellId)) {
+        const sp = anchorSpan.get(cellId);
+        cellEl.style.gridColumn = `${c + 2} / span ${sp.cols}`;
+        cellEl.style.gridRow = `${r + 1} / span ${sp.rows}`;
+      } else {
+        cellEl.style.gridColumn = `${c + 2}`;
+        cellEl.style.gridRow = `${r + 1}`;
+      }
+    }
+
+    frag.appendChild(cellEl);
+    cellElById.set(cellId, cellEl);
+  }
+  return r;
+};
+
+/**
  * Dynamically builds and renders the interactive spreadsheet grid inside the DOM.
  */
 const renderSpreadsheetGrid = () => {
@@ -3515,192 +3724,18 @@ const renderSpreadsheetGrid = () => {
   gridCellIndex = cellElById;
 
   // Render Grid Rows and Cells
+  const rowCtx = {
+    frag, useExplicitPlacement, colCount, colLetters, hiddenColLetters,
+    anchorSpan, coveredTo, cellElById, sheetName,
+    showUneditedChecked, highlightChangesChecked, editedRows
+  };
   for (let r = 1; r <= TOTAL_ROWS; r++) {
     // Windowing: skip rows outside the visible window (kept frozen/active rows and
     // the overscan aside). Their grid-template-rows tracks still hold the height.
     if (windowActive && !inRowWindow(r)) continue;
-    // If we are in history mode, and "show unedited" is not checked, collapse consecutive unedited rows
-    if (isHistoryMode && !showUneditedChecked && !editedRows.has(r)) {
-      let startRow = r;
-      let endRow = r;
-      while (endRow + 1 <= TOTAL_ROWS && !editedRows.has(endRow + 1)) {
-        endRow++;
-      }
-      const count = endRow - startRow + 1;
-
-      // Create unedited row bar spanning columns
-      const uneditedBar = document.createElement('div');
-      uneditedBar.className = 'unedited-row-bar';
-      uneditedBar.innerHTML = `
-        <div class="unedited-row-gutter"></div>
-        <div class="unedited-row-label">有 ${count} 列未修改</div>
-      `;
-      frag.appendChild(uneditedBar);
-
-      r = endRow; // Skip to the end of collapsed sequence
-      continue;
-    }
-
-    // Row Header
-    const rowNum = r;
-    const rowHeader = document.createElement('div');
-    // No cursor-pointer: same arrow-cursor rule as the column headers above.
-    rowHeader.className = 'grid-header sticky left-0 z-20';
-    rowHeader.innerText = r;
-    // Store row identifier for selection highlighting
-    rowHeader.setAttribute('data-row-id', r);
-    gridRowHeaderIndex.set(r, rowHeader);
-    // With explicit placement on, pin the row header to the gutter / its row track.
-    if (useExplicitPlacement) { rowHeader.style.gridColumn = '1'; rowHeader.style.gridRow = `${r + 1}`; }
-    // Clicking a row header selects the entire row: the cells fill with the
-    // selection colour, the active anchor is the first cell, and the header is
-    // highlighted in solid blue (mirrors the column-header click). Shift+click
-    // selects the whole span of rows from the anchor to this one; Ctrl/Cmd+
-    // click keeps the current selection and adds this row to it. Holding the
-    // button and dragging across other row headers selects the whole swept span.
-    rowHeader.addEventListener('mousedown', (e) => {
-      if (isHistoryMode) return;
-      if (e.button !== 0) return;
-      e.preventDefault();
-      headerDragType = 'row';
-      if (e.shiftKey && (selectionStartCellId || activeCellId)) {
-        extendSelectionToRow(rowNum);
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && selectionStartCellId) {
-        extraSelectionRanges.push({
-          startId: selectionStartCellId,
-          endId: selectionEndCellId || selectionStartCellId,
-        });
-      } else {
-        extraSelectionRanges = [];
-      }
-      selectRow(rowNum);
-    });
-    rowHeader.addEventListener('mouseover', () => {
-      if (headerDragType !== 'row') return;
-      extendSelectionToRow(rowNum);
-    });
-
-    // Drag handle on the row's bottom boundary (mirrors the column handle).
-    if (!isHistoryMode) {
-      const resizeHandle = document.createElement('div');
-      resizeHandle.className = 'row-resize-handle';
-      resizeHandle.addEventListener('mousedown', (e) => {
-        if (e.button !== 0 || !canEditWorkbook) return;
-        e.preventDefault();
-        e.stopPropagation();
-        startDimensionResize('row', rowNum, rowHeader, e.clientY);
-      });
-      rowHeader.appendChild(resizeHandle);
-    }
-
-    frag.appendChild(rowHeader);
-
-    // Cells for row (A-Z and any grown columns)
-    for (let c = 0; c < colCount; c++) {
-      const colLetter = colLetters[c];
-      const cellId = `${colLetter}${r}`;
-      
-      const cellData = isHistoryMode
-        ? (selectedVersionState?.sheets?.[sheetName]?.[cellId])
-        : localCells[cellId];
-
-      const cellEl = document.createElement('div');
-      cellEl.className = 'grid-cell text-body-sm font-body-sm select-none cursor-default';
-      // Cells in a hidden column sit on a zero-width track; clip their content so
-      // it can't paint outside the collapsed box (grid cells overflow visibly by
-      // default so long values spill into empty neighbours).
-      if (hiddenColLetters.has(colLetter)) cellEl.classList.add('col-hidden');
-      cellEl.setAttribute('data-cell-id', cellId);
-
-      // Display evaluated cell value
-      const rawVal = isHistoryMode
-        ? (cellData?.value || '')
-        : getCellValue(cellId);
-      const val = formatCellDisplay(rawVal, cellData && cellData.style);
-
-      if (cellData && cellData.style && cellData.style.link) {
-        // Fall back to the URL as link text when the cell has no value, so a link
-        // inserted into an empty cell is still visible (matches Google Sheets).
-        const escapedValue = escapeHtml(val || cellData.style.link);
-        const escapedLink = escapeHtml(cellData.style.link);
-        cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
-      } else {
-        cellEl.innerText = val;
-      }
-
-      // Apply saved cell styles
-      if (cellData && cellData.style) {
-        if (cellData.style.bold) cellEl.classList.add('font-bold');
-        if (cellData.style.italic) cellEl.classList.add('italic');
-        if (cellData.style.fontFamily) cellEl.style.fontFamily = resolveFontFamily(cellData.style.fontFamily);
-        if (cellData.style.fontSize) {
-          cellEl.style.fontSize = `${cellData.style.fontSize}pt`;
-          // Grow the row to fit larger fonts (no-op at or below the default size).
-          // Only an empty cell's font size is ignored: a blank cell keeps the base
-          // row height, and the row grows once text is actually entered.
-          const minHeight = val ? getCellMinHeight(cellData.style.fontSize) : null;
-          if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
-        }
-        if (cellData.style.color) cellEl.style.backgroundColor = cellData.style.color;
-        if (cellData.style.textColor) cellEl.style.color = cellData.style.textColor;
-        const deco = [];
-        if (cellData.style.underline) deco.push('underline');
-        if (cellData.style.strikethrough) deco.push('line-through');
-        if (deco.length) cellEl.style.textDecoration = deco.join(' ');
-        // Text wrapping mode: 'wrap' reflows within the cell (rows auto-grow),
-        // 'clip' truncates at the cell edge; the default spills across empties.
-        if (cellData.style.textWrap === 'wrap') {
-          cellEl.style.whiteSpace = 'normal';
-          cellEl.style.overflow = 'hidden';
-          cellEl.style.wordBreak = 'break-word';
-        } else if (cellData.style.textWrap === 'clip') {
-          cellEl.style.overflow = 'hidden';
-        }
-        // Apply vertical alignment style if present
-        if (cellData.style.verticalAlign) {
-          cellEl.style.justifyContent = cellData.style.verticalAlign === 'top' ? 'flex-start' :
-                                        (cellData.style.verticalAlign === 'center' ? 'center' : 'flex-end');
-        }
-      }
-
-      // Render borders for every cell, even blank ones: an interior boundary
-      // line is painted by the cell to its left/top, so a blank cell may still
-      // need to draw a bordered neighbour's right/bottom edge.
-      applyCellBorders(cellEl, (cellData && cellData.style) || EMPTY_STYLE, cellId);
-
-      // Horizontal alignment: explicit style wins, else numbers right-align
-      const cellAlign = resolveCellAlign(rawVal, cellData && cellData.style);
-      if (cellAlign) cellEl.style.textAlign = cellAlign;
-
-      // Highlight cell changes in history mode
-      if (isHistoryMode && highlightChangesChecked && isCellChanged(cellId, sheetName)) {
-        cellEl.classList.add('grid-cell-history-highlight');
-      }
-
-      // Cell mouse interactions (mousedown/mouseover/click/dblclick) are handled
-      // by delegated listeners on #grid-root — see ensureGridCellDelegation above.
-
-      // Explicit placement: anchors span their block; covered cells are hidden so
-      // the anchor shows through; everything else is pinned to its own track so the
-      // spans (merges) or skipped rows (windowing) don't shift it.
-      if (useExplicitPlacement) {
-        if (coveredTo.has(cellId)) {
-          cellEl.style.display = 'none';
-        } else if (anchorSpan.has(cellId)) {
-          const sp = anchorSpan.get(cellId);
-          cellEl.style.gridColumn = `${c + 2} / span ${sp.cols}`;
-          cellEl.style.gridRow = `${r + 1} / span ${sp.rows}`;
-        } else {
-          cellEl.style.gridColumn = `${c + 2}`;
-          cellEl.style.gridRow = `${r + 1}`;
-        }
-      }
-
-      frag.appendChild(cellEl);
-      cellElById.set(cellId, cellEl);
-    }
+    // A history-mode run of unedited rows collapses into one bar, so the builder
+    // reports the last row it consumed and the loop resumes after it.
+    r = buildGridRow(r, rowCtx);
   }
 
   // Empty buffer panel below the final row so the last row can scroll fully into
