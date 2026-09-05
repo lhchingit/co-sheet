@@ -35,7 +35,7 @@ alternate) and styled with a Material Design 3 light theme.
 - **Rate limiting** — brute-force / abuse protection on the auth and state-changing API
   routes. Counters are shared across replicas via Redis when configured (per-process in
   memory otherwise); enabled automatically in production.
-- **Version history** — periodic autosave snapshots with browse-and-restore.
+- **Version history** — periodic autosave snapshots with browse-and-restore, keeping the most recent 100 per file.
 - **Internationalization** — runtime locale switching via `data-i18n` attributes and a `t()`
   helper; `zh-TW` (default) and `en`.
 

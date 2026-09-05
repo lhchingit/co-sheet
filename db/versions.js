@@ -54,7 +54,37 @@ export async function getVersionState(id, fileId) {
 }
 
 /**
- * Record a new version snapshot for a file.
+ * Delete a file's snapshots older than its newest `keep`.
+ *
+ * Each snapshot is a full copy of the workbook, not a diff, and one is written
+ * after every 15 seconds of idle editing — so without this a file's history grows
+ * without bound for as long as anyone works on it.
+ *
+ * The threshold is the id of the `keep`-th newest row, read straight off
+ * idx_workbook_versions_file_id. A file with fewer than `keep` snapshots has no
+ * such row, and the subquery returns NULL: `id < NULL` is NULL, never true, so
+ * nothing is deleted — which is the wanted behaviour, arrived at by SQL's
+ * three-valued logic rather than by a separate count.
+ * @param {string} fileId
+ * @param {number} [keep]
+ * @returns {Promise<number>} How many snapshots were deleted.
+ */
+export async function pruneVersions(fileId, keep = VERSION_LIST_LIMIT) {
+  const r = await pool.query(
+    `DELETE FROM workbook_versions
+      WHERE file_id = $1
+        AND id < (
+          SELECT id FROM workbook_versions
+           WHERE file_id = $1 ORDER BY id DESC LIMIT 1 OFFSET $2 - 1
+        )`,
+    [fileId, keep]
+  );
+  return r.rowCount || 0;
+}
+
+/**
+ * Record a new version snapshot for a file, then prune that file's history to the
+ * newest VERSION_LIST_LIMIT.
  * @param {string} stateJson JSON-serialized workbook state.
  * @param {string} createdBy
  * @param {string} fileId
@@ -65,4 +95,12 @@ export async function insertVersion(stateJson, createdBy, fileId) {
     'INSERT INTO workbook_versions (file_id, state, created_by) VALUES ($1, $2, $3)',
     [fileId, stateJson, createdBy]
   );
+  // Pruning must never cost the caller the snapshot it just took: the version is
+  // already committed, and a failure here means only that the trim is late — the
+  // next snapshot of this file prunes the same rows. Deliberately narrower than
+  // swallowing errors generally: nothing a caller can observe changes, and the
+  // work retries on its own.
+  try {
+    await pruneVersions(fileId);
+  } catch (e) { /* trimmed on the next snapshot */ }
 }
