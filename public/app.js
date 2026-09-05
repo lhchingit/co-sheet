@@ -11050,6 +11050,11 @@ window.CoSheet.app = {
   revealCell,
   recordHistoryAction,
   updateGridDOMCell,
+  // O(1) element lookup for a rendered cell, or null when this render did not
+  // build it. Exposed so modules that paint onto the grid (sort-filter) can reach
+  // the render's index instead of running a document query per cell — the index is
+  // authoritative after a render, see getCellEl.
+  getCellEl,
   getCellValue,
   recalculateSheet,
   getSelectedCellIds,

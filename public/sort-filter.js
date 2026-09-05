@@ -258,7 +258,9 @@
 
     const colLetter = getColLetter(f.colIndex);
     const headerRow = filterHeaderRow();
-    const lastRow = filterLastRow();
+    // Only needed to bound the hiding to the used range; skipped entirely when
+    // nothing is hidden, since it walks every cell on the sheet.
+    const lastRow = f.hidden.size ? filterLastRow() : headerRow;
 
     // Scope tint: the filtered column header plus EVERY row header from the filter
     // header row down. The filter was created from a full-column selection, so it
@@ -266,9 +268,36 @@
     // populated range) so the scope reads as the entire column.
     const colHeader = gridRoot.querySelector(`[data-col-id="${colLetter}"]`);
     if (colHeader) colHeader.classList.add('filter-col-header');
-    gridRoot.querySelectorAll('[data-row-id]').forEach((rh) => {
+
+    // One pass over the rows THIS render built, doing both the scope tint and the
+    // hiding. Everything here paints the DOM, so the rendered rows are the right
+    // set to walk: the hiding used to iterate the whole data range instead and ask
+    // the DOM for each row and each of its cells, which under windowing meant
+    // ~21,600 subtree queries per render on an 800-row column, ~95% of them
+    // finding nothing. Scrolling with a filter on cost 1,983 ms of blocking
+    // against 20 ms without one (#220).
+    const cols = f.hidden.size ? app.getColCount() : 0;
+    gridRoot.querySelectorAll('[data-row-id]').forEach((node) => {
+      const rh = /** @type {HTMLElement} */ (node);
       const r = parseInt(rh.getAttribute('data-row-id'), 10);
-      if (r >= headerRow) rh.classList.add('filter-row-header');
+      if (r < headerRow) return;
+      rh.classList.add('filter-row-header');
+
+      // Hide a data row whose filtered-column value is excluded, by collapsing its
+      // row header and its cells, so the remaining rows reflow cleanly within the
+      // grid (row numbers stay as gaps). Bounded by the used range, as before:
+      // rows past it are blank, and a filter excluding blanks should not swallow
+      // the empty remainder of the sheet.
+      if (!f.hidden.size || r === headerRow || r > lastRow) return;
+      const key = filterValueKey(app.getCellValue(`${colLetter}${r}`));
+      if (!f.hidden.has(key)) return;
+      rh.style.display = 'none';
+      for (let c = 0; c < cols; c++) {
+        // The render's own index, not a document query: it is authoritative after
+        // a render, so a miss means the cell was not built (see app.getCellEl).
+        const cellEl = /** @type {HTMLElement} */ (app.getCellEl(`${getColLetter(c)}${r}`));
+        if (cellEl) cellEl.style.display = 'none';
+      }
     });
 
     // Green left/right edges on every cell of the filtered column (from the header
@@ -295,23 +324,6 @@
         showFilterMenu(f.colIndex, icon);
       });
       headerCell.appendChild(icon);
-    }
-
-    // Hide data rows whose filtered-column value is excluded. A row is hidden by
-    // collapsing its row header and all its cells, so the remaining rows reflow
-    // cleanly within the grid (row numbers stay as gaps).
-    if (f.hidden.size) {
-      const cols = app.getColCount();
-      for (let r = headerRow + 1; r <= lastRow; r++) {
-        const key = filterValueKey(app.getCellValue(`${colLetter}${r}`));
-        if (!f.hidden.has(key)) continue;
-        const rh = /** @type {HTMLElement} */ (gridRoot.querySelector(`[data-row-id="${r}"]`));
-        if (rh) rh.style.display = 'none';
-        for (let c = 0; c < cols; c++) {
-          const cellEl = /** @type {HTMLElement} */ (gridRoot.querySelector(`[data-cell-id="${getColLetter(c)}${r}"]`));
-          if (cellEl) cellEl.style.display = 'none';
-        }
-      }
     }
   }
 
