@@ -103,8 +103,10 @@ function createSandbox() {
     const c = String.fromCharCode(65 + ((i / 1000 | 0) % 26));
     cells[`${c}${r}`] = { formula: '', value: `value ${i}`, style: { bold: i % 5 === 0 } };
   }
-  sandbox.localCells = cells;
-  sandbox.localSheets.Sheet1 = cells;
+  // Seed THROUGH the localCells proxy, which is what every path in the app does.
+  // Replacing the binding would leave a plain object in its place, and later writes
+  // to it would miss the trap the model scan's cache invalidation hangs off (#236).
+  for (const id of Object.keys(cells)) sandbox.localCells[id] = cells[id];
 
   sandbox.counters = counters;
   sandbox.viewport = sandbox.document.getElementById('grid-viewport');
