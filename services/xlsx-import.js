@@ -1,6 +1,7 @@
 // @ts-check
 import zlib from 'zlib';
 import { SHEET_NAME_REGEX } from './validators.js';
+import { MAX_ROWS, MAX_COLS } from './dimension-service.js';
 
 /**
  * @file services/xlsx-import.js
@@ -28,10 +29,12 @@ import { SHEET_NAME_REGEX } from './validators.js';
  * 'corrupt' (zip/XML it couldn't read), or 'empty' (no importable sheets).
  */
 
-// The editor renders up to 702 columns (A–ZZ) and 1000 rows, so cells/tracks
-// beyond that range can't be shown and are dropped on import.
-const MAX_COL = 701;  // 0-based, 'ZZ'
-const MAX_ROW = 1000; // 1-based
+// The grid's own bounds, taken from dimension-service so they are stated once:
+// cells and tracks past them can never be addressed, and are dropped on import.
+// A sheet taller than the default is not dropped — the route records the extent it
+// reached as the workbook's row count, which is what makes those rows render.
+const MAX_COL = MAX_COLS - 1;  // 0-based, 'ZZ'
+const MAX_ROW = MAX_ROWS;      // 1-based
 // Stored cell text / formula is truncated to the length the cell editor accepts, so
 // an imported cell stays editable afterwards.
 const MAX_VALUE_LEN = 200;

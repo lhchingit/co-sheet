@@ -1522,6 +1522,18 @@ const sanitizeColCounts = (raw) => {
 };
 
 /**
+ * The 1-based row number in an A1-style cell reference, or 0 if it isn't one.
+ * Used by the xlsx import to learn how far down a sheet reaches while it is
+ * already walking every cell.
+ * @param {string} ref
+ * @returns {number}
+ */
+const rowOfCellRef = (ref) => {
+  const m = /^[A-Z]{1,2}([1-9][0-9]*)$/.exec(ref);
+  return m ? Number(m[1]) : 0;
+};
+
+/**
  * Sanitize a persisted per-sheet row-count map ({ [sheet]: number }). Returns a
  * prototype-free copy keeping only integer counts above the default and within the
  * grid's range, dropping `__proto__`/inherited keys. Mirrors sanitizeColCounts.
@@ -1939,14 +1951,24 @@ app.post('/api/files/import',
     const sheetColors = Object.create(null);
     const colWidths = Object.create(null);
     const rowHeights = Object.create(null);
+    const rowCounts = Object.create(null);
     const filters = Object.create(null);
     let totalCells = 0;
     for (const s of parsed.sheets) {
       const cellMap = Object.create(null);
+      // Track how far down the sheet reaches while we are already walking every
+      // cell. Rows, unlike columns, need this recorded: getColCount() raises itself
+      // to the rightmost populated column, but getRowCount() has no data-derived
+      // floor (it is read inside per-row render loops), so a sheet taller than the
+      // default has to say so or its extra rows never render (#230).
+      let maxRow = 0;
       for (const [ref, cell] of Object.entries(s.cells)) {
         cellMap[ref] = { formula: cell.formula || '', value: cell.value || '', style: cell.style || {} };
+        const row = rowOfCellRef(ref);
+        if (row > maxRow) maxRow = row;
         totalCells++;
       }
+      if (maxRow > dimensionService.DEFAULT_ROWS) rowCounts[s.name] = maxRow;
       sheets[s.name] = cellMap;
       sheetOrder.push(s.name);
       if (s.tabColor) sheetColors[s.name] = s.tabColor;
@@ -1970,8 +1992,9 @@ app.post('/api/files/import',
       // Imported columns past Z render via the client's data-derived floor; no
       // explicit blank-column growth to carry over.
       colCounts: Object.create(null),
-      // An import sizes the grid from its data; no explicit row growth to carry over.
-      rowCounts: Object.create(null),
+      // Rows have no such floor, so an import that reached past the default row
+      // count carries the extent it reached (see the loop above).
+      rowCounts: sanitizeRowCounts(rowCounts),
       // Imported workbooks start with no hidden columns.
       hiddenCols: Object.create(null)
     };
