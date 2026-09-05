@@ -419,5 +419,7 @@
   "share.commentersViewers": "加註者和檢視者",
   "share.remove": "移除存取權",
   "share.transferOwnership": "轉移擁有權",
+  "grid.addRows.action": "新增",
+  "grid.addRows.suffix": "列於底部",
   "share.readOnlyBadge": "唯讀檢視"
 }

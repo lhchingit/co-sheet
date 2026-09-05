@@ -24,7 +24,7 @@
   // Injected by app.js via init(). A bag of live core services: getters for the
   // mutable workbook/selection state (activeCellId, activeSheetName, sheetOrder,
   // localSheets, socket — all reassigned at runtime), the stable localCells
-  // proxy, the TOTAL_ROWS constant, and the cell mutators this feature drives.
+  // proxy, the row count, and the cell mutators this feature drives.
   // Typed `any` because it is a host-supplied service bag, not owned here.
   /** @type {any} */
   let app = null;
@@ -101,9 +101,9 @@
    */
   const getSortedCellSequence = () => {
     const sequence = [];
-    // Grid is TOTAL_ROWS tall; columns start at A-Z and grow rightward with data.
+    // Grid is getRowCount() tall; columns start at A-Z and grow rightward with data.
     const cols = app.getColCount();
-    for (let r = 1; r <= app.TOTAL_ROWS; r++) {
+    for (let r = 1; r <= app.getRowCount(); r++) {
       for (let c = 0; c < cols; c++) {
         const colLetter = getColLetter(c);
         sequence.push(`${colLetter}${r}`);

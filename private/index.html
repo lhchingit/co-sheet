@@ -475,6 +475,12 @@
             cursor: row-resize;
             z-index: 22;
         }
+        /* Mirror of .col-resize-handle-last: the final row's handle is pulled
+           fully inside the grid, so its overhang can't extend the scrollable
+           height past the last row and keep it off the scrollbar (#228). */
+        .row-resize-handle-last {
+            bottom: 0;
+        }
         /* Guide line shown while dragging a boundary; it tracks the cursor and the
            grid only reflows on release. It keeps the gridlines' light-gray color
            (#dadce0) and is simply drawn thicker than the 1px cell gridlines. */
@@ -623,17 +629,54 @@
         .unedited-row-label {
             padding-left: 12px;
         }
-        /* Empty spacer panel below the final row (row 1000). Without it the last
-           row sits flush against the horizontal scrollbar / footer and gets half
-           clipped when scrolled to the bottom; this buffer (~2x a cell's height)
-           lets the last row scroll fully into view. Styled like the header band
-           so it reads as part of the grid chrome rather than a data row. */
+        /* The band below the final row, holding the add-rows control. It began as
+           an empty spacer that let the last row clear the horizontal scrollbar
+           (#61); the bar now has a lane of its own (see layout() in app.js), so the
+           band is here for the control rather than as padding. Styled like the
+           header band so it reads as grid chrome rather than a data row. */
         .grid-bottom-buffer {
-            grid-column: 1 / -1; /* spans the gutter + all 26 columns */
+            grid-column: 1 / -1; /* spans the gutter + every column */
             background-color: #f8f9fa;
             border-bottom: 1px solid #c3c6d6;
             height: 42px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            /* Indented past the row gutter so the control lines up with column A,
+               matching Google Sheets. */
+            padding-left: 58px;
+            font-size: 13px;
+            color: #424654;
+            /* The band scrolls with the grid, so it inherits #grid-root's zoom;
+               nothing here should be sized against the viewport. */
+            box-sizing: border-box;
         }
+        /* "Add" — a text button in the primary colour, like the links in the menus. */
+        .add-rows-button {
+            background: none;
+            border: none;
+            padding: 0 4px;
+            color: #0b57d0;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .add-rows-button:hover:not(:disabled) { background-color: #e8f0fe; }
+        .add-rows-button:disabled { color: #9aa0a6; cursor: default; }
+        .add-rows-count {
+            width: 62px;
+            height: 26px;
+            padding: 0 8px;
+            text-align: center;
+            font-size: 13px;
+            color: #424654;
+            background-color: #ffffff;
+            border: 1px solid #c3c6d6;
+            border-radius: 4px;
+        }
+        .add-rows-count:focus { outline: none; border-color: #0b57d0; }
+        .add-rows-suffix { user-select: none; }
         /* Custom styled tooltip (replaces native title tooltips) */
         #app-tooltip {
             position: fixed;

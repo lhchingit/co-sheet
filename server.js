@@ -1450,9 +1450,10 @@ const loadState = async (key = 'default') => {
       const colWidths = sanitizeDimensionMap(parsed && parsed.colWidths);
       const rowHeights = sanitizeDimensionMap(parsed && parsed.rowHeights);
       const colCounts = sanitizeColCounts(parsed && parsed.colCounts);
+      const rowCounts = sanitizeRowCounts(parsed && parsed.rowCounts);
       const hiddenCols = sanitizeHiddenCols(parsed && parsed.hiddenCols);
 
-      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights, colCounts, hiddenCols };
+      const state = { sheets, sheetOrder, sheetColors, hiddenSheets, colWidths, rowHeights, colCounts, rowCounts, hiddenCols };
       // Define a getter/setter proxy for legacy 'cells' compatibility pointing to the first visible sheet
       return setupCellsProxy(state);
     }
@@ -1471,6 +1472,7 @@ const loadState = async (key = 'default') => {
     colWidths: Object.create(null),
     rowHeights: Object.create(null),
     colCounts: Object.create(null),
+    rowCounts: Object.create(null),
     hiddenCols: Object.create(null)
   };
   // Define getter/setter proxy on the fresh state object pointing to first visible sheet (Sheet1).
@@ -1513,6 +1515,26 @@ const sanitizeColCounts = (raw) => {
     if (sheetName === '__proto__') continue;
     const n = Number(count);
     if (Number.isInteger(n) && n > dimensionService.DEFAULT_COLS && n <= dimensionService.MAX_COLS) {
+      out[sheetName] = n;
+    }
+  }
+  return out;
+};
+
+/**
+ * Sanitize a persisted per-sheet row-count map ({ [sheet]: number }). Returns a
+ * prototype-free copy keeping only integer counts above the default and within the
+ * grid's range, dropping `__proto__`/inherited keys. Mirrors sanitizeColCounts.
+ * @param {*} raw
+ * @returns {Object}
+ */
+const sanitizeRowCounts = (raw) => {
+  const out = Object.create(null);
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [sheetName, count] of Object.entries(raw)) {
+    if (sheetName === '__proto__') continue;
+    const n = Number(count);
+    if (Number.isInteger(n) && n > dimensionService.DEFAULT_ROWS && n <= dimensionService.MAX_ROWS) {
       out[sheetName] = n;
     }
   }
@@ -1752,6 +1774,7 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
       colWidths: Object.create(null),
       rowHeights: Object.create(null),
       colCounts: Object.create(null),
+      rowCounts: Object.create(null),
       hiddenCols: Object.create(null)
     };
 
@@ -1813,6 +1836,7 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       colWidths: src.colWidths || {},
       rowHeights: src.rowHeights || {},
       colCounts: src.colCounts || {},
+      rowCounts: src.rowCounts || {},
       hiddenCols: src.hiddenCols || {}
     }));
 
@@ -1833,6 +1857,7 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
       colWidths: sanitizeDimensionMap(clonedState.colWidths),
       rowHeights: sanitizeDimensionMap(clonedState.rowHeights),
       colCounts: sanitizeColCounts(clonedState.colCounts),
+      rowCounts: sanitizeRowCounts(clonedState.rowCounts),
       hiddenCols: sanitizeHiddenCols(clonedState.hiddenCols)
     }));
 
@@ -1945,6 +1970,8 @@ app.post('/api/files/import',
       // Imported columns past Z render via the client's data-derived floor; no
       // explicit blank-column growth to carry over.
       colCounts: Object.create(null),
+      // An import sizes the grid from its data; no explicit row growth to carry over.
+      rowCounts: Object.create(null),
       // Imported workbooks start with no hidden columns.
       hiddenCols: Object.create(null)
     };
@@ -2416,6 +2443,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
       colWidths: sanitizeDimensionMap(targetState.colWidths),
       rowHeights: sanitizeDimensionMap(targetState.rowHeights),
       colCounts: sanitizeColCounts(targetState.colCounts),
+      rowCounts: sanitizeRowCounts(targetState.rowCounts),
       hiddenCols: sanitizeHiddenCols(targetState.hiddenCols)
     });
 
@@ -2445,6 +2473,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
         colWidths: restored.colWidths,
         rowHeights: restored.rowHeights,
         colCounts: restored.colCounts,
+        rowCounts: restored.rowCounts,
         hiddenCols: restored.hiddenCols,
         cells: restored.cells,
         users: presenceForFile(fileId)
@@ -2930,6 +2959,11 @@ const applyStateOp = (workbook, type, payload) => {
     if (result.ok) {
       out.push({ all: true, msg: { type: 'col-count-update', payload: { sheetName: result.sheetName, count: result.count } } });
     }
+  } else if (type === 'set-row-count') {
+    const result = dimensionService.setRowCount(workbook, payload);
+    if (result.ok) {
+      out.push({ all: true, msg: { type: 'row-count-update', payload: { sheetName: result.sheetName, count: result.count } } });
+    }
   } else if (type === 'set-hidden-cols') {
     const result = dimensionService.setHiddenCols(workbook, payload);
     if (result.ok) {
@@ -3082,6 +3116,7 @@ wss.on('connection', async (ws, req) => {
       colWidths: connWorkbook.colWidths,
       rowHeights: connWorkbook.rowHeights,
       colCounts: connWorkbook.colCounts,
+      rowCounts: connWorkbook.rowCounts,
       hiddenCols: connWorkbook.hiddenCols,
       cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
@@ -3118,6 +3153,7 @@ wss.on('connection', async (ws, req) => {
     'reorder-sheets',
     'resize',
     'set-col-count',
+    'set-row-count',
     'set-hidden-cols'
   ];
 

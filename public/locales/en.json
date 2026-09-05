@@ -419,5 +419,7 @@
   "share.commentersViewers": "Commenters and viewers",
   "share.remove": "Remove access",
   "share.transferOwnership": "Transfer ownership",
+  "grid.addRows.action": "Add",
+  "grid.addRows.suffix": "more rows at bottom",
   "share.readOnlyBadge": "View only"
 }

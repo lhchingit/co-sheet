@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { resizeColumn, resizeRow, setColCount, setHiddenCols, MIN_SIZE, MAX_SIZE, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimension-service.js';
+import { resizeColumn, resizeRow, setColCount, setRowCount, setHiddenCols, MIN_SIZE, MAX_SIZE, DEFAULT_ROWS, MAX_ROWS, DEFAULT_COLS, MAX_COLS } from '../services/dimension-service.js';
 
 /** Build a minimal workbook with the given sheet names. */
 const makeWb = (...names) => {
@@ -90,6 +90,43 @@ test('setColCount rejects an unknown sheet', () => {
   const wb = makeWb('Sheet1');
   assert.deepStrictEqual(setColCount(wb, { sheetName: 'Nope', count: 30 }), { ok: false });
   assert.strictEqual(wb.colCounts, undefined);
+});
+
+test('setRowCount stores a count above the default in a lazily created map', () => {
+  const wb = makeWb('Sheet1');
+  const res = setRowCount(wb, { sheetName: 'Sheet1', count: 2000 });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', count: 2000 });
+  assert.strictEqual(wb.rowCounts.Sheet1, 2000);
+});
+
+test('setRowCount drops the entry at or below the default (keeps the doc lean)', () => {
+  const wb = makeWb('Sheet1');
+  setRowCount(wb, { sheetName: 'Sheet1', count: 2000 });
+  const res = setRowCount(wb, { sheetName: 'Sheet1', count: DEFAULT_ROWS });
+  assert.deepStrictEqual(res, { ok: true, sheetName: 'Sheet1', count: DEFAULT_ROWS });
+  assert.strictEqual(wb.rowCounts.Sheet1, undefined);
+});
+
+test('setRowCount accepts the MAX_ROWS ceiling and rejects out-of-range / non-integer', () => {
+  const wb = makeWb('Sheet1');
+  assert.strictEqual(setRowCount(wb, { sheetName: 'Sheet1', count: MAX_ROWS }).count, MAX_ROWS);
+  assert.deepStrictEqual(setRowCount(wb, { sheetName: 'Sheet1', count: MAX_ROWS + 1 }), { ok: false });
+  assert.deepStrictEqual(setRowCount(wb, { sheetName: 'Sheet1', count: DEFAULT_ROWS - 1 }), { ok: false });
+  assert.deepStrictEqual(setRowCount(wb, { sheetName: 'Sheet1', count: 2000.5 }), { ok: false });
+});
+
+test('setRowCount rejects an unknown sheet', () => {
+  const wb = makeWb('Sheet1');
+  assert.deepStrictEqual(setRowCount(wb, { sheetName: 'Nope', count: 2000 }), { ok: false });
+  assert.strictEqual(wb.rowCounts, undefined);
+});
+
+test('a row past the default is resizable once the grid can reach it', () => {
+  // The ceiling that bounds resizeRow is the grid's, not the default height: rows
+  // added from the add-rows control must be resizable like any other.
+  const wb = makeWb('Sheet1');
+  assert.strictEqual(resizeRow(wb, { sheetName: 'Sheet1', row: DEFAULT_ROWS + 1, size: 40 }).ok, true);
+  assert.deepStrictEqual(resizeRow(wb, { sheetName: 'Sheet1', row: MAX_ROWS + 1, size: 40 }), { ok: false });
 });
 
 test('setHiddenCols stores a de-duplicated list in a lazily created map', () => {
