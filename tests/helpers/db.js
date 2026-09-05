@@ -13,9 +13,31 @@ import { applySchema } from '../../db/schema.js';
  *
  * A test passes `db.url` as DATABASE_URL when it spawns `node server.js`, and uses
  * the seed/query helpers below to set up fixtures and assert on persisted state.
+ *
+ * Databases are not the only thing that needs isolating. The runner also exposes
+ * one Redis to the whole run, and the realtime bus publishes to a single channel,
+ * so every server every test file spawns used to join the same bus: one file's ops
+ * were delivered to every other file's server, which applied them to its own cached
+ * workbook, persisted them into its own database and broadcast them to its own
+ * sockets. That produced intermittent failures in tests that had nothing to do with
+ * each other (#211, and #194 / #204 before the common cause was clear).
+ *
+ * Importing this helper therefore also claims a realtime channel for the current
+ * process. Test files run in separate processes, so this is one channel per file —
+ * the right granularity: servers in different files can no longer hear each other,
+ * while two servers spawned by the SAME file still share a bus, which is exactly
+ * what realtime-multi-instance.test.js is there to exercise. Servers inherit it
+ * through `{ ...process.env }`, so no spawn site has to pass anything.
  */
 
 let seq = 0;
+
+/** This process's realtime channel; see the note above. */
+export const TEST_REALTIME_CHANNEL =
+  `cosheet:rt:test:${process.pid}:${Math.random().toString(36).slice(2, 10)}`;
+if (!process.env.REALTIME_CHANNEL) {
+  process.env.REALTIME_CHANNEL = TEST_REALTIME_CHANNEL;
+}
 
 /**
  * The base (admin) connection string the runner provisioned. Prefers the dedicated
