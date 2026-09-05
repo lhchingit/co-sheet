@@ -163,15 +163,16 @@
             grid-template-columns: 46px repeat(26, 100px);
             grid-auto-rows: minmax(21px, auto);
             position: relative; /* Enabled for absolute range positioning */
-            /* Trailing scroll buffer past the last column — the horizontal
-               counterpart of .grid-bottom-buffer. Without it the last column's
-               right border sits under the synthetic vertical scrollbar (14px,
-               drawn over the viewport's right edge) when scrolled fully right,
-               and the bar's own left border shows in its place. This padding
-               lets the last column scroll clear of the bar. It rides #grid-root's
-               CSS `zoom`, so 42px keeps clearing the 14px bar down to 50% zoom
-               (the minimum), matching the bottom buffer's clearance. */
-            padding-right: 42px;
+            /* No trailing buffer past the last column. There used to be a 42px
+               padding here so the last column could scroll clear of the vertical
+               scrollbar, which was drawn over the viewport's right edge (#68).
+               The bar now has a reserved lane instead — layout() in
+               initGridScrollbars insets the viewport's right edge by the bar's
+               width — so content can no longer scroll underneath it and the last
+               column ends flush against the bar, as it does in Google Sheets.
+               The old padding could never be the right size anyway: it rode
+               #grid-root's CSS `zoom` while the bar did not, so it showed as
+               `42 * zoom - 14` px of blank strip at every zoom level (#226). */
         }
         /* Style for cells that are part of the currently selected cell range.
            Only the light-blue tint fill is applied. The cell's own 1px gray
@@ -456,6 +457,14 @@
             height: 100%;
             cursor: col-resize;
             z-index: 22;
+        }
+        /* The last column's handle is pulled fully inside the grid. Straddling
+           the boundary puts 3px of it past the final track, and that overhang
+           counts towards the viewport's scrollWidth — which would stop the last
+           column reaching the vertical scrollbar even with the bar's lane
+           reserved (#226). The 6px hit area is unchanged, just not centred. */
+        .col-resize-handle-last {
+            right: 0;
         }
         .row-resize-handle {
             position: absolute;
