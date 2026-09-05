@@ -952,8 +952,44 @@ function requireGoogleLoginEnabled(req, res, next) {
   next();
 }
 
-// Cache the login page markup; strip the Mock OIDC block once at startup based on
-// the env flag so we don't re-read/re-parse the file on every request.
+// Cache-busting version for the client assets, computed once at startup from a
+// content hash of every stamped file in public/. It is appended as `?v=<hash>` to
+// every local <script>/<link> URL in the three HTML entry points, so a deploy
+// always changes those URLs — defeating any browser or intermediary (CDN/proxy)
+// cache that would otherwise keep serving a stale bundle. It is also what lets
+// those URLs be served `immutable` (see the static handler): the hash IS the cache
+// key. Any change to any hashed file bumps it; a timestamp is the fallback if the
+// directory can't be hashed.
+//
+// STAMPED_ASSET_EXTENSIONS must cover every file type whose URL carries `?v=`. A
+// stamped type missing from this list is the one dangerous combination: its URL
+// would be cached for a year behind a hash that never changes when it does. It
+// grew to include .css when the stylesheets were stamped.
+const STAMPED_ASSET_EXTENSIONS = ['.js', '.css'];
+const ASSET_VERSION = (() => {
+  try {
+    const dir = path.join(__dirname, 'public');
+    const files = fs.readdirSync(dir)
+      .filter((f) => STAMPED_ASSET_EXTENSIONS.some((ext) => f.endsWith(ext)))
+      .sort();
+    const hash = crypto.createHash('md5');
+    for (const f of files) hash.update(fs.readFileSync(path.join(dir, f)));
+    return hash.digest('hex').slice(0, 10);
+  } catch (err) {
+    logger.warn({ err }, 'Could not hash public assets for cache-busting; using timestamp');
+    return String(Date.now());
+  }
+})();
+
+/** Substitute the asset version into a page's `?v={{ASSET_VERSION}}` URLs. */
+const stampAssets = (html) => html.split('{{ASSET_VERSION}}').join(ASSET_VERSION);
+
+// The HTML entry points are read and templated once at startup rather than per
+// request: the files never change while the process runs, and neither does
+// ASSET_VERSION, so doing it per request was repeating identical work on the
+// request path of every page. `loginPageHtml` already worked this way; the editor
+// and drive pages now do too. The editor keeps one placeholder, {{FILE_NAME}},
+// which genuinely varies per request.
 const LOGIN_HTML_PATH = path.join(__dirname, 'public', 'login.html');
 let loginPageHtml = fs.readFileSync(LOGIN_HTML_PATH, 'utf8');
 if (!isMockOidcEnabled()) {
@@ -968,25 +1004,14 @@ if (!isGoogleLoginEnabled()) {
     ''
   );
 }
+loginPageHtml = stampAssets(loginPageHtml);
 
-// Cache-busting version for the client bundles, computed once at startup from a
-// content hash of every public JS file. It is appended as `?v=<hash>` to the
-// editor's <script> URLs (see the /sheet route) so a deploy always changes those
-// URLs — defeating any browser or intermediary (CDN/proxy) cache that would
-// otherwise keep serving a stale bundle. Any change to any module bumps it; a
-// timestamp is the fallback if the directory can't be hashed.
-const ASSET_VERSION = (() => {
-  try {
-    const dir = path.join(__dirname, 'public');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort();
-    const hash = crypto.createHash('md5');
-    for (const f of files) hash.update(fs.readFileSync(path.join(dir, f)));
-    return hash.digest('hex').slice(0, 10);
-  } catch (err) {
-    logger.warn({ err }, 'Could not hash public assets for cache-busting; using timestamp');
-    return String(Date.now());
-  }
-})();
+const drivePageHtml = stampAssets(
+  fs.readFileSync(path.join(__dirname, 'private', 'drive.html'), 'utf8')
+);
+const editorPageTemplate = stampAssets(
+  fs.readFileSync(path.join(__dirname, 'private', 'index.html'), 'utf8')
+);
 
 // Serve the login page.
 app.get('/login', (req, res) => {
@@ -1002,8 +1027,7 @@ app.get('/index.html', (req, res) => {
 // private directory. This is the first screen users see after signing in.
 // Protected: unauthenticated users are redirected to /login.
 app.get('/', ensureAuthenticated, (req, res) => {
-  res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'private', 'drive.html'));
+  res.set('Cache-Control', 'no-cache').type('html').send(drivePageHtml);
 });
 
 // Serve the spreadsheet editor. The specific workbook is selected via the
@@ -1030,16 +1054,17 @@ app.get('/sheet', ensureAuthenticated, async (req, res) => {
       // Fall back to the default name if the lookup fails.
     }
 
-    const template = await fs.promises.readFile(path.join(__dirname, 'private', 'index.html'), 'utf8');
-    const html = template
-      .split('{{FILE_NAME}}').join(escapeHtml(name))
-      .split('{{ASSET_VERSION}}').join(ASSET_VERSION);
+    const html = editorPageTemplate.split('{{FILE_NAME}}').join(escapeHtml(name));
     // Always revalidated, so a deploy's new asset hashes always reach the browser.
     // That is what lets the assets those hashes name be cached indefinitely.
     res.set('Cache-Control', 'no-cache').type('html').send(html);
   } catch (err) {
     logger.error({ err: err }, 'Error serving editor');
-    res.sendFile(path.join(__dirname, 'private', 'index.html'));
+    // The templated page with a neutral name, never the raw file: sending that
+    // would leak the literal {{FILE_NAME}} / {{ASSET_VERSION}} tokens to the
+    // browser and, with unstamped asset URLs, quietly bypass the version hash.
+    res.set('Cache-Control', 'no-cache').type('html')
+      .send(editorPageTemplate.split('{{FILE_NAME}}').join('Untitled spreadsheet'));
   }
 });
 
