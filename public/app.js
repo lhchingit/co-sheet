@@ -2833,9 +2833,12 @@ const getColHeaderEl = (colLetter) =>
 // selection overlay live in — so CSS `zoom` on #grid-root scales them along with
 // the grid, and they need no rendered cell box to measure from. That makes them
 // correct even when the target track isn't in the DOM (a hidden column, or a
-// future windowed render that only materialises the visible rows). Callers here
-// sum a bounded range, so a direct cumulative sum is enough; a later step can
-// back these with a cached prefix-sum array + binary search for scroll hot-paths.
+// future windowed render that only materialises the visible rows).
+//
+// Rows are backed by a cached prefix-sum array (rowOffsets below), so rowTop is a
+// lookup and computeVisibleRows a binary search rather than a walk from row 1
+// (#234). Columns still sum directly: there are at most MAX_COLS of them and
+// colLeft is not on the scroll path.
 
 /** Left edge (px) of column `colIndex` (0-based): gutter + widths before it.
  *  Hidden columns contribute 0 (see getColWidth), so they collapse out. */
@@ -2865,14 +2868,58 @@ const resolvedRowHeight = (row) => {
   return (typeof h === 'number' && h > 0) ? h : getRowHeight(row);
 };
 
+// Cumulative row heights for the active sheet: rowOffsets[r] is the total height of
+// rows 1..r (rowOffsets[0] is 0), so the top edge of row r is DEFAULT_ROW_HEIGHT +
+// rowOffsets[r-1], and a scroll offset can be turned into a row by binary search
+// instead of adding heights up from row 1 (#234).
+//
+// It depends on exactly what the row template depends on — the row count, the
+// resized rows, the font-grown ones, the active sheet — so it reuses
+// rowTemplateKey() as its invalidation signal rather than keeping a second rule in
+// step with that one. Rebuilt only when a row is resized, a font grows one, rows
+// are added or the sheet changes: user actions, not frames.
+//
+// A plain array rather than a typed one: the values are small integers, so the
+// engine packs them, and it keeps the client bundle free of a global the vm-based
+// tests would each have to provide.
+let rowOffsets = null;
+let rowOffsetsKey = null;
+
+/** The active sheet's cumulative row heights, rebuilt only when they can have changed. */
+const getRowOffsets = () => {
+  const key = rowTemplateKey();
+  if (rowOffsets && rowOffsetsKey === key) return rowOffsets;
+  const n = getRowCount();
+  const offsets = new Array(n + 1);
+  offsets[0] = 0;
+  let y = 0;
+  for (let r = 1; r <= n; r++) {
+    y += getRowHeight(r);
+    offsets[r] = y;
+  }
+  rowOffsets = offsets;
+  rowOffsetsKey = key;
+  return offsets;
+};
+
 /** Top edge (px) of row `row` (1-based): the column-header band (the first grid
  *  track, 21px per the base template) plus the rendered heights of the rows above. */
 const rowTop = (row) => {
   // Pick up any font-driven height change made since the last render. Every
   // caller reads its top edge from here before summing resolvedRowHeight over the
   // range, so refreshing at this one point keeps both halves of a rect on the same
-  // model.
+  // model. It runs before the offsets are read, so a change lands in the key.
   refreshAutoFontRowHeights();
+  // Only the windowed case can use the model wholesale; without windowing
+  // resolvedRowHeight measures the rendered box, which the sums do not model.
+  if (activeSheetWindowed) {
+    const offsets = getRowOffsets();
+    const n = offsets.length - 1;
+    // Past the last row the walk would have added a default-height row per step,
+    // since getRowHeight has no entry for those; match that rather than clamping.
+    if (row - 1 <= n) return DEFAULT_ROW_HEIGHT + offsets[row - 1 > 0 ? row - 1 : 0];
+    return DEFAULT_ROW_HEIGHT + offsets[n] + (row - 1 - n) * DEFAULT_ROW_HEIGHT;
+  }
   let y = DEFAULT_ROW_HEIGHT;
   for (let r = 1; r < row; r++) y += resolvedRowHeight(r);
   return y;
@@ -3378,14 +3425,33 @@ const computeVisibleRows = () => {
   if (!viewport) return { start: 1, end: getRowCount() };
   const top = viewport.scrollTop;
   const bottom = top + viewport.clientHeight;
-  let y = DEFAULT_ROW_HEIGHT; // top of row 1, below the header band
-  let start = 1, end = getRowCount();
-  for (let r = 1; r <= getRowCount(); r++) {
-    const h = getRowHeight(r);
-    if (y + h <= top) start = r + 1;               // row is fully above the viewport
-    else if (y >= bottom) { end = r - 1; break; }  // first row fully below the viewport
-    y += h;
+  // Offsets measured from the top of row 1, which sits DEFAULT_ROW_HEIGHT down the
+  // scroll extent (the column-header band is the first track).
+  const offsets = getRowOffsets();
+  const n = offsets.length - 1;
+  const above = top - DEFAULT_ROW_HEIGHT;   // a row is fully above when offsets[r] <= this
+  const below = bottom - DEFAULT_ROW_HEIGHT; // ...and fully below when offsets[r-1] >= this
+
+  // The last row that ends at or before the viewport's top edge; the first visible
+  // row is the one after it. offsets is strictly increasing (every height is > 0),
+  // so both searches are well defined.
+  let lo = 1, hi = n, lastAbove = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (offsets[mid] <= above) { lastAbove = mid; lo = mid + 1; } else hi = mid - 1;
   }
+  const start = lastAbove + 1;
+
+  // The first row that begins at or after the viewport's bottom edge; the last
+  // visible row is the one before it. None means the sheet ends inside the viewport.
+  lo = 1; hi = n;
+  let firstBelow = n + 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (offsets[mid - 1] >= below) { firstBelow = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  const end = firstBelow > n ? n : firstBelow - 1;
+
   return { start, end: Math.max(start, end) };
 };
 
