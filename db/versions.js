@@ -10,14 +10,29 @@ import { pool } from './pool.js';
  */
 
 /**
+ * How many versions of a file the history listing returns, newest first.
+ *
+ * Also the count a file's history is to be pruned to, so in steady state the
+ * listing shows everything that exists and this bound is invisible. It is applied
+ * to the query as well because that is not something the query should have to
+ * assume: without it, opening the history of a long-lived file returns every
+ * snapshot ever taken of it — a full workbook copy is written after every 15
+ * seconds of idle — and the sidebar renders the lot.
+ */
+export const VERSION_LIST_LIMIT = 100;
+
+/**
  * List version metadata (no state payload) for one file, newest first.
+ * Bounded: see VERSION_LIST_LIMIT.
  * @param {string} fileId
+ * @param {number} [limit]
  * @returns {Promise<any[]>}
  */
-export async function listVersions(fileId) {
+export async function listVersions(fileId, limit = VERSION_LIST_LIMIT) {
   const r = await pool.query(
-    'SELECT id, created_at, created_by FROM workbook_versions WHERE file_id = $1 ORDER BY id DESC',
-    [fileId]
+    `SELECT id, created_at, created_by FROM workbook_versions
+      WHERE file_id = $1 ORDER BY id DESC LIMIT $2`,
+    [fileId, limit]
   );
   return r.rows || [];
 }
