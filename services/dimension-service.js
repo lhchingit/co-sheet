@@ -25,10 +25,11 @@ export const MAX_SIZE = 2000;
 // Row-count bounds, matching the client grid: a sheet starts at DEFAULT_ROWS and
 // grows from the add-rows control at the bottom of the grid. The ceiling is set by
 // what the renderer can carry — applyGridTemplate emits one `grid-template-rows`
-// track per row and rebuilds that string on every render — not by storage: at
-// 50,000 rows the string costs ~2ms to build and ~22ms for the browser to apply,
-// and both roughly double at 100,000. Raising it should wait until that string is
-// rebuilt incrementally.
+// track per row — not by storage: at 50,000 rows that string costs ~4ms to build
+// and ~22ms for the browser to apply, and both roughly double at 100,000. Since
+// #232 it is rebuilt only when something it depends on changes, so the cost is no
+// longer per render; raising this ceiling is a separate decision, and needs its own
+// measurements of what else on the scroll path is still linear in the row count.
 export const DEFAULT_ROWS = 1000;
 export const MAX_ROWS = 50000;
 
