@@ -212,32 +212,79 @@ test('versions repository - insert, list newest-first, fetch state (per file)', 
   assert.strictEqual(await versions.getVersionState(99999, 'default'), undefined, 'missing version => undefined');
 });
 
-test('versions repository - the listing is bounded and keeps the newest', async () => {
-  // Opening the history of a long-lived file used to return every snapshot ever
-  // taken of it — one is written after every 15 seconds of idle — and the sidebar
-  // rendered all of them.
+test('versions repository - history is pruned to the newest, per file', async () => {
+  // Each snapshot is a full copy of the workbook and one is written after every 15
+  // seconds of idle editing, so without pruning a file's history grows for as long
+  // as anyone works on it.
   const { versions } = repo;
-  const OVER = 5;
+  const KEEP = versions.VERSION_LIST_LIMIT;
+  const ids = [];
 
-  for (let i = 1; i <= versions.VERSION_LIST_LIMIT + OVER; i++) {
+  for (let i = 1; i <= KEEP + 7; i++) {
+    await versions.insertVersion(JSON.stringify({ n: i }), 'alice', 'pruned');
+    const listed = await versions.listVersions('pruned', KEEP + 50);
+    ids.push(listed[0].id);
+  }
+
+  const remaining = await versions.listVersions('pruned', KEEP + 50);
+  assert.strictEqual(remaining.length, KEEP, 'the file settles at the retention count');
+
+  // The NEWEST are what survive. Keeping the oldest would satisfy a count check and
+  // be exactly backwards for a history read from now.
+  assert.strictEqual(remaining[0].id, ids[ids.length - 1], 'the latest snapshot is still there');
+  const oldest = ids[0];
+  assert.strictEqual(
+    await versions.getVersionState(oldest, 'pruned'), undefined,
+    'the first snapshot was pruned away'
+  );
+
+  // Another file is untouched: the retention count is per file, not global.
+  await versions.insertVersion(JSON.stringify({ other: true }), 'bob', 'kept-file');
+  assert.strictEqual((await versions.listVersions('kept-file')).length, 1);
+});
+
+test('versions repository - a file under the retention count keeps everything', async () => {
+  // The threshold subquery returns NULL when there is no `keep`-th row, and
+  // `id < NULL` deletes nothing. Worth pinning: a naive rewrite that treats the
+  // missing threshold as 0 or as "delete the rest" would wipe a young file.
+  const { versions } = repo;
+
+  for (let i = 1; i <= 5; i++) {
+    await versions.insertVersion(JSON.stringify({ n: i }), 'alice', 'young');
+  }
+
+  assert.strictEqual((await versions.listVersions('young')).length, 5, 'all five survive');
+  assert.strictEqual(await versions.pruneVersions('young'), 0, 'and an explicit prune deletes nothing');
+  assert.strictEqual(await versions.pruneVersions('no-such-file'), 0, 'nor does pruning an empty file');
+});
+
+test('versions repository - the listing is bounded, at the newest end', async () => {
+  // Opening the history of a long-lived file used to return every snapshot ever
+  // taken of it. Exercised with an explicit small limit rather than by inserting
+  // past VERSION_LIST_LIMIT, since insertVersion now prunes to it — the cap here is
+  // the same mechanism either way.
+  const { versions } = repo;
+
+  for (let i = 1; i <= 10; i++) {
     await versions.insertVersion(JSON.stringify({ n: i }), 'alice', 'bounded');
   }
 
-  const listed = await versions.listVersions('bounded');
+  const all = await versions.listVersions('bounded');
+  assert.strictEqual(all.length, 10, 'a file under the retention count lists everything');
 
-  assert.strictEqual(listed.length, versions.VERSION_LIST_LIMIT, 'the listing is capped');
-  // Capped at the NEWEST end: version history is read backwards from now, so
-  // truncating the recent side would be worse than not truncating at all.
-  const ids = listed.map((r) => r.id);
-  assert.deepStrictEqual(ids, [...ids].sort((a, b) => b - a), 'newest first');
-  const all = await versions.listVersions('bounded', versions.VERSION_LIST_LIMIT + OVER + 10);
-  assert.strictEqual(ids[0], all[0].id, 'the newest snapshot is the first row either way');
-  assert.strictEqual(all.length, versions.VERSION_LIST_LIMIT + OVER, 'an explicit limit still reaches the rest');
+  const capped = await versions.listVersions('bounded', 3);
+  assert.strictEqual(capped.length, 3, 'an explicit limit caps the listing');
+  // At the NEWEST end: history is read backwards from now, so truncating the recent
+  // side would be worse than not truncating at all — and "returns 3 rows" alone
+  // would not tell the two apart.
+  assert.deepStrictEqual(
+    capped.map((r) => r.id), all.slice(0, 3).map((r) => r.id),
+    'the rows kept are the newest, in the same order'
+  );
 
   // The bound is per file, not global.
   await versions.insertVersion(JSON.stringify({ other: true }), 'bob', 'other-file');
-  const otherFile = await versions.listVersions('other-file');
-  assert.strictEqual(otherFile.length, 1, "another file's history is unaffected");
+  assert.strictEqual((await versions.listVersions('other-file')).length, 1);
 });
 
 test('shares repository - upsert, role changes, listings, and deletes', async () => {
