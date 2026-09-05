@@ -2312,8 +2312,8 @@ app.post('/api/cells', ensureAuthenticated, async (req, res) => {
 
 /**
  * GET /api/versions
- * Retrieves a list of all version history metadata, sorted by id DESC.
- * Only returns id, created_at, and created_by.
+ * Retrieves version history metadata for a workbook, newest first, bounded by
+ * versionsRepo.VERSION_LIST_LIMIT. Only returns id, created_at, and created_by.
  * Protected with ensureAuthenticated middleware.
  */
 app.get('/api/versions', ensureAuthenticated, async (req, res) => {

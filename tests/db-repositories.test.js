@@ -212,6 +212,34 @@ test('versions repository - insert, list newest-first, fetch state (per file)', 
   assert.strictEqual(await versions.getVersionState(99999, 'default'), undefined, 'missing version => undefined');
 });
 
+test('versions repository - the listing is bounded and keeps the newest', async () => {
+  // Opening the history of a long-lived file used to return every snapshot ever
+  // taken of it — one is written after every 15 seconds of idle — and the sidebar
+  // rendered all of them.
+  const { versions } = repo;
+  const OVER = 5;
+
+  for (let i = 1; i <= versions.VERSION_LIST_LIMIT + OVER; i++) {
+    await versions.insertVersion(JSON.stringify({ n: i }), 'alice', 'bounded');
+  }
+
+  const listed = await versions.listVersions('bounded');
+
+  assert.strictEqual(listed.length, versions.VERSION_LIST_LIMIT, 'the listing is capped');
+  // Capped at the NEWEST end: version history is read backwards from now, so
+  // truncating the recent side would be worse than not truncating at all.
+  const ids = listed.map((r) => r.id);
+  assert.deepStrictEqual(ids, [...ids].sort((a, b) => b - a), 'newest first');
+  const all = await versions.listVersions('bounded', versions.VERSION_LIST_LIMIT + OVER + 10);
+  assert.strictEqual(ids[0], all[0].id, 'the newest snapshot is the first row either way');
+  assert.strictEqual(all.length, versions.VERSION_LIST_LIMIT + OVER, 'an explicit limit still reaches the rest');
+
+  // The bound is per file, not global.
+  await versions.insertVersion(JSON.stringify({ other: true }), 'bob', 'other-file');
+  const otherFile = await versions.listVersions('other-file');
+  assert.strictEqual(otherFile.length, 1, "another file's history is unaffected");
+});
+
 test('shares repository - upsert, role changes, listings, and deletes', async () => {
   const { files, shares } = repo;
   await files.insertFile('sf', 'Shared', 'owner');
