@@ -42,7 +42,7 @@ export async function listVersions(fileId, limit = VERSION_LIST_LIMIT) {
  * id from one workbook cannot be read through another.
  * @param {number} id
  * @param {string} fileId
- * @returns {Promise<any | undefined>} The raw `state` value, or undefined if not found.
+ * @returns {Promise<any | undefined>} The state object, or undefined if not found.
  */
 export async function getVersionState(id, fileId) {
   const r = await pool.query(
@@ -50,7 +50,12 @@ export async function getVersionState(id, fileId) {
     [id, fileId]
   );
   if (!r.rows || r.rows.length === 0) return undefined;
-  return r.rows[0].state;
+  const state = r.rows[0].state;
+  // Stored as TEXT (see db/schema.js), so the driver returns a string where it
+  // parsed JSONB for us. Callers want the snapshot either way; which format holds
+  // it is this layer's business, and tolerating both keeps the repository correct
+  // against a database whose migration has not run yet.
+  return typeof state === 'string' ? JSON.parse(state) : state;
 }
 
 /**

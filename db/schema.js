@@ -52,10 +52,28 @@ export async function applySchema(db) {
     CREATE TABLE IF NOT EXISTS workbook_versions (
       id SERIAL PRIMARY KEY,
       file_id TEXT NOT NULL DEFAULT 'default',
-      state JSONB NOT NULL,
+      state TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       created_by TEXT NOT NULL
     )
+  `);
+  // TEXT for the same reason as workbook_state: no JSON operator is ever used on
+  // this column, so JSONB only bought parsing, validating and re-encoding a whole
+  // workbook copy on every snapshot. Guarded on the current type — ALTER COLUMN ...
+  // TYPE rewrites the table, and applySchema runs on every server start.
+  //
+  // Ordered after the retention work on purpose: this rewrites every row, and until
+  // history was pruned to the newest 100 per file the table had no bound at all.
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'workbook_versions' AND column_name = 'state' AND data_type = 'jsonb'
+      ) THEN
+        ALTER TABLE workbook_versions ALTER COLUMN state TYPE TEXT USING state::text;
+      END IF;
+    END $$;
   `);
   // Idempotent migration for databases provisioned before version history was
   // per-file: existing rows belong to the legacy 'default' workbook.
