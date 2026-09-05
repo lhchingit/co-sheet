@@ -91,7 +91,10 @@ test('Database - workbook_versions insert and query round-trip', async () => {
     const insertedRow = insertResult.rows[0];
     assert.strictEqual(insertedRow.id, 1, 'First version ID should be 1');
     assert.strictEqual(insertedRow.created_by, 'test_user', 'Created by should match input');
-    assert.deepStrictEqual(insertedRow.state, testState, 'State should match input');
+    // The column is TEXT (see db/schema.js), so this is the stored document rather
+    // than a driver-parsed object; what the round trip has to preserve is the
+    // document, which is what parsing it back asserts.
+    assert.deepStrictEqual(JSON.parse(insertedRow.state), testState, 'State should match input');
     assert.ok(insertedRow.created_at, 'created_at should be defined');
 
     // Assert selection result structure and content.
@@ -99,7 +102,7 @@ test('Database - workbook_versions insert and query round-trip', async () => {
     const selectedRow = selectResult.rows[0];
     assert.strictEqual(selectedRow.id, 1, 'Selected version ID should be 1');
     assert.strictEqual(selectedRow.created_by, 'test_user', 'Selected created by should match input');
-    assert.deepStrictEqual(selectedRow.state, testState, 'Selected state should match input');
+    assert.deepStrictEqual(JSON.parse(selectedRow.state), testState, 'Selected state should match input');
   } finally {
     await db.cleanup();
   }

@@ -190,7 +190,12 @@ class TestDb {
     const r = await this.pool.query(
       'SELECT id, state, created_at, created_by FROM workbook_versions ORDER BY id ASC'
     );
-    return r.rows;
+    // Stored as TEXT (it was JSONB, which the driver parsed for us); tests want the
+    // object, and tolerating both keeps this working either side of the migration.
+    return r.rows.map((row) => ({
+      ...row,
+      state: typeof row.state === 'string' ? JSON.parse(row.state) : row.state
+    }));
   }
 
   /** Close the pool and drop the database. Safe to call once, in a test's finally. */
