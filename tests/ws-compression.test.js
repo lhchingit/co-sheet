@@ -51,6 +51,28 @@ async function connectAndInit(port, fileId, cookie) {
   return { ws, init };
 }
 
+/**
+ * Connect once the workbook actually holds `expected` cells on `sheet`.
+ *
+ * The edit that fills it is applied asynchronously by the server, and how long
+ * that takes is not this test's to guess: a fixed sleep here raced a loaded runner
+ * and failed on a workbook that was filled correctly a moment later (#204). So
+ * connect, and if the payload is short, close and try again until it is not.
+ */
+async function connectWhenFilled(port, fileId, cookie, sheet, expected, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const conn = await connectAndInit(port, fileId, cookie);
+    const cells = (conn.init.sheets && conn.init.sheets[sheet]) || {};
+    if (Object.keys(cells).length >= expected) return conn;
+    conn.ws.close();
+    if (Date.now() > deadline) {
+      throw new Error(`workbook still had ${Object.keys(cells).length} of ${expected} cells`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 test('the workbook init frame is deflated, and survives the round trip intact', async () => {
   // --- Arrange ---
   const PORT = '31401';
@@ -80,10 +102,9 @@ test('the workbook init frame is deflated, and survives the round trip intact', 
         }))
       }
     }));
-    await new Promise((r) => setTimeout(r, 400));
 
     // --- Act: a fresh connection receives the whole workbook in one frame ---
-    reader = await connectAndInit(PORT, fileId, cookie);
+    reader = await connectWhenFilled(PORT, fileId, cookie, 'Sheet1', CELLS);
 
     // --- Assert ---
     assert.match(
