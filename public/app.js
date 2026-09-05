@@ -167,6 +167,20 @@ function ensureKey(obj, key, factory) {
 
 // Global state variables
 let localSheets = Object.create(null);
+// Bumped by every write to a sheet's cell map, so scanActiveSheetModel can tell that
+// nothing it derives from has moved and hand back its cached answer (#236). Three
+// sites bump it, and they are the only three that write a cell: the localCells proxy
+// traps just below — which every local edit, paste, undo and clear goes through, in
+// this file and in the extracted feature modules — and applyRemoteCellUpdate, which
+// writes to a named sheet's map directly because the cell may not be on the active
+// one.
+//
+// Replacing a whole sheet map (the init payload, add/copy/delete/rename sheet) needs
+// no bump: the cache also holds the map object it described and compares identity, so
+// a new map is a miss on its own. Switching sheets is the same — a different map.
+// Over-invalidation is free here; a spurious bump costs one rescan, never a stale
+// answer.
+let cellsVersion = 0;
 let activeSheetName = 'Sheet1';
 let sheetOrder = ['Sheet1'];
 let sheetColors = Object.create(null);
@@ -206,10 +220,12 @@ let localCells = new Proxy({}, {
   },
   set(target, prop, value) {
     setKey(ensureKey(localSheets, activeSheetName, () => Object.create(null)), prop, value);
+    cellsVersion++;
     return true;
   },
   deleteProperty(target, prop) {
     deleteKey(localSheets[activeSheetName], prop);
+    cellsVersion++;
     return true;
   },
   has(target, prop) {
@@ -921,6 +937,7 @@ const applyRemoteCellUpdate = (payload) => {
   const sheet = sheetName || 'Sheet1';
   const cellMap = ensureKey(localSheets, sheet, () => Object.create(null));
   setKey(cellMap, cellId, { formula, value, style: style || {} });
+  cellsVersion++;   // the one cell write that does not go through the localCells proxy
   
   if (sheet === activeSheetName) {
     // Propagate dependencies once per burst, not once per applied cell (see
@@ -1296,20 +1313,14 @@ const clearRangeSelection = () => {
 /** True when a style object carries a real (multi-cell) merge. */
 const styleHasMerge = (style) => !!(style && style.merge && (style.merge.rows * style.merge.cols) > 1);
 
-/** All merge anchors on the active sheet: [{ anchorId, r, c, rows, cols }]. */
-const getActiveSheetMerges = () => {
-  const out = [];
-  const cells = localSheets[activeSheetName];
-  if (!cells) return out;
-  for (const id of Object.keys(cells)) {
-    const cell = cells[id];
-    if (cell && styleHasMerge(cell.style)) {
-      const co = parseCellCoord(id);
-      if (co) out.push({ anchorId: id, r: co.row, c: co.colIndex, rows: cell.style.merge.rows, cols: cell.style.merge.cols });
-    }
-  }
-  return out;
-};
+/** All merge anchors on the active sheet: [{ anchorId, r, c, rows, cols }].
+ *
+ *  Collected by scanActiveSheetModel, which walks every cell anyway and already
+ *  reads each style. This used to be its own walk — and one that built
+ *  Object.keys(cells) first, so a 200,000-cell sheet allocated an array of every id
+ *  on every band-moving scroll frame, next to the model scan doing the same lap
+ *  (#236). The returned array is the cached model's own; callers only read it. */
+const getActiveSheetMerges = () => scanActiveSheetModel().merges;
 
 /**
  * Builds the coverage maps used by the renderer: each covered cell id → its
@@ -3378,13 +3389,27 @@ let renderedColCount = DEFAULT_COLS;
  *   entries the sheet holds, reported here because this walk passes every one of
  *   them anyway and a later `Object.keys(...).length` would walk them again.
  */
+// The last model handed out, with the two things that decide whether it still
+// describes the sheet: the exact cell map it walked, and the write counter at the
+// time. A scroll changes neither, so the walk below runs on a real change rather
+// than on every frame (#236).
+let scannedModel = null;
+let scannedCells = null;
+let scannedVersion = -1;
+
 const scanActiveSheetModel = () => {
   const cells = localSheets[activeSheetName];
+  if (scannedModel && scannedCells === cells && scannedVersion === cellsVersion) return scannedModel;
   let maxColIndex = DEFAULT_COLS - 1;
   const fontRowHeights = Object.create(null);
+  const merges = [];
   let hasWrappedRows = false;
   let cellCount = 0;
-  if (!cells) return { maxColIndex, fontRowHeights, hasWrappedRows, cellCount };
+  if (!cells) {
+    const empty = { maxColIndex, fontRowHeights, merges, hasWrappedRows, cellCount };
+    scannedModel = empty; scannedCells = cells; scannedVersion = cellsVersion;
+    return empty;
+  }
 
   for (const id in cells) {
     cellCount++;
@@ -3407,6 +3432,12 @@ const scanActiveSheetModel = () => {
     const style = cell && cell.style;
     if (!style) continue;
     if (style.textWrap === 'wrap') hasWrappedRows = true;
+    if (styleHasMerge(style)) {
+      merges.push({
+        anchorId: id, r: parseInt(id.slice(i), 10), c: colNumber - 1,
+        rows: style.merge.rows, cols: style.merge.cols
+      });
+    }
     // Only a value-bearing cell above the default font grows its row (this
     // mirrors the renderer's `val ?`); 0 / false count as present.
     if (!style.fontSize || cell.value == null || cell.value === '') continue;
@@ -3415,7 +3446,11 @@ const scanActiveSheetModel = () => {
     const row = parseInt(id.slice(i), 10);
     if (!(fontRowHeights[row] >= minHeight)) fontRowHeights[row] = minHeight;
   }
-  return { maxColIndex, fontRowHeights, hasWrappedRows, cellCount };
+  const model = { maxColIndex, fontRowHeights, merges, hasWrappedRows, cellCount };
+  scannedModel = model;
+  scannedCells = cells;
+  scannedVersion = cellsVersion;
+  return model;
 };
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the

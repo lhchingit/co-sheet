@@ -103,8 +103,15 @@ function createSandbox() {
   // Cell ids the stub DOM should report as too wide for their box.
   sandbox.overflowing = overflowing;
   sandbox.gridRoot = byId['grid-root'] || (byId['grid-root'] = el(styleWrites, overflowing));
-  // Replace the active sheet's cells (both views of them stay in sync).
-  sandbox.setCells = (cells) => { sandbox.localCells = cells; sandbox.localSheets.Sheet1 = cells; };
+  // Replace the active sheet's cells by writing THROUGH the localCells proxy, which
+  // is what every path in the app does. Replacing the binding instead would leave a
+  // plain object in its place, and later writes to it would miss the trap the model
+  // scan's cache invalidation hangs off (#236) — the harness would then be testing a
+  // way of mutating the sheet that no app path uses.
+  sandbox.setCells = (cells) => {
+    for (const id of Object.keys(sandbox.localSheets.Sheet1 || {})) delete sandbox.localCells[id];
+    for (const id of Object.keys(cells)) sandbox.localCells[id] = cells[id];
+  };
   return sandbox;
 }
 
