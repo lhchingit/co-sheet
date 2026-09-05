@@ -257,7 +257,15 @@
             display: flex;
             flex-direction: column;
             justify-content: flex-end; /* Default vertical alignment: Bottom */
-            line-height: normal;
+            /* Pinned rather than `normal` so the row height a large font needs is
+               predictable: getCellMinHeight models a cell's height as
+               (line-height + 0.4em padding) x font-size + the 1px gridline, and
+               the grid template is built from that model for rows no render has
+               materialised. `normal` is font-dependent (~1.229 for Roboto), so it
+               made the model wrong by an amount that grew with the font size and
+               changed again with the cell's fontFamily. Keep this in sync with
+               CELL_LINE_HEIGHT_FACTOR in public/app.js. */
+            line-height: 1.2;
             /* Horizontal padding is a fixed pixel value (not em) so the gap
                between the text and the cell edge stays constant regardless of
                font size; an em-based left padding grew with the text and made
