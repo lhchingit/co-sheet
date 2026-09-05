@@ -161,6 +161,7 @@ cp .env.example .env
 | `PG_POOL_MAX`        | Maximum concurrent PostgreSQL connections for this process (default `10`). The ceiling on all database work: workbook writes queue behind it, and sign-in / the drive listing queue behind those. Raise it only alongside the server's own `max_connections`. |
 | `REDIS_URL`          | Redis connection URI (or comma-separated seed nodes). Enables a Redis-backed session store and the realtime pub/sub bus for multi-replica deployments. Unset → single-instance in-memory mode. |
 | `REDIS_CLUSTER`      | Set `true` when `REDIS_URL` points at a cluster-mode Redis (slot-aware client). |
+| `REALTIME_CHANNEL`   | Redis pub/sub channel the realtime fan-out uses (default `cosheet:rt`). Instances hear only each other's edits and presence when they share a channel, so set this only to keep separate deployments apart on a shared Redis. The integration suite sets it per test file. |
 | `METRICS_PORT`       | Expose Prometheus metrics at `GET /metrics` on this dedicated port (separate from the app port, so it can be firewalled to the monitoring network). Unset → metrics disabled with zero overhead. Series: default Node/process metrics, `http_request_duration_seconds`, `ws_active_connections`, `active_users`, `db_up`, `redis_up`. |
 | `GOOGLE_CLIENT_ID`   | Google OAuth 2.0 client ID (OIDC).                                           |
 | `GOOGLE_CLIENT_SECRET`| Google OAuth 2.0 client secret.                                            |

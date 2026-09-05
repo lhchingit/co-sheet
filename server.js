@@ -2567,7 +2567,14 @@ heartbeatInterval.unref();
 
 // Cross-instance message bus. In single-instance / local mode (no REDIS_URL) this
 // is a no-op and the server behaves exactly as before. init() runs in `ready`.
-const bus = createRealtimeBus({ redisUrl: process.env.REDIS_URL, cluster: REDIS_CLUSTER });
+// REALTIME_CHANNEL keeps deployments that share a Redis server from hearing each
+// other. Unset in production, where one channel per Redis is exactly right; the
+// integration suite sets it per test file (#211).
+const bus = createRealtimeBus({
+  redisUrl: process.env.REDIS_URL,
+  cluster: REDIS_CLUSTER,
+  channel: process.env.REALTIME_CHANNEL
+});
 
 // Run database initialization and start the HTTP server with WebSocket upgrade
 // support. `ready` resolves once the server is actually listening, so importers

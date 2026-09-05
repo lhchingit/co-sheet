@@ -22,8 +22,8 @@
 
 import crypto from 'crypto';
 
-/** Channel all instances publish/subscribe on for realtime fan-out. */
-const RT_CHANNEL = 'cosheet:rt';
+/** Default channel all instances publish/subscribe on for realtime fan-out. */
+const DEFAULT_RT_CHANNEL = 'cosheet:rt';
 
 /**
  * Normalize Redis connection config from env-style inputs. Returns null when no
@@ -78,12 +78,23 @@ export async function createRedisClient(config) {
  * Create a realtime bus. Call init() once at startup; if redisUrl is falsy the
  * bus runs in local (no-op) mode.
  *
- * @param {{ redisUrl?: string, cluster?: boolean, logger?: Pick<Console, 'log'|'error'> }} [opts]
+ * `channel` scopes the fan-out: instances sharing a Redis hear only each other's
+ * messages when they share a channel. Omit it in production, where one channel per
+ * Redis is right; the integration suite sets it per test file (see the note below).
+ *
+ * @param {{ redisUrl?: string, cluster?: boolean, logger?: Pick<Console, 'log'|'error'>,
+ *   channel?: string }} [opts]
  * @returns {RealtimeBus}
  */
-export function createRealtimeBus({ redisUrl, cluster = false, logger = console } = {}) {
+export function createRealtimeBus({ redisUrl, cluster = false, logger = console, channel } = {}) {
   const instanceId = crypto.randomBytes(8).toString('hex');
   const config = resolveRedisOptions({ redisUrl, cluster });
+  // Every instance sharing a Redis also shares this channel, which is what makes
+  // them one deployment. It is overridable so that groups which merely share a
+  // Redis server can be kept apart — the integration suite gives every test file
+  // its own channel, since otherwise one file's ops are applied, persisted and
+  // broadcast by every other file's server (#211).
+  const rtChannel = channel || DEFAULT_RT_CHANNEL;
 
   /** @type {((msg: object) => void) | null} */
   let handler = null;
@@ -114,7 +125,7 @@ export function createRealtimeBus({ redisUrl, cluster = false, logger = console 
     // node-redis exposes the same subscribe()/publish() API on single and cluster
     // clients. On a cluster, classic pub/sub still propagates a published message
     // cluster-wide, so a subscriber on any node receives it.
-    await sub.subscribe(RT_CHANNEL, (/** @type {string} */ raw) => {
+    await sub.subscribe(rtChannel, (/** @type {string} */ raw) => {
       try {
         const env = JSON.parse(raw);
         // Ignore our own echoes — we already delivered these to local sockets.
@@ -136,7 +147,7 @@ export function createRealtimeBus({ redisUrl, cluster = false, logger = console 
   function publish(msg) {
     if (!enabled) return;
     pub
-      .publish(RT_CHANNEL, JSON.stringify({ from: instanceId, msg }))
+      .publish(rtChannel, JSON.stringify({ from: instanceId, msg }))
       .catch((/** @type {Error} */ e) => logger.error('[realtime] publish failed:', e.message));
   }
 
