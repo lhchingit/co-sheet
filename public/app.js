@@ -3082,15 +3082,28 @@ try {
   else if (pref === '1') windowingEnabled = true;
 } catch { /* storage blocked — keep the default */ }
 
-// Extra rows rendered above/below the viewport so a small scroll neither exposes a
-// blank edge nor forces a re-render.
-const WINDOW_OVERSCAN = 8;
+// Extra rows built above and below the viewport. This is the slack a scroll spends
+// before the grid has to be rebuilt (see onGridScrollWindow), so it is also what
+// sets how often that happens: bigger means more elements per render and far fewer
+// renders. Measured over a 100-row scroll, overscan 8 with a rebuild per row cost
+// ~136,000 element creations; spending the slack instead brings it to a fraction of
+// that, and a larger band buys more. It stays well under the full sheet, which is
+// the point of windowing at all.
+const WINDOW_OVERSCAN = 24;
+
+// How close the viewport may come to the edge of the built band before it is
+// rebuilt, in rows. Non-zero so the rebuild happens while there are still rows
+// beyond the viewport to show, rather than at the moment one is needed.
+const WINDOW_RENDER_MARGIN = 4;
 
 // Set by each render: whether the active sheet is currently windowed, and the row
 // span it last rendered, so the scroll handler rebuilds only when the visible
 // window moves to a new span (and never for a non-windowed sheet).
 let activeSheetWindowed = false;
-let lastRenderedRowWindow = '';
+// The row band the last render actually built. The scroll handler compares the
+// viewport against this rather than against a freshly derived ideal window.
+let renderedRowStart = 1;
+let renderedRowEnd = TOTAL_ROWS;
 
 // Column count of the grid as last rendered. Consumers that describe what is on
 // screen — the selection highlight, the overflow spill — read this instead of
@@ -3162,7 +3175,7 @@ const scanActiveSheetModel = () => {
 
 /** The 1-based [start,end] row range visible in the viewport, grown by the
  *  overscan, derived from scrollTop and the model row heights. */
-const computeRowWindow = () => {
+const computeVisibleRows = () => {
   const viewport = document.getElementById('grid-viewport');
   if (!viewport) return { start: 1, end: TOTAL_ROWS };
   const top = viewport.scrollTop;
@@ -3175,9 +3188,15 @@ const computeRowWindow = () => {
     else if (y >= bottom) { end = r - 1; break; }  // first row fully below the viewport
     y += h;
   }
-  start = Math.max(1, start - WINDOW_OVERSCAN);
-  end = Math.min(TOTAL_ROWS, Math.max(start, end + WINDOW_OVERSCAN));
-  return { start, end };
+  return { start, end: Math.max(start, end) };
+};
+
+/** The 1-based [start,end] row range to build: the visible rows plus the overscan
+ *  either side, which is the slack the scroll handler consumes before re-rendering. */
+const computeRowWindow = () => {
+  const { start, end } = computeVisibleRows();
+  const from = Math.max(1, start - WINDOW_OVERSCAN);
+  return { start: from, end: Math.min(TOTAL_ROWS, Math.max(from, end + WINDOW_OVERSCAN)) };
 };
 
 /** Scroll the grid viewport so `cellId` is within the visible band, using model
@@ -3218,8 +3237,28 @@ const onGridScrollWindow = () => {
   requestAnimationFrame(() => {
     windowRenderScheduled = false;
     if (!activeSheetWindowed) return;
-    const w = computeRowWindow();
-    if (`${w.start}:${w.end}` !== lastRenderedRowWindow) renderSpreadsheetGrid();
+    // Re-render when the viewport approaches the edge of what is built, not when
+    // the ideal window moves. The two used to be the same test — the window is
+    // derived from scrollTop, so scrolling a single row moved it and forced a full
+    // rebuild, meaning one rebuild per row scrolled. The overscan already builds
+    // rows either side of the viewport; this spends that slack instead of
+    // recomputing it away, and re-renders once it is nearly used up.
+    //
+    // The margin is what keeps a fast scroll from showing a blank edge: the render
+    // is triggered while there are still rows built beyond the viewport, not at the
+    // moment one is needed. A jump far outside the band fails the test immediately
+    // and renders at once, exactly as before.
+    const visible = computeVisibleRows();
+    // Running short of built rows in one direction — but only where there is more
+    // of the sheet to build. At row 1 nothing exists above, so the margin can never
+    // be satisfied there and demanding it would re-render on every scroll event.
+    const shortAbove = renderedRowStart > 1 && visible.start < renderedRowStart + WINDOW_RENDER_MARGIN;
+    const shortBelow = renderedRowEnd < TOTAL_ROWS && visible.end > renderedRowEnd - WINDOW_RENDER_MARGIN;
+    // A jump (a scrollbar drag, revealCell) can land wholly outside the band, which
+    // always needs a render whatever the margins say.
+    const outside = visible.start < renderedRowStart || visible.end > renderedRowEnd;
+    if (!shortAbove && !shortBelow && !outside) return;
+    renderSpreadsheetGrid();
   });
 };
 
@@ -3281,7 +3320,8 @@ const renderSpreadsheetGrid = () => {
   const windowActive = windowingEnabled && !isHistoryMode && !sheetModel.hasWrappedRows;
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
-  lastRenderedRowWindow = windowActive ? `${rowWin.start}:${rowWin.end}` : '';
+  renderedRowStart = windowActive ? rowWin.start : 1;
+  renderedRowEnd = windowActive ? rowWin.end : TOTAL_ROWS;
   const frozenRowFloor = windowActive ? (frozenRows || 0) : 0;
   const activeRowKept = windowActive && activeCellId ? (parseCellCoord(activeCellId)?.row || 0) : 0;
   // A merge anchor above the window whose span reaches into it must still be built,
