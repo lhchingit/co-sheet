@@ -3100,6 +3100,20 @@ const WINDOW_RENDER_MARGIN = 4;
 // span it last rendered, so the scroll handler rebuilds only when the visible
 // window moves to a new span (and never for a non-windowed sheet).
 let activeSheetWindowed = false;
+// Empty stand-ins for the merge and history inputs buildGridRow takes: the
+// incremental path refuses both, so it passes these rather than allocating a pair
+// of empty collections on every scroll.
+const EMPTY_MERGE_MAP = new Map();
+const EMPTY_ROW_SET = new Set();
+
+// The exact set of rows the last full render built, and a fingerprint of
+// everything else that render depended on. updateRowBand reuses the DOM only when
+// the fingerprint still matches, so anything it does not cover — a sheet switch, a
+// column appearing, a row growing, wrapped text, merges — falls back to a full
+// rebuild rather than being reasoned about.
+let renderedRowSet = new Set();
+let renderedBandFingerprint = '';
+
 // The row band the last render actually built. The scroll handler compares the
 // viewport against this rather than against a freshly derived ideal window.
 let renderedRowStart = 1;
@@ -3258,7 +3272,10 @@ const onGridScrollWindow = () => {
     // always needs a render whatever the margins say.
     const outside = visible.start < renderedRowStart || visible.end > renderedRowEnd;
     if (!shortAbove && !shortBelow && !outside) return;
-    renderSpreadsheetGrid();
+    // Move the band by editing it where that is safe, and rebuild the grid only
+    // when it is not (#201). A rebuild throws away ~1,600 elements that a scroll
+    // of a few rows had barely invalidated.
+    if (!updateRowBand()) renderSpreadsheetGrid();
   });
 };
 
@@ -3729,13 +3746,16 @@ const renderSpreadsheetGrid = () => {
     anchorSpan, coveredTo, cellElById, sheetName,
     showUneditedChecked, highlightChangesChecked, editedRows
   };
+  const builtRows = new Set();
   for (let r = 1; r <= TOTAL_ROWS; r++) {
     // Windowing: skip rows outside the visible window (kept frozen/active rows and
     // the overscan aside). Their grid-template-rows tracks still hold the height.
     if (windowActive && !inRowWindow(r)) continue;
     // A history-mode run of unedited rows collapses into one bar, so the builder
     // reports the last row it consumed and the loop resumes after it.
+    const from = r;
     r = buildGridRow(r, rowCtx);
+    for (let built = from; built <= r; built++) builtRows.add(built);
   }
 
   // Empty buffer panel below the final row so the last row can scroll fully into
@@ -3835,6 +3855,157 @@ const renderSpreadsheetGrid = () => {
 
   // The content height/width just changed; resync the synthetic scrollbars.
   if (gridScrollbarLayout) gridScrollbarLayout();
+
+  // Record what this render built, and what it depended on, so a scroll can reuse
+  // the DOM instead of rebuilding it (see updateRowBand).
+  renderedRowSet = builtRows;
+  renderedBandFingerprint = windowActive && !hasMerges
+    ? bandFingerprint(sheetModel, colCount)
+    : '';
+};
+
+/**
+ * Everything a reusable row band depends on beyond the scroll position itself.
+ * If any of it changed, the DOM the last render left cannot simply be extended —
+ * a different column count, a row that grew, wrapped text, a merge or a sheet
+ * switch all change what a row should look like or where it sits.
+ * @param {{hasWrappedRows: boolean, fontRowHeights: Object}} model
+ * @param {number} colCount
+ * @returns {string}
+ */
+const bandFingerprint = (model, colCount) => [
+  activeSheetName, colCount, frozenRows, frozenCols,
+  model.hasWrappedRows ? 1 : 0,
+  getHiddenCols().join(','),
+  JSON.stringify(model.fontRowHeights),
+  JSON.stringify(rowHeights[activeSheetName] || {})
+].join('|');
+
+/**
+ * Move the rendered row band to follow the viewport by editing it, instead of
+ * rebuilding the whole grid.
+ *
+ * A scroll changes which rows should exist and nothing else, and the overwhelming
+ * majority of them existed a moment ago: scrolling one row invalidates one row of
+ * ~1,600 elements. This removes the rows that left the window, builds the ones
+ * that entered, and leaves everything between untouched — including their
+ * selection classes, spill clipping and collaborator tags, which a rebuild
+ * destroyed and the post-render passes then had to restore.
+ *
+ * Deliberately narrow. It handles the plain windowed case and refuses everything
+ * else — merges, history mode, wrapped text, any change to the fingerprint above —
+ * so the caller falls back to the full render rather than this having to be
+ * correct about cases it was not designed for.
+ *
+ * @returns {boolean} Whether the band was updated. False means "render instead".
+ */
+const updateRowBand = () => {
+  if (!activeSheetWindowed || isHistoryMode || !gridIndexPopulated) return false;
+  if (!renderedBandFingerprint || !renderedRowSet.size) return false;
+  const gridRoot = document.getElementById('grid-root');
+  if (!gridRoot) return false;
+  // Merged cells make a row span tracks and hide its covered neighbours, so a row
+  // cannot be added or dropped independently of the ones around it.
+  if (getActiveSheetMerges().length) return false;
+
+  // The model scan the full render does anyway (~3 ms on a full sheet, against a
+  // rebuild an order of magnitude dearer). It is what makes the fingerprint exact:
+  // a column appearing or a row growing is caught here rather than assumed away.
+  const model = scanActiveSheetModel();
+  if (model.hasWrappedRows) return false;
+  const colCount = Math.min(Math.max(model.maxColIndex + 1, colCounts[activeSheetName] || 0), MAX_COLS);
+  if (bandFingerprint(model, colCount) !== renderedBandFingerprint) return false;
+
+  const rowWin = computeRowWindow();
+  const frozenRowFloor = frozenRows || 0;
+  const activeRowKept = activeCellId ? (parseCellCoord(activeCellId)?.row || 0) : 0;
+  const wanted = new Set();
+  for (let r = 1; r <= frozenRowFloor; r++) wanted.add(r);
+  if (activeRowKept) wanted.add(activeRowKept);
+  for (let r = rowWin.start; r <= rowWin.end; r++) wanted.add(r);
+
+  const colLetters = new Array(colCount);
+  for (let c = 0; c < colCount; c++) colLetters[c] = getColLetter(c);
+
+  // Drop the rows that left, from the DOM and from the indexes together — #197
+  // made lookups trust those maps, so an element removed from one and not the
+  // other is either a leak or a ghost.
+  for (const r of renderedRowSet) {
+    if (wanted.has(r)) continue;
+    const rowHeader = gridRowHeaderIndex.get(r);
+    if (rowHeader) rowHeader.remove();
+    gridRowHeaderIndex.delete(r);
+    for (const letter of colLetters) {
+      const id = `${letter}${r}`;
+      const cellEl = gridCellIndex.get(id);
+      if (cellEl) cellEl.remove();
+      gridCellIndex.delete(id);
+    }
+  }
+
+  // Build the rows that entered. Explicit grid-line placement means a row lands on
+  // its own track wherever it sits among its siblings, so these can simply be
+  // appended rather than spliced into document order.
+  const frag = document.createDocumentFragment();
+  const added = [];
+  const rowCtx = {
+    frag,
+    useExplicitPlacement: true,
+    colCount,
+    colLetters,
+    hiddenColLetters: new Set(getHiddenCols()),
+    anchorSpan: EMPTY_MERGE_MAP,
+    coveredTo: EMPTY_MERGE_MAP,
+    cellElById: gridCellIndex,
+    sheetName: activeSheetName || 'Sheet1',
+    showUneditedChecked: false,
+    highlightChangesChecked: false,
+    editedRows: EMPTY_ROW_SET
+  };
+  for (const r of wanted) {
+    if (renderedRowSet.has(r)) continue;
+    buildGridRow(r, rowCtx);
+    added.push(r);
+  }
+  gridRoot.appendChild(frag);
+
+  renderedRowSet = wanted;
+  renderedRowStart = rowWin.start;
+  renderedRowEnd = rowWin.end;
+
+  // Post-passes, on the same footing as a render but scoped where that is safe.
+  // The row template cannot have changed (row heights are in the fingerprint), so
+  // this is a comparison that skips its own write; it is called anyway rather than
+  // reasoned about.
+  applyGridTemplate(gridRoot, colCount);
+  if (selectionStartCellId) updateRangeSelectionUI();
+
+  // Spill only for the rows just built: the kept rows still carry the clipping the
+  // render that built them worked out, which is the point of keeping them.
+  if (added.length) {
+    const candidates = [];
+    for (const r of added) {
+      for (const letter of colLetters) {
+        const id = `${letter}${r}`;
+        const el = gridCellIndex.get(id);
+        if (!el || typeof el.scrollWidth !== 'number') continue;
+        const cell = localCells[id];
+        if (!cell) continue;
+        const wrapMode = cell.style && cell.style.textWrap;
+        if (wrapMode === 'wrap' || wrapMode === 'clip') continue;
+        candidates.push([id, el]);
+      }
+    }
+    // Read phase then write phase, as in the render: one reflow for the batch.
+    const overflowing = candidates.filter(([, el]) => el.scrollWidth > el.clientWidth + 1);
+    overflowing.forEach(([id, el]) => applyCellSpill(el, id));
+  }
+
+  applyFreeze();
+  window.CoSheet.sortFilter.applyFilter();
+  renderRemoteCursors();
+  refreshPaintFormatSourceOutline();
+  return true;
 };
 
 // Darker line drawn along the freeze boundary, matching Google Sheets.
