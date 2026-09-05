@@ -62,6 +62,30 @@ export async function listFiles() {
 }
 
 /**
+ * List the files a non-admin user may see, newest first: the shared legacy
+ * 'default' workbook, the files they created, and the files shared with them.
+ *
+ * The same rule used to be applied in JavaScript over the output of listFiles(),
+ * which made one user's drive cost proportional to the number of files EVERYONE
+ * has — and read rows the requester has no right to see, only to discard them.
+ * The share subquery uses idx_file_shares_user_id.
+ * @param {string|null} userId
+ * @returns {Promise<any[]>}
+ */
+export async function listVisibleFiles(userId) {
+  const r = await pool.query(
+    `SELECT id, name, created_at, created_by, link_access
+       FROM files
+      WHERE id = 'default'
+         OR created_by = $1
+         OR id IN (SELECT file_id FROM file_shares WHERE user_id = $1)
+      ORDER BY created_at DESC`,
+    [userId || null]
+  );
+  return r.rows || [];
+}
+
+/**
  * List the ids of every file created by a given user.
  * @param {string} creator
  * @returns {Promise<any[]>}
