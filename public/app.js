@@ -180,10 +180,12 @@ let currentZoom = 100;
 // Default sheet dimensions: 26 columns (A-Z) and 1000 rows. A sheet grows past
 // DEFAULT_ROWS from the add-rows control under the last row; see getRowCount.
 // The ceiling is what the renderer can carry rather than a storage limit:
-// applyGridTemplate emits one grid-template-rows track per row and rebuilds that
-// string every render, which at 50,000 rows costs ~2ms to build and ~22ms for the
-// browser to apply. Raising it should wait until that string is built
-// incrementally. Mirrored by DEFAULT_ROWS / MAX_ROWS in dimension-service.js.
+// applyGridTemplate emits one grid-template-rows track per row, which at 50,000
+// rows takes ~4ms to build and ~22ms for the browser to apply. Since #232 that is
+// paid only when something the template depends on changes, not on every render —
+// so the remaining per-row cost on the scroll path is computeVisibleRows, which is
+// where raising this further would have to start. Mirrored by DEFAULT_ROWS /
+// MAX_ROWS in dimension-service.js.
 const DEFAULT_ROWS = 1000;
 const MAX_ROWS = 50000;
 // Columns start at A-Z and grow rightward, labelled AA, AB, … up to the ZZ cap.
@@ -4170,8 +4172,11 @@ const updateRowBand = () => {
 
   // Post-passes, on the same footing as a render but scoped where that is safe.
   // The row template cannot have changed (row heights are in the fingerprint), so
-  // this is a comparison that skips its own write; it is called anyway rather than
-  // reasoned about.
+  // this call is expected to do nothing; it is made anyway rather than reasoned
+  // about. Since #232 that costs a key comparison rather than rebuilding the whole
+  // track string to discover it — which also means the assumption above is now
+  // enforced here rather than merely asserted: if the template ever could change on
+  // this path, the key catches it.
   applyGridTemplate(gridRoot, colCount);
   if (selectionStartCellId) updateRangeSelectionUI();
 
@@ -4230,13 +4235,49 @@ const writeGridTemplate = (gridRoot, axis, value) => {
   gridRoot.style[axis] = value;
 };
 
+// The inputs each axis's track string was last built from. Comparing on the value
+// alone (writeGridTemplate above) skips the DOM write but not the build, and the
+// row build is one track per row: on a 50,000-row sheet that produced ~928KB and
+// 4.2ms per scroll frame, every frame, only to be found identical and dropped
+// (#232). Everything the strings are built from is sparse — a handful of resized
+// rows, a handful of font-grown ones — so a key over the inputs costs O(sized rows)
+// rather than O(rows), the same trick bandFingerprint already uses on this path.
+const lastTemplateKey = { cols: null, rows: null };
+
+/** The inputs grid-template-rows is built from, as a comparable string. */
+const rowTemplateKey = () => [
+  activeSheetName,
+  getRowCount(),
+  isHistoryMode ? 1 : 0,
+  JSON.stringify(rowHeights[activeSheetName] || {}),
+  JSON.stringify(autoFontRowHeights)
+].join('|');
+
+/** The inputs grid-template-columns is built from. Hidden columns and history mode
+ *  are in here because getColWidth resolves both. */
+const colTemplateKey = (colCount) => [
+  activeSheetName,
+  colCount,
+  isHistoryMode ? 1 : 0,
+  JSON.stringify(colWidths[activeSheetName] || {}),
+  getHiddenCols().join(',')
+].join('|');
+
 function applyGridTemplate(gridRoot, colCount = getColCount()) {
   // Columns: gutter + each column's resolved width. Always written (even in
   // history mode) so a sheet grown past A-Z gets enough tracks for every column
   // — the base CSS only defines 26.
-  const cols = [`${GUTTER_WIDTH}px`];
-  for (let c = 0; c < colCount; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
-  writeGridTemplate(gridRoot, 'gridTemplateColumns', cols.join(' '));
+  const colsKey = colTemplateKey(colCount);
+  if (colsKey !== lastTemplateKey.cols) {
+    lastTemplateKey.cols = colsKey;
+    const cols = [`${GUTTER_WIDTH}px`];
+    for (let c = 0; c < colCount; c++) cols.push(`${getColWidth(getColLetter(c))}px`);
+    writeGridTemplate(gridRoot, 'gridTemplateColumns', cols.join(' '));
+  }
+
+  const rowsKey = rowTemplateKey();
+  if (rowsKey === lastTemplateKey.rows) return;
+  lastTemplateKey.rows = rowsKey;
 
   // Rows are skipped in history mode, where collapsed "unedited" bars break the
   // 1-row-per-grid-track mapping.
