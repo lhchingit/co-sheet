@@ -163,7 +163,11 @@ class TestDb {
   /** Read back a workbook's persisted state object (or undefined). */
   async getWorkbookState(key = 'default') {
     const r = await this.pool.query('SELECT state FROM workbook_state WHERE key = $1', [key]);
-    return r.rows[0] ? r.rows[0].state : undefined;
+    if (!r.rows[0]) return undefined;
+    // Stored as TEXT (it was JSONB, which the driver parsed for us); tests want the
+    // object, and tolerating both keeps this working either side of the migration.
+    const state = r.rows[0].state;
+    return typeof state === 'string' ? JSON.parse(state) : state;
   }
 
   /** Read back the cells map for a given workbook + sheet (or undefined). */
