@@ -1653,22 +1653,24 @@ const persistWorkbook = (fileId) =>
  */
 app.get('/api/files', ensureAuthenticated, async (req, res) => {
   try {
-    const fileRows = await filesRepo.listFiles();
     const selfId = userIdentity(req.user);
     const role = await getUserRole(req.user);
     const isAdmin = role === 'admin' || role === 'superadmin';
-    // A user sees the shared legacy 'default' workbook, the files they own, files
-    // explicitly shared with them, and (for admins) everything. Each row carries
-    // `owner` and `canModify` (owner / admin / default) so the UI can show/hide
-    // edit affordances; the server enforces the same rules.
+    // A user sees the shared legacy 'default' workbook, the files they own and the
+    // files explicitly shared with them; an admin sees everything. That rule is the
+    // query's WHERE clause rather than a filter over every file in the system, so
+    // the cost of one drive load follows the requester's own data — and rows they
+    // have no right to see are never read in the first place. Admins genuinely want
+    // the unfiltered listing, so they get it.
+    const visible = isAdmin
+      ? await filesRepo.listFiles()
+      : await filesRepo.listVisibleFiles(selfId);
+    // Each row also carries `owner` and `canModify` (owner / admin / default) so the
+    // UI can show/hide edit affordances; the server enforces the same rules. The
+    // share roles are still needed per row for that, beyond deciding visibility.
     const sharedRoles = isAdmin ? new Map() : await getSharedRoleMap(selfId);
     // Per-user starred set, so each row can carry whether the viewer has starred it.
     const starredIds = await getStarredFileIds(selfId);
-    const visible = fileRows.filter((r) => {
-      if (isAdmin || r.id === 'default') return true;
-      if (selfId && r.created_by === selfId) return true;
-      return sharedRoles.has(r.id);
-    });
     res.json(visible.map(r => {
       const isCreator = !!(selfId && r.created_by && r.created_by === selfId);
       // 'system' is a sentinel for the seeded legacy 'default' workbook, not a real

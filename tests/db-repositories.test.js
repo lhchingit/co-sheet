@@ -84,6 +84,46 @@ test('initDatabase seeds the default file and workbook', async () => {
   assert.strictEqual(idsAgain.filter((id) => id === 'default').length, 1, 'no duplicate default file');
 });
 
+test('files repository - listVisibleFiles scopes the drive to what a user may see', async () => {
+  // The visibility rule the drive listing used to apply in JavaScript over every
+  // file in the system. Expressed as SQL it has to reproduce all three of its
+  // clauses, and — more easily missed — exclude everything else.
+  const { files, shares } = repo;
+
+  await files.insertFile('own1', "Alice's own", 'alice');
+  await files.insertFile('own2', "Alice's other", 'alice');
+  await files.insertFile('bob1', "Bob's private", 'bob');
+  await files.insertFile('bob2', "Bob's shared", 'bob');
+  await shares.insertShare('bob2', 'alice', 'viewer');
+
+  const visible = (await files.listVisibleFiles('alice')).map((r) => r.id).sort();
+
+  assert.deepStrictEqual(
+    visible, ['bob2', 'default', 'own1', 'own2'],
+    "own files, files shared with the user, and the legacy 'default' workbook"
+  );
+  assert.ok(!visible.includes('bob1'), "another user's unshared file is not read at all");
+
+  // A share is per-user, so it must not widen anyone else's listing.
+  const bobsView = (await files.listVisibleFiles('bob')).map((r) => r.id).sort();
+  assert.deepStrictEqual(bobsView, ['bob1', 'bob2', 'default'], "Bob sees his own, not Alice's");
+
+  // Newest first, matching listFiles' ordering, since the drive renders them in order.
+  const ordered = (await files.listVisibleFiles('alice')).map((r) => r.created_at);
+  const descending = [...ordered].sort((a, b) => b - a);
+  assert.deepStrictEqual(ordered, descending, 'newest first');
+
+  // An unauthenticated / identity-less caller sees only the shared workbook —
+  // `created_by = NULL` and the share subquery both match nothing, which is the
+  // behaviour the old `if (selfId && …)` guard produced.
+  const anonymous = (await files.listVisibleFiles(null)).map((r) => r.id);
+  assert.deepStrictEqual(anonymous, ['default'], 'a null identity matches nothing but default');
+
+  // Cleanup so the shared database stays predictable for the other repo tests.
+  for (const id of ['own1', 'own2', 'bob1', 'bob2']) await files.deleteFile(id);
+  await shares.deleteSharesByFile('bob2');
+});
+
 test('files repository - CRUD, metadata, link access, and NULL handling', async () => {
   const { files } = repo;
 
