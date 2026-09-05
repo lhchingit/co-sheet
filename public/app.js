@@ -177,8 +177,15 @@ let renamingSheet = null;
 // Global spreadsheet grid zoom level percentage
 let currentZoom = 100;
 
-// Default sheet dimensions: 26 columns (A-Z) and 1000 rows.
-const TOTAL_ROWS = 1000;
+// Default sheet dimensions: 26 columns (A-Z) and 1000 rows. A sheet grows past
+// DEFAULT_ROWS from the add-rows control under the last row; see getRowCount.
+// The ceiling is what the renderer can carry rather than a storage limit:
+// applyGridTemplate emits one grid-template-rows track per row and rebuilds that
+// string every render, which at 50,000 rows costs ~2ms to build and ~22ms for the
+// browser to apply. Raising it should wait until that string is built
+// incrementally. Mirrored by DEFAULT_ROWS / MAX_ROWS in dimension-service.js.
+const DEFAULT_ROWS = 1000;
+const MAX_ROWS = 50000;
 // Columns start at A-Z and grow rightward, labelled AA, AB, … up to the ZZ cap.
 // The rendered count (see getColCount) is the larger of the rightmost column
 // holding data and an explicit per-sheet count bumped by column inserts, so a
@@ -301,6 +308,119 @@ let rowHeights = Object.create(null); // { [sheetName]: { [rowNumber]: px } }
 // and persisted server-side (like colWidths/rowHeights); an absent entry means
 // the default. See getColCount, which also raises this by the data-derived floor.
 let colCounts = Object.create(null); // { [sheetName]: number }
+
+// Per-sheet explicit row count, grown by the add-rows control at the bottom of the
+// grid. Loaded from the init payload, kept in sync via `row-count-update`
+// broadcasts and persisted server-side exactly like colCounts; an absent entry
+// means the default. Unlike getColCount there is no data-derived floor: nothing
+// can write a cell below the current count (paste and row-insert clamp to it, and
+// the importer caps at DEFAULT_ROWS), and getRowCount is read inside per-row loops
+// where walking every cell would be far too expensive.
+let rowCounts = Object.create(null); // { [sheetName]: number }
+
+/**
+ * Number of rows the grid renders for a sheet: the explicit count if one has been
+ * set, else the default, clamped to [DEFAULT_ROWS, MAX_ROWS]. O(1) — this is read
+ * per row in the render and window loops.
+ * @param {string} [sheetName]
+ * @returns {number}
+ */
+const getRowCount = (sheetName = activeSheetName) => {
+  const n = rowCounts[sheetName];
+  return (typeof n === 'number' && isFinite(n)) ? Math.min(MAX_ROWS, Math.max(DEFAULT_ROWS, n)) : DEFAULT_ROWS;
+};
+
+// How many rows the add-rows control is set to add. Held here rather than read
+// back off the input because the band is rebuilt with the rest of the grid on
+// every render, which would otherwise reset whatever the user typed.
+let addRowsCount = DEFAULT_ROWS;
+
+/**
+ * Builds the band under the last row: Google Sheets' "add N rows at the bottom"
+ * control. Rebuilt with the grid on every render, so its state lives in
+ * addRowsCount and the labels are translated at build time (the data-i18n
+ * attributes keep a later language switch working on the built nodes).
+ * @returns {HTMLElement} The band, ready to append to the grid.
+ */
+const buildAddRowsBand = () => {
+  const band = document.createElement('div');
+  band.className = 'grid-bottom-buffer';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = 'add-rows-button';
+  button.className = 'add-rows-button';
+  button.setAttribute('data-i18n', 'grid.addRows.action');
+  button.textContent = t('grid.addRows.action');
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'add-rows-count';
+  input.className = 'add-rows-count';
+  input.inputMode = 'numeric';
+  input.value = String(addRowsCount);
+  input.setAttribute('aria-labelledby', 'add-rows-button');
+
+  const suffix = document.createElement('span');
+  suffix.className = 'add-rows-suffix';
+  suffix.setAttribute('data-i18n', 'grid.addRows.suffix');
+  suffix.textContent = t('grid.addRows.suffix');
+
+  // Remember what was typed so the next render restores it, and keep the button
+  // disabled while the box doesn't hold a usable count.
+  const readCount = () => {
+    const n = parseInt(input.value, 10);
+    return (Number.isInteger(n) && n > 0) ? n : null;
+  };
+  const syncButton = () => {
+    const n = readCount();
+    if (n !== null) addRowsCount = n;
+    button.disabled = n === null || getRowCount() >= MAX_ROWS;
+  };
+  input.addEventListener('input', syncButton);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addRowsAtBottom(); }
+  });
+  button.addEventListener('click', addRowsAtBottom);
+  syncButton();
+
+  // appendChild rather than append: the render's DOM surface is stubbed in the vm
+  // tests, and appendChild is the call the rest of this file already relies on.
+  band.appendChild(button);
+  band.appendChild(input);
+  band.appendChild(suffix);
+  return band;
+};
+
+/**
+ * Grows the active sheet by the count in the add-rows control and re-renders so
+ * the new rows (and the band itself) land in the right place. Clamped by
+ * setActiveRowCount, so asking for more than the ceiling allows simply fills it.
+ */
+const addRowsAtBottom = () => {
+  if (!canEditWorkbook) return;
+  const before = getRowCount();
+  if (before >= MAX_ROWS) return;
+  setActiveRowCount(before + addRowsCount);
+  renderSpreadsheetGrid();
+};
+
+/**
+ * Set the active sheet's explicit row count, clamped to [DEFAULT_ROWS, MAX_ROWS].
+ * The default is stored as "no entry" (kept lean, matching the server). Broadcasts
+ * so the server persists it and peers grow in step; the server echoes a
+ * row-count-update which is harmlessly idempotent here. Mirrors setActiveColCount.
+ * @param {number} count
+ * @returns {number} The count actually applied.
+ */
+const setActiveRowCount = (count) => {
+  const n = Math.min(MAX_ROWS, Math.max(DEFAULT_ROWS, Math.floor(count)));
+  if (n > DEFAULT_ROWS) setKey(rowCounts, activeSheetName, n); else deleteKey(rowCounts, activeSheetName);
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'set-row-count', payload: { sheetName: activeSheetName, count: n } }));
+  }
+  return n;
+};
 
 // Per-sheet hidden columns, keyed by sheet name → array of column letters. A
 // hidden column keeps its index/data but renders as a zero-width track (see
@@ -849,6 +969,7 @@ function handleSocketMessage(event) {
       colWidths = (payload.colWidths && typeof payload.colWidths === 'object') ? payload.colWidths : Object.create(null);
       rowHeights = (payload.rowHeights && typeof payload.rowHeights === 'object') ? payload.rowHeights : Object.create(null);
       colCounts = (payload.colCounts && typeof payload.colCounts === 'object') ? payload.colCounts : Object.create(null);
+      rowCounts = (payload.rowCounts && typeof payload.rowCounts === 'object') ? payload.rowCounts : Object.create(null);
       hiddenCols = (payload.hiddenCols && typeof payload.hiddenCols === 'object') ? payload.hiddenCols : Object.create(null);
 
       if (payload.sheets && Object.keys(payload.sheets).length > 0) {
@@ -1055,6 +1176,15 @@ function handleSocketMessage(event) {
       const sheet = sheetName || 'Sheet1';
       const n = Math.min(MAX_COLS, Math.max(DEFAULT_COLS, Number(count) || DEFAULT_COLS));
       if (n > DEFAULT_COLS) setKey(colCounts, sheet, n); else deleteKey(colCounts, sheet);
+      if (sheet === activeSheetName) renderSpreadsheetGrid();
+    }
+
+    // Handle a row-count change (the add-rows control) from any peer.
+    if (type === 'row-count-update') {
+      const { sheetName, count } = payload;
+      const sheet = sheetName || 'Sheet1';
+      const n = Math.min(MAX_ROWS, Math.max(DEFAULT_ROWS, Number(count) || DEFAULT_ROWS));
+      if (n > DEFAULT_ROWS) setKey(rowCounts, sheet, n); else deleteKey(rowCounts, sheet);
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
 
@@ -1331,7 +1461,7 @@ const updateRangeSelectionUI = () => {
   // darkens when the selection spans every row (a header click, Ctrl+A, or a
   // full-height drag all qualify), a row header when it spans every rendered
   // column. Anything less keeps the light active-header tint.
-  const spansAllRows = minRow === 1 && maxRow === TOTAL_ROWS;
+  const spansAllRows = minRow === 1 && maxRow === getRowCount();
   const spansAllCols = minColIndex === 0 && maxColIndex === renderedColCount - 1;
 
   // Highlight cells and headers in range. Lookups go through the O(1) render
@@ -1381,7 +1511,7 @@ const updateRangeSelectionUI = () => {
   for (const range of extraSelectionRanges) {
     const b = rangeBounds(range.startId, range.endId);
     if (!b) continue;
-    const bSpansAllRows = b.minRow === 1 && b.maxRow === TOTAL_ROWS;
+    const bSpansAllRows = b.minRow === 1 && b.maxRow === getRowCount();
     const bSpansAllCols = b.minCol === 0 && b.maxCol === renderedColCount - 1;
     for (let c = b.minCol; c <= b.maxCol; c++) {
       const colLetter = getColLetter(c);
@@ -1561,7 +1691,7 @@ const pasteSelectedCells = () => {
   clipboardData.copiedCells.forEach(copied => {
     const newRow = target.row + copied.offsetRow;
     const newColIndex = target.colIndex + copied.offsetCol;
-    if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
+    if (newRow < 1 || newRow > getRowCount() || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
 
     const newColLetter = getColLetter(newColIndex);
     const newCellId = `${newColLetter}${newRow}`;
@@ -1910,7 +2040,7 @@ const pasteCellGrid = (rows) => {
     cols.forEach(({ text, style: sourceStyle }, colOffset) => {
       const newRow = target.row + rowOffset;
       const newColIndex = target.colIndex + colOffset;
-      if (newRow < 1 || newRow > TOTAL_ROWS || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
+      if (newRow < 1 || newRow > getRowCount() || newColIndex < 0 || newColIndex > MAX_COLS - 1) return;
 
       const newCellId = `${getColLetter(newColIndex)}${newRow}`;
       const before = localCells[newCellId] ? JSON.parse(JSON.stringify(localCells[newCellId])) : { formula: '', value: '', style: {} };
@@ -2241,7 +2371,7 @@ const rerenderBorderRing = (changes) => {
     if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
     if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
     if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
-    if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+    if (r + 1 <= getRowCount()) renderIds.add(`${getColLetter(c)}${r + 1}`);
   });
   renderIds.forEach((id) => {
     const st = (localCells[id] && localCells[id].style) || EMPTY_STYLE;
@@ -2835,7 +2965,7 @@ const applyCellSpill = (cellEl, cellId) => {
 
 // Cell mouse interactions are handled by ONE delegated listener per event type on
 // #grid-root rather than four listeners on every cell. A full render builds
-// TOTAL_ROWS × colCount cells; per-cell listeners meant ~100k addEventListener
+// row-count × colCount cells; per-cell listeners meant ~100k addEventListener
 // calls (and as many retained closures) on every rebuild — a large, repeated
 // allocation/GC cost. Delegation resolves the target cell from the event's
 // bubble path, so the listener count is constant regardless of grid size.
@@ -3116,7 +3246,7 @@ const ensureGridCellDelegation = (gridRoot) => {
 // ---------------------------------------------------------------------------
 // Windowed (virtualized) grid rendering.
 //
-// A full render materialises TOTAL_ROWS × colCount cells as DOM nodes (~65k on a
+// A full render materialises row-count × colCount cells as DOM nodes (~65k on a
 // typical sheet), which dominates the tab's memory. Windowing renders only the
 // rows in and near the viewport, relying on the explicit per-row
 // grid-template-rows (see applyGridTemplate) to hold the full scroll height with
@@ -3169,7 +3299,7 @@ let renderedBandFingerprint = '';
 // The row band the last render actually built. The scroll handler compares the
 // viewport against this rather than against a freshly derived ideal window.
 let renderedRowStart = 1;
-let renderedRowEnd = TOTAL_ROWS;
+let renderedRowEnd = getRowCount();
 
 // Column count of the grid as last rendered. Consumers that describe what is on
 // screen — the selection highlight, the overflow spill — read this instead of
@@ -3243,12 +3373,12 @@ const scanActiveSheetModel = () => {
  *  overscan, derived from scrollTop and the model row heights. */
 const computeVisibleRows = () => {
   const viewport = document.getElementById('grid-viewport');
-  if (!viewport) return { start: 1, end: TOTAL_ROWS };
+  if (!viewport) return { start: 1, end: getRowCount() };
   const top = viewport.scrollTop;
   const bottom = top + viewport.clientHeight;
   let y = DEFAULT_ROW_HEIGHT; // top of row 1, below the header band
-  let start = 1, end = TOTAL_ROWS;
-  for (let r = 1; r <= TOTAL_ROWS; r++) {
+  let start = 1, end = getRowCount();
+  for (let r = 1; r <= getRowCount(); r++) {
     const h = getRowHeight(r);
     if (y + h <= top) start = r + 1;               // row is fully above the viewport
     else if (y >= bottom) { end = r - 1; break; }  // first row fully below the viewport
@@ -3262,7 +3392,7 @@ const computeVisibleRows = () => {
 const computeRowWindow = () => {
   const { start, end } = computeVisibleRows();
   const from = Math.max(1, start - WINDOW_OVERSCAN);
-  return { start: from, end: Math.min(TOTAL_ROWS, Math.max(from, end + WINDOW_OVERSCAN)) };
+  return { start: from, end: Math.min(getRowCount(), Math.max(from, end + WINDOW_OVERSCAN)) };
 };
 
 /** Scroll the grid viewport so `cellId` is within the visible band, using model
@@ -3319,7 +3449,7 @@ const onGridScrollWindow = () => {
     // of the sheet to build. At row 1 nothing exists above, so the margin can never
     // be satisfied there and demanding it would re-render on every scroll event.
     const shortAbove = renderedRowStart > 1 && visible.start < renderedRowStart + WINDOW_RENDER_MARGIN;
-    const shortBelow = renderedRowEnd < TOTAL_ROWS && visible.end > renderedRowEnd - WINDOW_RENDER_MARGIN;
+    const shortBelow = renderedRowEnd < getRowCount() && visible.end > renderedRowEnd - WINDOW_RENDER_MARGIN;
     // A jump (a scrollbar drag, revealCell) can land wholly outside the band, which
     // always needs a render whatever the margins say.
     const outside = visible.start < renderedRowStart || visible.end > renderedRowEnd;
@@ -3359,7 +3489,7 @@ const buildGridRow = (r, ctx) => {
   if (isHistoryMode && !showUneditedChecked && !editedRows.has(r)) {
     let startRow = r;
     let endRow = r;
-    while (endRow + 1 <= TOTAL_ROWS && !editedRows.has(endRow + 1)) {
+    while (endRow + 1 <= getRowCount() && !editedRows.has(endRow + 1)) {
       endRow++;
     }
     const count = endRow - startRow + 1;
@@ -3421,7 +3551,15 @@ const buildGridRow = (r, ctx) => {
   // Drag handle on the row's bottom boundary (mirrors the column handle).
   if (!isHistoryMode) {
     const resizeHandle = document.createElement('div');
-    resizeHandle.className = 'row-resize-handle';
+    // The last row's handle sits fully inside its track, for the same reason as
+    // .col-resize-handle-last: the usual straddling offset would hang 3px past the
+    // final row and count towards scrollHeight, keeping the row from reaching the
+    // horizontal scrollbar's lane. Under windowing that row header only exists
+    // while it is in view, so the overhang also made scrollHeight jitter as it
+    // entered and left the window.
+    resizeHandle.className = rowNum === getRowCount()
+      ? 'row-resize-handle row-resize-handle-last'
+      : 'row-resize-handle';
     resizeHandle.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !canEditWorkbook) return;
       e.preventDefault();
@@ -3601,7 +3739,7 @@ const renderSpreadsheetGrid = () => {
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
   renderedRowStart = windowActive ? rowWin.start : 1;
-  renderedRowEnd = windowActive ? rowWin.end : TOTAL_ROWS;
+  renderedRowEnd = windowActive ? rowWin.end : getRowCount();
   const frozenRowFloor = windowActive ? (frozenRows || 0) : 0;
   const activeRowKept = windowActive && activeCellId ? (parseCellCoord(activeCellId)?.row || 0) : 0;
   // A merge anchor above the window whose span reaches into it must still be built,
@@ -3630,7 +3768,7 @@ const renderSpreadsheetGrid = () => {
 
   // Column letters for this render, computed once. getColLetter walks a base-26
   // loop building a string; resolving it here avoids recomputing the same value
-  // TOTAL_ROWS times per column inside the cell loop below.
+  // once per row per column inside the cell loop below.
   const colLetters = new Array(colCount);
   for (let c = 0; c < colCount; c++) colLetters[c] = getColLetter(c);
 
@@ -3779,7 +3917,7 @@ const renderSpreadsheetGrid = () => {
   // In history mode, pre-calculate which rows are edited to support row collapsing
   const editedRows = new Set();
   if (isHistoryMode) {
-    for (let r = 1; r <= TOTAL_ROWS; r++) {
+    for (let r = 1; r <= getRowCount(); r++) {
       if (isRowEdited(r, sheetName)) {
         editedRows.add(r);
       }
@@ -3807,7 +3945,7 @@ const renderSpreadsheetGrid = () => {
     showUneditedChecked, highlightChangesChecked, editedRows
   };
   const builtRows = new Set();
-  for (let r = 1; r <= TOTAL_ROWS; r++) {
+  for (let r = 1; r <= getRowCount(); r++) {
     // Windowing: skip rows outside the visible window (kept frozen/active rows and
     // the overscan aside). Their grid-template-rows tracks still hold the height.
     if (windowActive && !inRowWindow(r)) continue;
@@ -3818,14 +3956,11 @@ const renderSpreadsheetGrid = () => {
     for (let built = from; built <= r; built++) builtRows.add(built);
   }
 
-  // Empty buffer panel below the final row so the last row can scroll fully into
-  // view instead of being half-clipped by the horizontal scrollbar / footer.
-  // Styled like the header band (#f8f9fa); ~2x a cell's height (see CSS). With
-  // explicit placement (merges) we must pin its row track, since it carries no
-  // auto-placed cells of its own.
-  const bottomBuffer = document.createElement('div');
-  bottomBuffer.className = 'grid-bottom-buffer';
-  if (useExplicitPlacement) bottomBuffer.style.gridRow = `${TOTAL_ROWS + 2}`;
+  // The band under the final row, holding the add-rows control. With explicit
+  // placement (merges) we must pin its row track, since it carries no auto-placed
+  // cells of its own.
+  const bottomBuffer = buildAddRowsBand();
+  if (useExplicitPlacement) bottomBuffer.style.gridRow = `${getRowCount() + 2}`;
   frag.appendChild(bottomBuffer);
 
   // Attach the whole grid in one append (single layout pass — see frag above).
@@ -4082,7 +4217,7 @@ const FREEZE_BORDER = '2px solid #919191';
  * @param {HTMLElement} gridRoot
  */
 // Last grid-template value written for each axis. A scroll that moves the row
-// window re-renders, and the row template is a TOTAL_ROWS-track string that is
+// window re-renders, and the row template is a one-track-per-row string that is
 // identical across all of those renders — assigning it anyway invalidated style
 // and layout for the whole grid on every scroll frame. Comparing first is far
 // cheaper than the recalculation an identical write still triggers.
@@ -4119,7 +4254,7 @@ function applyGridTemplate(gridRoot, colCount = getColCount()) {
   // band is the first track.
   const rows = ['minmax(21px, auto)'];
   const m = rowHeights[activeSheetName];
-  for (let r = 1; r <= TOTAL_ROWS; r++) {
+  for (let r = 1; r <= getRowCount(); r++) {
     const h = m && m[r];
     rows.push((typeof h === 'number' && isFinite(h)) ? `${h}px` : `minmax(${getRowHeight(r)}px, auto)`);
   }
@@ -4444,7 +4579,7 @@ const selectCellBelow = (cellId) => {
   const coord = parseCellCoord(cellId);
   if (!coord) return;
   const nextRow = coord.row + 1;
-  if (nextRow > TOTAL_ROWS) return; // already at the bottom of the grid
+  if (nextRow > getRowCount()) return; // already at the bottom of the grid
   const nextCellId = `${getColLetter(coord.colIndex)}${nextRow}`;
   // Reset any range/column/row selection so this becomes a single-cell selection,
   // matching what a plain click on the cell would do.
@@ -4472,7 +4607,7 @@ const selectColumn = (colLetter) => {
   isRowSelection = false;
   // Pre-set the range end to the bottom of the column; handleCellSelect keeps it
   // because it only defaults the end when none is set.
-  selectionEndCellId = `${colLetter}${TOTAL_ROWS}`;
+  selectionEndCellId = `${colLetter}${getRowCount()}`;
   const topCellEl = document.querySelector(`[data-cell-id="${colLetter}1"]`);
   handleCellSelect(`${colLetter}1`, topCellEl);
 };
@@ -4506,7 +4641,7 @@ const extendSelectionToColumn = (colLetter) => {
   if (!anchor) { selectColumn(colLetter); return; }
   isColumnSelection = true;
   isRowSelection = false;
-  selectionEndCellId = `${colLetter}${TOTAL_ROWS}`;
+  selectionEndCellId = `${colLetter}${getRowCount()}`;
   const anchorTopId = `${anchor.colLetter}1`;
   handleCellSelect(anchorTopId, document.querySelector(`[data-cell-id="${anchorTopId}"]`));
 };
@@ -5028,7 +5163,7 @@ const rangeRectFor = (startId, endId) => {
   // Skip references outside the sheet's rendered grid — there's nothing to point
   // at (mirrors the old "no cell to anchor to" guard, without needing the anchor
   // cell's DOM box).
-  if (minRow < 1 || minRow > TOTAL_ROWS || minCol < 0 || minCol >= getColCount()) return null;
+  if (minRow < 1 || minRow > getRowCount() || minCol < 0 || minCol >= getColCount()) return null;
   // Position/size from the grid model via colLeft / rowTop, exactly like the blue
   // selection overlay (see updateRangeSelectionUI): offsets in #grid-root's layout
   // space, so it needs no cell box and stays correct under zoom / hidden columns.
@@ -5527,7 +5662,7 @@ const clearFormatting = (cellId) => {
         if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
         if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
         if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
-        if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+        if (r + 1 <= getRowCount()) renderIds.add(`${getColLetter(c)}${r + 1}`);
       }
     }
   });
@@ -6401,7 +6536,7 @@ const applyBordersToSelection = (mode) => {
     const r = coord.row, c = coord.colIndex;
     const neigh = {
       top:    { id: `${getColLetter(c)}${r - 1}`, face: 'bottom', ok: r - 1 >= 1 },
-      bottom: { id: `${getColLetter(c)}${r + 1}`, face: 'top',    ok: r + 1 <= TOTAL_ROWS },
+      bottom: { id: `${getColLetter(c)}${r + 1}`, face: 'top',    ok: r + 1 <= getRowCount() },
       left:   { id: `${getColLetter(c - 1)}${r}`, face: 'right',  ok: c - 1 >= 0 },
       right:  { id: `${getColLetter(c + 1)}${r}`, face: 'left',   ok: c + 1 < colCount },
     };
@@ -6449,7 +6584,7 @@ const applyBordersToSelection = (mode) => {
   }
   for (let c = minCol; c <= maxCol; c++) {
     if (minRow - 1 >= 1) renderIds.add(`${getColLetter(c)}${minRow - 1}`);
-    if (maxRow + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${maxRow + 1}`);
+    if (maxRow + 1 <= getRowCount()) renderIds.add(`${getColLetter(c)}${maxRow + 1}`);
   }
   // A border change touches only the overlay edges — not the cell's text, other
   // styles, or its text-overflow spill. So refresh just the border overlays on
@@ -6879,10 +7014,10 @@ const clearCell = (cellId) => {
 /* ---------------------------------------------------------------------------
  * Row / column insertion
  * ---------------------------------------------------------------------------
- * The grid starts at 26 columns (A-Z) x TOTAL_ROWS and grows rightward up to
+ * The grid starts at 26 columns (A-Z) x DEFAULT_ROWS and grows rightward up to
  * MAX_COLS as data is pushed past the current edge. Inserting a blank row or
  * column shifts existing cell data down/right (content pushed past the absolute
- * MAX_COLS / TOTAL_ROWS edge is dropped) and rewrites cell references inside
+ * MAX_COLS / row-count edge is dropped) and rewrites cell references inside
  * every formula so they keep pointing at the same data. The change is recorded
  * as one multi-cell history action and broadcast per-cell, reusing the existing
  * edit/undo/sync plumbing.
@@ -7019,7 +7154,7 @@ const performStructuralInsert = (mode, at) => {
     let newCol = col, newRow = row;
     if (mode === 'row') { if (row + 1 >= at) newRow = row + 1; }
     else { if (col >= at) newCol = col + 1; }
-    if (newRow > TOTAL_ROWS - 1 || newCol > MAX_COLS - 1) return; // shifted off-grid -> dropped
+    if (newRow > getRowCount() - 1 || newCol > MAX_COLS - 1) return; // shifted off-grid -> dropped
     const cell = JSON.parse(JSON.stringify(localCells[id]));
     if (cell.formula) cell.formula = adjustFormulaRefs(cell.formula, mode, at);
     newState[`${getColLetter(newCol)}${newRow + 1}`] = cell;
@@ -7092,7 +7227,7 @@ const performCellInsert = (direction) => {
     } else { // down
       if (coord.colIndex >= minCol && coord.colIndex <= maxCol && coord.row >= minRow) newRow = coord.row + H;
     }
-    if (newCol > MAX_COLS - 1 || newRow > TOTAL_ROWS) return; // shifted off-grid -> dropped
+    if (newCol > MAX_COLS - 1 || newRow > getRowCount()) return; // shifted off-grid -> dropped
     const cell = JSON.parse(JSON.stringify(localCells[id]));
     if (cell.formula) cell.formula = adjustFormulaRefsForCellShift(cell.formula, direction, b, W, H);
     newState[`${getColLetter(newCol)}${newRow}`] = cell;
@@ -8255,7 +8390,7 @@ const applyPaintFormat = () => {
         if (c - 1 >= 0) renderIds.add(`${getColLetter(c - 1)}${r}`);
         if (c + 1 < colCount) renderIds.add(`${getColLetter(c + 1)}${r}`);
         if (r - 1 >= 1) renderIds.add(`${getColLetter(c)}${r - 1}`);
-        if (r + 1 <= TOTAL_ROWS) renderIds.add(`${getColLetter(c)}${r + 1}`);
+        if (r + 1 <= getRowCount()) renderIds.add(`${getColLetter(c)}${r + 1}`);
       }
     }
   });
@@ -8951,7 +9086,7 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
     e.preventDefault();
     const allStart = 'A1';
-    const allEnd = `${getColLetter(getColCount() - 1)}${TOTAL_ROWS}`;
+    const allEnd = `${getColLetter(getColCount() - 1)}${getRowCount()}`;
     const allSelected = selectionStartCellId === allStart && selectionEndCellId === allEnd;
     selectionStartCellId = allSelected ? activeCellId : allStart;
     selectionEndCellId = allSelected ? activeCellId : allEnd;
@@ -11312,7 +11447,8 @@ window.CoSheet.history.init({
 // are extracted.
 // ---------------------------------------------------------------------------
 window.CoSheet.app = {
-  TOTAL_ROWS,
+  // Rows the grid renders for the active sheet (grows from the add-rows control).
+  getRowCount,
   // Current rendered column count for a sheet (grows past A-Z with data).
   getColCount,
   get activeCellId() { return activeCellId; },
@@ -11440,25 +11576,41 @@ function initGridScrollbars() {
     vbar.style.top = `${hh}px`;
     hbar.style.left = `${gw}px`;
 
-    const vScrollable = viewport.scrollHeight - viewport.clientHeight;
-    const vVisible = vScrollable > 1;
-    // Reserve the vertical bar's lane rather than letting the bar cover scrollable
-    // content: the viewport's right edge stops where the bar begins, so the last
-    // column can never scroll underneath it (#68) and ends flush against it, the
-    // way Google Sheets does. Before #226 the bar was drawn over the viewport and
-    // a 42px padding on #grid-root pushed the last column clear of it, which left
-    // a blank strip that grew with the grid's zoom.
+    // Each bar is drawn in a lane of its own rather than over the scrolling
+    // content: the viewport's right / bottom edge stops where its bar begins, so
+    // the last column and the last row can never scroll underneath one (#68, #61)
+    // and both end flush against them, the way Google Sheets does. Before #226 and
+    // #228 the bars overlaid the viewport and two buffers pushed the content clear
+    // of them — a 42px padding on #grid-root, a 42px spacer under the last row —
+    // each leaving dead space that grew with the grid's zoom.
     //
-    // Written before any width is read below. The decision comes from the height
-    // metrics, which the reservation cannot affect (grid rows never reflow with
-    // the width), so reserving the lane can't feed back into whether it is needed.
-    // It follows vVisible rather than the vShown computed further down, whose extra
-    // minimum-track condition can only differ in a viewport a few dozen pixels
-    // tall — there the lane is empty but harmless.
+    // Decided against the UNRESERVED box, which is the parent's: the viewport is
+    // `absolute inset-0` in it, so the parent keeps the size the viewport would
+    // have with no lane held back. Reading the need from there rather than from the
+    // viewport's current box is what stops a reserved lane from latching its own
+    // bar on forever, and it needs no reset-and-remeasure. scrollWidth/scrollHeight
+    // are safe to read with a lane already reserved: either the content overflows,
+    // and they report its true extent, or it doesn't, and they report the smaller
+    // client box — which is below the unreserved size either way.
+    const parent = viewport.parentElement;
+    const baseW = parent ? parent.clientWidth : viewport.clientWidth;
+    const baseH = parent ? parent.clientHeight : viewport.clientHeight;
+    const contentW = viewport.scrollWidth;
+    const contentH = viewport.scrollHeight;
+    let vVisible = contentH > baseH;
+    let hVisible = contentW > baseW;
+    // Reserving one lane takes BAR off the other axis, which can tip that axis into
+    // overflow and so call for its own bar. A reservation only ever adds overflow,
+    // never removes it, so one round of this reaches the fixpoint.
+    if (vVisible && !hVisible) hVisible = contentW > baseW - BAR;
+    if (hVisible && !vVisible) vVisible = contentH > baseH - BAR;
     viewport.style.right = vVisible ? `${BAR}px` : '';
+    viewport.style.bottom = hVisible ? `${BAR}px` : '';
 
+    // From here every read sees the reserved box, which is the one the tracks and
+    // thumbs must be measured against.
+    const vScrollable = viewport.scrollHeight - viewport.clientHeight;
     const hScrollable = viewport.scrollWidth - viewport.clientWidth;
-    const hVisible = hScrollable > 1;
 
     // Reserve the shared far corner only when the perpendicular bar is present;
     // otherwise a lone bar runs the full span. (BAR matches the CSS thickness.)
@@ -11485,6 +11637,10 @@ function initGridScrollbars() {
 
     const hTrack = viewport.clientWidth - gw - hCorner - ARROWS;
     const hShown = hVisible && hTrack > MIN_THUMB;
+    // A viewport too small to draw a usable thumb hides the bar; give the lane back
+    // so no width or height is held for a bar that is not there.
+    if (!vShown) viewport.style.right = '';
+    if (!hShown) viewport.style.bottom = '';
     if (hShown) {
       const thumb = Math.max(MIN_THUMB, hTrack * (viewport.clientWidth / viewport.scrollWidth));
       hMetrics = { track: hTrack, thumb, scrollable: hScrollable };

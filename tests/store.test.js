@@ -236,9 +236,12 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
     assert.strictEqual(res1.statusCode, 400);
     assert.strictEqual(res1.data.error, 'bad_request');
 
-    // 2. Invalid cellId format: A1000
+    // 2. A row past the grid's ceiling (the id shape allows five digits; the row
+    //    number itself is bounded by dimension-service's MAX_ROWS). This used to be
+    //    A1000, from a three-digit cap that also refused the default grid's own last
+    //    row — see #228, which made rows addressable up to the ceiling.
     const res2 = await makeRequest('http://localhost:31262/api/cells', 'POST', {
-      cellId: 'A1000',
+      cellId: 'A50001',
       formula: '1',
       value: '1',
       style: {}

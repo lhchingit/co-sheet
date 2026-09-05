@@ -7,9 +7,15 @@ process.env.NODE_ENV = 'test';
  * gridline (#68). That was patched with a 42px `padding-right` on the grid, which
  * sits inside #grid-root's CSS `zoom` while the bar does not — leaving `42 * zoom
  * - 14` px of blank strip between the last column and the bar (#226). The bar now
- * gets a reserved lane instead: layout() insets the viewport's right edge by the
- * bar's width, so content can never reach under it and the last column ends flush.
- * Follows the AAA pattern.
+ * gets a reserved lane instead: layout() insets the viewport's edge by the bar's
+ * width, so content can never reach under it and the last column ends flush. #228
+ * did the same for the horizontal bar, which couples the two: reserving one lane
+ * shrinks the other axis and can call for its own bar.
+ *
+ * The viewport stub below models that coupling — its client box is the parent's
+ * minus whatever lanes are reserved, and its scroll extent is the content's or the
+ * client box, whichever is larger — so these tests exercise the real feedback
+ * rather than a fixed set of numbers. Follows the AAA pattern.
  */
 import test from 'node:test';
 import assert from 'node:assert';
@@ -91,9 +97,30 @@ function createSandbox() {
   sandbox.byId = byId;
   sandbox.viewport = byId['grid-viewport'];
   sandbox.vbar = byId['grid-vscroll'];
-  /** Sets the viewport's scroll metrics, then re-runs the bar layout. */
-  sandbox.layoutWith = (m) => {
-    Object.assign(sandbox.viewport, m);
+  sandbox.hbar = byId['grid-hscroll'];
+
+  // The viewport is `absolute inset-0` in its parent, so the parent holds the size
+  // it would have with no lane reserved; its own client box is that minus whatever
+  // it has given up. scrollWidth/scrollHeight report the content extent or the
+  // client box, whichever is larger — as a real scroller does.
+  const viewport = sandbox.viewport;
+  const parent = { clientWidth: 1200, clientHeight: 800 };
+  viewport.parentElement = parent;
+  const content = { width: 0, height: 0 };
+  const lane = (side) => (viewport.style[side] === `${BAR}px` ? BAR : 0);
+  Object.defineProperties(viewport, {
+    clientWidth: { get: () => parent.clientWidth - lane('right'), configurable: true },
+    clientHeight: { get: () => parent.clientHeight - lane('bottom'), configurable: true },
+    scrollWidth: { get: () => Math.max(content.width, viewport.clientWidth), configurable: true },
+    scrollHeight: { get: () => Math.max(content.height, viewport.clientHeight), configurable: true },
+  });
+
+  /** Sets the container size and the content extent, then re-runs the bar layout. */
+  sandbox.layoutWith = ({ width = 1200, height = 800, contentWidth = 0, contentHeight = 0 }) => {
+    parent.clientWidth = width;
+    parent.clientHeight = height;
+    content.width = contentWidth;
+    content.height = contentHeight;
     sandbox.layoutScrollbars();
   };
   return sandbox;
@@ -122,52 +149,68 @@ test('the grid carries no trailing buffer past its last column', () => {
     '.grid-container declares no padding-right; the bar has a reserved lane instead');
 });
 
-test('the vertical bar is given its own lane rather than covering the content', () => {
-  // --- Arrange: taller content than viewport, so the bar is needed ---
+test('each bar is given its own lane rather than covering the content', () => {
+  // --- Arrange: content larger than the viewport on both axes ---
   const s = createSandbox();
 
   // --- Act ---
-  s.layoutWith({ clientWidth: 1200, clientHeight: 800, scrollWidth: 2646, scrollHeight: 21000 });
+  s.layoutWith({ contentWidth: 2646, contentHeight: 21000 });
 
   // --- Assert ---
   assert.strictEqual(s.viewport.style.right, `${BAR}px`,
-    'the viewport stops where the bar begins, so nothing can scroll under it');
-  assert.strictEqual(s.vbar.classList.contains('hidden'), false, 'and the bar is drawn');
+    'the viewport stops where the vertical bar begins, so no column scrolls under it');
+  assert.strictEqual(s.viewport.style.bottom, `${BAR}px`,
+    'and where the horizontal bar begins, so no row does either');
+  assert.strictEqual(s.vbar.classList.contains('hidden'), false, 'both bars are drawn');
+  assert.strictEqual(s.hbar.classList.contains('hidden'), false);
 });
 
-test('with nothing to scroll vertically the lane goes back to the content', () => {
+test('with nothing to scroll the lanes go back to the content', () => {
   // --- Arrange ---
   const s = createSandbox();
-  s.layoutWith({ clientWidth: 1200, clientHeight: 800, scrollWidth: 2646, scrollHeight: 21000 });
-  assert.strictEqual(s.viewport.style.right, `${BAR}px`, 'the lane starts reserved');
+  s.layoutWith({ contentWidth: 2646, contentHeight: 21000 });
+  assert.strictEqual(s.viewport.style.right, `${BAR}px`, 'the lanes start reserved');
 
-  // --- Act: content that fits, so no vertical bar ---
-  s.layoutWith({ clientWidth: 1200, clientHeight: 800, scrollWidth: 2646, scrollHeight: 800 });
+  // --- Act: content that fits on both axes ---
+  s.layoutWith({ contentWidth: 400, contentHeight: 300 });
 
-  // --- Assert: no width is held back for a bar that isn't there ---
-  assert.strictEqual(s.viewport.style.right, '', 'the reservation is released');
-  assert.strictEqual(s.vbar.classList.contains('hidden'), true, 'along with the bar');
+  // --- Assert: nothing is held back for bars that aren't there ---
+  assert.strictEqual(s.viewport.style.right, '', 'the vertical reservation is released');
+  assert.strictEqual(s.viewport.style.bottom, '', 'and the horizontal one');
+  assert.strictEqual(s.vbar.classList.contains('hidden'), true, 'along with the bars');
+  assert.strictEqual(s.hbar.classList.contains('hidden'), true);
 });
 
-test('the reservation is decided before the width metrics are read', () => {
-  // --- Arrange: a viewport whose clientWidth reflects the lane it gives up, the
-  //     way a real one does — so a layout that measured width first would size the
-  //     horizontal bar against a width that is about to change ---
+test('a reserved lane does not latch its own bar on', () => {
+  // --- Arrange: both bars up, so both lanes are held ---
   const s = createSandbox();
-  let reads = [];
-  const viewport = s.viewport;
-  Object.defineProperty(viewport, 'clientWidth', {
-    get() { reads.push(viewport.style.right); return 1200; }, configurable: true
-  });
+  s.layoutWith({ contentWidth: 2646, contentHeight: 21000 });
+
+  // --- Act: content shrinks to just under the UNRESERVED box — it overflows only
+  //     if the held lanes are counted against it, which is the state we start from ---
+  s.layoutWith({ contentWidth: 1195, contentHeight: 795 });
+
+  // --- Assert: measured against the box with no lanes held, so both go away
+  //     rather than each keeping the other alive ---
+  assert.strictEqual(s.viewport.style.right, '', 'the vertical lane is released');
+  assert.strictEqual(s.viewport.style.bottom, '', 'and the horizontal lane with it');
+});
+
+test('reserving one lane can call for the other bar', () => {
+  // --- Arrange: content wider than the viewport but exactly as tall, so on its own
+  //     it needs only the horizontal bar ---
+  const s = createSandbox();
 
   // --- Act ---
-  Object.assign(viewport, { clientHeight: 800, scrollWidth: 2646, scrollHeight: 21000 });
-  s.layoutScrollbars();
+  s.layoutWith({ width: 1200, height: 800, contentWidth: 2646, contentHeight: 800 });
 
-  // --- Assert ---
-  assert.ok(reads.length > 0, 'the layout reads the viewport width');
-  assert.ok(reads.every((right) => right === `${BAR}px`),
-    `every width read happens after the lane is reserved (saw ${JSON.stringify(reads)})`);
+  // --- Assert: that bar's lane costs 14px of height, which the content no longer
+  //     fits — so the vertical bar is needed after all, and the pass that decides
+  //     it has to run after the first reservation ---
+  assert.strictEqual(s.viewport.style.bottom, `${BAR}px`, 'the horizontal bar gets its lane');
+  assert.strictEqual(s.viewport.style.right, `${BAR}px`, 'and the vertical bar, which only that made necessary');
+  assert.strictEqual(s.vbar.classList.contains('hidden'), false, 'so both bars are drawn');
+  assert.strictEqual(s.hbar.classList.contains('hidden'), false);
 });
 
 test('the last column\'s resize handle is pulled inside the grid', () => {

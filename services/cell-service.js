@@ -1,10 +1,28 @@
 // @ts-check
 import { isValidSheetName } from './validators.js';
+import { MAX_ROWS } from './dimension-service.js';
 
-// Canonical cell-id shape: columns A–ZZ, rows 1–999. Shared by the payload validator
-// and the write site so the "cellId is a safe property name" invariant is asserted
-// exactly where it is used as an object key.
-const CELL_ID_REGEX = /^[A-Z]{1,2}[1-9][0-9]{0,2}$/;
+// Canonical cell-id shape: columns A–ZZ, rows 1–MAX_ROWS. Shared by the payload
+// validator and the write site so the "cellId is a safe property name" invariant is
+// asserted exactly where it is used as an object key.
+//
+// The regex bounds the shape and the digit count; isAddressableCell bounds the row
+// number itself, so the grid's real ceiling is stated once, in dimension-service,
+// rather than encoded a second time in a digit count here. Before the add-rows
+// control (#228) this capped at three digits, which silently refused every write to
+// row 1000 — the last row of the default grid.
+const CELL_ID_REGEX = /^[A-Z]{1,2}([1-9][0-9]{0,4})$/;
+
+/**
+ * Whether `cellId` names a cell the grid can address: the canonical shape, and a
+ * row within the grid's ceiling.
+ * @param {*} cellId
+ * @returns {boolean}
+ */
+const isAddressableCell = (cellId) => {
+  const m = typeof cellId === 'string' ? CELL_ID_REGEX.exec(cellId) : null;
+  return m !== null && Number(m[1]) <= MAX_ROWS;
+};
 
 /**
  * @file services/cell-service.js
@@ -35,8 +53,8 @@ export const validateCellPayload = (cellId, formula, value, style) => {
     return { valid: false, message: 'Invalid cellId: Reserved property name' };
   }
 
-  // Enforce cell ID schema format (columns A-ZZ, rows 1-999).
-  if (!CELL_ID_REGEX.test(cellId)) {
+  // Enforce cell ID schema format (columns A-ZZ, rows within the grid's ceiling).
+  if (!isAddressableCell(cellId)) {
     return { valid: false, message: 'Invalid cellId format' };
   }
 
@@ -181,7 +199,7 @@ export const writeCellValue = (workbook, { cellId, formula, value, style, sheetN
   // guarantees it, but restating the check where cellId is used as an object key keeps
   // the "safe property name" invariant local (and lets static analysis see it): the id
   // can only be A1-style, never a prototype-polluting name like `__proto__`.
-  if (!CELL_ID_REGEX.test(cellId)) {
+  if (!isAddressableCell(cellId)) {
     return { ok: false, message: 'Invalid cellId format' };
   }
 

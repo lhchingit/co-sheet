@@ -13,7 +13,7 @@ import { isValidSheetName } from './validators.js';
  * A `{ ok: false }` result means the operation was a no-op (failed a guard) and the
  * caller should silently ignore it.
  *
- * @typedef {{ sheets: Object, colWidths?: Object, rowHeights?: Object }} Workbook
+ * @typedef {{ sheets: Object, colWidths?: Object, rowHeights?: Object, colCounts?: Object, rowCounts?: Object }} Workbook
  * @typedef {{ ok: true, sheetName: string, col?: string, row?: number, size: number } | { ok: false }} ResizeResult
  */
 
@@ -22,8 +22,15 @@ import { isValidSheetName } from './validators.js';
 export const MIN_SIZE = 20;
 export const MAX_SIZE = 2000;
 
-// Highest addressable row, matching the client grid (TOTAL_ROWS).
-export const MAX_ROWS = 1000;
+// Row-count bounds, matching the client grid: a sheet starts at DEFAULT_ROWS and
+// grows from the add-rows control at the bottom of the grid. The ceiling is set by
+// what the renderer can carry — applyGridTemplate emits one `grid-template-rows`
+// track per row and rebuilds that string on every render — not by storage: at
+// 50,000 rows the string costs ~2ms to build and ~22ms for the browser to apply,
+// and both roughly double at 100,000. Raising it should wait until that string is
+// rebuilt incrementally.
+export const DEFAULT_ROWS = 1000;
+export const MAX_ROWS = 50000;
 
 // Column-count bounds, matching the client grid: it starts at A–Z and grows on
 // column insert up to ZZ. A 2-letter key covers the whole A … ZZ range.
@@ -88,6 +95,35 @@ export const resizeRow = (wb, { sheetName, row, size }) => {
   const px = clampSize(size);
   bucketFor(wb, 'rowHeights', sheetName)[String(r)] = px;
   return { ok: true, sheetName, row: r, size: px };
+};
+
+/**
+ * Set a sheet's explicit row count (how many rows the grid renders, grown by the
+ * add-rows control under the last row). Stored on `wb.rowCounts[sheetName]` as an
+ * integer in [DEFAULT_ROWS, MAX_ROWS]; the default is dropped so legacy/untouched
+ * sheets stay absent from the map. Mirrors setColCount.
+ * @param {{ sheets: Object, rowCounts?: Object }} wb
+ * @param {{ sheetName: any, count: any }} payload
+ * @returns {{ ok: true, sheetName: string, count: number } | { ok: false }}
+ */
+export const setRowCount = (wb, { sheetName, count }) => {
+  if (!isValidSheetName(sheetName) || !wb.sheets || !wb.sheets[sheetName]) {
+    return { ok: false };
+  }
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < DEFAULT_ROWS || n > MAX_ROWS) {
+    return { ok: false };
+  }
+  if (!wb.rowCounts || typeof wb.rowCounts !== 'object') {
+    wb.rowCounts = Object.create(null);
+  }
+  if (n > DEFAULT_ROWS) {
+    wb.rowCounts[sheetName] = n;
+  } else {
+    // The default needs no entry; clear any prior growth so the doc stays lean.
+    delete wb.rowCounts[sheetName];
+  }
+  return { ok: true, sheetName, count: n };
 };
 
 /**

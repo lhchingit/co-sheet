@@ -80,7 +80,7 @@ function createSandbox() {
     globalThis.onGridScrollWindow = onGridScrollWindow;
     globalThis.computeVisibleRows = computeVisibleRows;
     globalThis.WINDOW_OVERSCAN = WINDOW_OVERSCAN;
-    globalThis.TOTAL_ROWS = TOTAL_ROWS;
+    globalThis.TOTAL_ROWS = getRowCount();
   `, sandbox);
 
   sandbox.viewport = sandbox.document.getElementById('grid-viewport');
