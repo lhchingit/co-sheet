@@ -24,7 +24,7 @@ const CSS_COLOR_KEYWORDS = { red: 'rgb(255, 0, 0)', white: 'rgb(255, 255, 255)' 
  * @param {Object} node
  * @returns {Object} The same node.
  */
-function withSharedText(node) {
+export function withSharedText(node) {
   let text = '';
   for (const prop of ['innerText', 'textContent']) {
     Object.defineProperty(node, prop, {
@@ -94,7 +94,9 @@ export function createCellEditorSandbox(cellState) {
         });
         return el;
       },
-      createRange: () => ({ selectNodeContents() {}, collapse() {} }),
+      // setStart/setEnd are reached once a stub carries real child nodes for
+      // ceSetCaret to walk into.
+      createRange: () => ({ selectNodeContents() {}, collapse() {}, setStart() {}, setEnd() {} }),
       body: { appendChild() {}, classList: { add() {}, remove() {} } },
       activeElement: { tagName: 'BODY', getAttribute: () => null }
     },
@@ -126,6 +128,7 @@ export function createCellEditorSandbox(cellState) {
     globalThis.setFormulaBarText = setFormulaBarText;
     globalThis.formulaBarText = formulaBarText;
     globalThis.fnAutocomplete = window.CoSheet.fnAutocomplete;
+    globalThis.makeCellEditor = makeCellEditor;
   `, sandbox);
 
   // Only now: the bundle declares its own localCells/activeCellId, which shadow

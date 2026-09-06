@@ -195,6 +195,23 @@ const setEditableText = (el, text) => {
 };
 
 /**
+ * Returns a contenteditable to the one shape described at setEditableText: a single
+ * text node, plus the trailing sentinel when the text ends with a newline. Nothing in
+ * the app inserts markup, but a paste goes through the browser and can leave <div>s
+ * behind. innerText is what recovers the text from those, since it renders them back
+ * as newlines -- which is why it is used here and textContent everywhere else.
+ * @param {HTMLElement} el
+ */
+const normaliseEditableDom = (el) => {
+  const only = el.firstElementChild;
+  // A lone trailing <br> is the sentinel setEditableText puts there itself.
+  if (!only || (only.nodeName === 'BR' && only === el.lastChild && !only.nextSibling)) return;
+  const caret = ceCaretOffset(el);
+  setEditableText(el, el.innerText || '');
+  if (caret >= 0) ceSetCaret(el, caret);
+};
+
+/**
  * Splices a line break in at the caret and leaves the caret after it, rewriting the
  * content as text rather than letting execCommand leave a <div> behind. Shared by
  * the formula bar and an inline cell edit — Ctrl/Alt+Enter breaks a line in both,
@@ -4868,12 +4885,16 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   // is reapplied by the re-render.
   cellEl.style.whiteSpace = 'pre-wrap';
   
-  // Set cell text: either the initial text or the cell's formula/value
+  // Set cell text: either the initial text or the cell's formula/value. Through
+  // setEditableText, not innerText: the innerText setter turns every newline into a
+  // <br>, which the caret helpers cannot see, so a formula already broken across
+  // lines would come back in a shape the next break splices the breaks out of
+  // (#242). One text node, real newlines, drawn by the pre-wrap set just above.
   if (initialText !== null) {
-    cellEl.innerText = initialText;
+    setEditableText(cellEl, initialText);
   } else {
     const cellData = localCells[cellId] || { formula: '', value: '' };
-    cellEl.innerText = cellData.formula ? cellData.formula : cellData.value;
+    setEditableText(cellEl, cellData.formula ? cellData.formula : cellData.value);
   }
   cellEl.focus();
 
@@ -4899,7 +4920,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   // Highlight the references of an existing formula (e.g. double-clicking a SUM
   // cell outlines its range in orange); refreshed on every keystroke below.
   refreshFormulaRefHighlights();
-  cellEl.oninput = () => { onFormulaEditorTyped(); window.CoSheet.fnAutocomplete.update(makeCellEditor(cellEl)); };
+  cellEl.oninput = () => {
+    normaliseEditableDom(cellEl);
+    onFormulaEditorTyped();
+    window.CoSheet.fnAutocomplete.update(makeCellEditor(cellEl));
+  };
 
   // Set by Escape so the blur it triggers tears the editor down without saving.
   let editAbandoned = false;
@@ -5103,22 +5128,6 @@ const cancelFormulaBarEdit = () => {
 // Hook up changes from the top Formula Bar when hitting Enter
 const formulaBarInput = document.getElementById('formula-bar-input');
 if (formulaBarInput) {
-  /**
-   * Returns the bar to the one shape described at setFormulaBarText: a single text
-   * node, plus the trailing sentinel when the formula ends with a newline. Nothing
-   * here inserts markup, but a paste goes through the browser and can leave <div>s
-   * behind. innerText is what recovers the text from those, since it renders them
-   * back as "\n" — which is why it is used here and textContent everywhere else.
-   */
-  const normaliseFormulaBarDom = () => {
-    const only = formulaBarInput.firstElementChild;
-    // A lone trailing <br> is the sentinel this puts there itself.
-    if (!only || (only.nodeName === 'BR' && only === formulaBarInput.lastChild && !only.nextSibling)) return;
-    const caret = ceCaretOffset(formulaBarInput);
-    setFormulaBarText(formulaBarInput, formulaBarInput.innerText || '');
-    if (caret >= 0) ceSetCaret(formulaBarInput, caret);
-  };
-
   formulaBarInput.addEventListener('keydown', (e) => {
     // Ctrl+Enter, Cmd+Enter and Alt+Enter all split the formula across lines instead
     // of committing it, matching Google Sheets. The engine already treats a newline
@@ -5194,7 +5203,7 @@ if (formulaBarInput) {
   // wrapped in arrows so the (const) handlers are resolved lazily at event
   // time rather than read here during top-level execution (TDZ-safe).
   formulaBarInput.addEventListener('input', () => {
-    normaliseFormulaBarDom();
+    normaliseEditableDom(formulaBarInput);
     onFormulaEditorTyped();
     window.CoSheet.fnAutocomplete.update(makeFormulaBarEditor(formulaBarInput));
   });
@@ -5273,9 +5282,10 @@ function ceSetCaret(el, offset) {
 
 /**
  * Adapter for the formula bar. It shares the caret helpers with an inline cell edit
- * — both are contenteditable — but writes through setFormulaBarText, which keeps the
- * single-text-node-plus-sentinel shape the bar depends on. Assigning innerText, as
- * the cell adapter does, would turn each newline into a <br> and break it.
+ * — both are contenteditable — but writes through setFormulaBarText rather than
+ * setEditableText directly, so nothing here has to know the bar is the element the
+ * app's other 13 call sites reach through that name. Both editors hold the same
+ * single-text-node-plus-sentinel shape (#242).
  */
 function makeFormulaBarEditor(el) {
   return {
@@ -5292,17 +5302,22 @@ function makeFormulaBarEditor(el) {
   };
 }
 
-/** Adapter for an inline-editing cell (contenteditable <div>). */
+/**
+ * Adapter for an inline-editing cell (contenteditable <div>). Reads and writes
+ * textContent, the space getCaret counts in — innerText counts a <br> as a newline
+ * and Range.toString() does not, so mixing the two put an accepted suggestion at the
+ * wrong offset in a formula broken across lines (#242).
+ */
 function makeCellEditor(cellEl) {
   return {
     el: cellEl,
-    getValue: () => cellEl.innerText,
+    getValue: () => cellEl.textContent,
     getCaret: () => ceCaretOffset(cellEl),
     getRect: () => cellEl.getBoundingClientRect(),
     focus: () => cellEl.focus(),
     replaceToken: (start, caret, insert) => {
-      const value = cellEl.innerText;
-      cellEl.innerText = value.slice(0, start) + insert + value.slice(caret);
+      const value = cellEl.textContent;
+      setEditableText(cellEl, value.slice(0, start) + insert + value.slice(caret));
       ceSetCaret(cellEl, start + insert.length);
     },
   };
