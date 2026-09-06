@@ -131,7 +131,10 @@ test('files repository - CRUD, metadata, link access, and NULL handling', async 
 
   assert.strictEqual(await files.getFileName('f1'), 'My File');
   assert.strictEqual(await files.getFileOwner('f1'), 'alice');
-  assert.strictEqual(await files.getFileLinkAccess('f1'), 'restricted', 'new files are restricted by default');
+  assert.deepStrictEqual(
+    await files.getFileAccessRow('f1'), { created_by: 'alice', link_access: 'restricted' },
+    'the access check reads owner and link access from one row; new files are restricted'
+  );
 
   const row = await files.getFileRow('f1');
   assert.strictEqual(row.name, 'My File');
@@ -149,7 +152,9 @@ test('files repository - CRUD, metadata, link access, and NULL handling', async 
   assert.strictEqual(await files.getFileName('f1'), 'Renamed');
 
   await files.updateFileLinkAccess('f1', 'anyone');
-  assert.strictEqual(await files.getFileLinkAccess('f1'), 'anyone');
+  assert.deepStrictEqual(
+    await files.getFileAccessRow('f1'), { created_by: 'alice', link_access: 'anyone' }
+  );
 
   await files.deleteFile('f1');
   assert.strictEqual(await files.getFileName('f1'), null, 'deleted file has no name');
@@ -157,7 +162,7 @@ test('files repository - CRUD, metadata, link access, and NULL handling', async 
   // Missing rows return null, not throw.
   assert.strictEqual(await files.getFileName('nope'), null);
   assert.strictEqual(await files.getFileOwner('nope'), null);
-  assert.strictEqual(await files.getFileLinkAccess('nope'), null);
+  assert.strictEqual(await files.getFileAccessRow('nope'), null);
   assert.strictEqual(await files.getFileRow('nope'), null);
 });
 
