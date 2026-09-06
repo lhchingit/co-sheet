@@ -119,7 +119,7 @@ test('WebSocket - Client receives init payload on connect', async () => {
 
     // --- Assert ---
     assert.strictEqual(initMessage.type, 'init');
-    assert.ok(initMessage.payload.cells);
+    assert.ok(initMessage.payload.sheets, 'the workbook arrives under sheets (once — see init-frame-single-copy.test.js)');
     assert.ok(Array.isArray(initMessage.payload.users));
     assert.ok(initMessage.payload.users.some(user => user.username.startsWith('User-')));
   } finally {
