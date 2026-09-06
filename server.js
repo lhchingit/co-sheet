@@ -2498,7 +2498,6 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
         colCounts: restored.colCounts,
         rowCounts: restored.rowCounts,
         hiddenCols: restored.hiddenCols,
-        cells: restored.cells,
         users: presenceForFile(fileId)
       }
     };
@@ -3129,6 +3128,9 @@ wss.on('connection', async (ws, req) => {
   ws.on('pong', () => { ws.isAlive = true; });
 
   // 1. Send the initialization payload ('init') for THIS connection's workbook only.
+  // Sheet by sheet, and once: the payload used to carry a `cells` field too, an
+  // alias of the first visible sheet, which for a single-sheet workbook meant the
+  // whole document went out twice (#246).
   ws.send(JSON.stringify({
     type: 'init',
     payload: {
@@ -3141,7 +3143,6 @@ wss.on('connection', async (ws, req) => {
       colCounts: connWorkbook.colCounts,
       rowCounts: connWorkbook.rowCounts,
       hiddenCols: connWorkbook.hiddenCols,
-      cells: connWorkbook.cells, // Maintain for client compatibility
       canEdit, // whether THIS client is permitted to modify the workbook
       // This connection's own presence identity, so the client can filter its
       // own cursor out of the roster below (a refresh/reconnect can briefly leave

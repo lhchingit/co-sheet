@@ -1064,6 +1064,10 @@ function handleSocketMessage(event) {
           activeSheetName = Object.keys(localSheets)[0] || 'Sheet1';
         }
       } else if (payload.cells) {
+        // A pre-sheets payload: one flat cell map and no `sheets`. Today's server
+        // never sends it — loadState always produces at least one sheet — and it
+        // no longer sends `cells` alongside `sheets` either (#246). The branch is
+        // free and keeps an older server readable.
         localSheets['Sheet1'] = Object.assign(Object.create(null), payload.cells);
         activeSheetName = 'Sheet1';
       } else {
