@@ -21,6 +21,7 @@ import { component } from './logger.js';
  *                                    e.g. `/api/users/:id`) / status.
  *   - ws_active_connections          Gauge of live WebSocket clients on this instance.
  *   - active_users                   Gauge of tracked collaborators on this instance.
+ *   - cached_workbooks               Gauge of workbooks held in memory on this instance.
  *   - db_up / redis_up               Gauges (1/0) sampled at scrape time, mirroring
  *                                    the readyz dependency checks.
  *
@@ -56,6 +57,12 @@ const wsActiveConnections = new client.Gauge({
 const activeUsers = new client.Gauge({
   name: 'active_users',
   help: 'Number of tracked collaborators (presence entries) on this instance.',
+  registers: [register],
+});
+
+const cachedWorkbooks = new client.Gauge({
+  name: 'cached_workbooks',
+  help: 'Number of workbooks held in this instance\'s in-memory cache. Follows the files being worked on: entries are evicted once a file is idle and unattached.',
   registers: [register],
 });
 
@@ -119,6 +126,7 @@ export function httpMetricsMiddleware(req, res, next) {
  * @param {Object} providers
  * @param {() => number} providers.getWsConnectionCount  Live WebSocket client count.
  * @param {() => number} providers.getActiveUserCount    Tracked collaborator count.
+ * @param {() => number} [providers.getCachedWorkbookCount] Cached workbook count.
  * @param {() => Promise<boolean>} providers.checkDb      Resolves true if Postgres is reachable.
  * @param {() => Promise<boolean>} providers.checkRedis   Resolves true if the bus/Redis is reachable.
  * @returns {import('http').Server|null} The metrics server, or null if disabled.
@@ -137,6 +145,7 @@ export function startMetricsServer(providers) {
       // Sample the runtime gauges at scrape time.
       wsActiveConnections.set(providers.getWsConnectionCount());
       activeUsers.set(providers.getActiveUserCount());
+      if (providers.getCachedWorkbookCount) cachedWorkbooks.set(providers.getCachedWorkbookCount());
       const [db, redis] = await Promise.all([providers.checkDb(), providers.checkRedis()]);
       dbUp.set(db ? 1 : 0);
       redisUp.set(redis ? 1 : 0);
