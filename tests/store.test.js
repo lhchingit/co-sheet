@@ -467,7 +467,9 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
       }
     },
     // loadState now reads through the db/workbook repository rather than calling
-    // pool.query directly, so the sandbox supplies a matching stub.
+    // pool.query directly, so the sandbox supplies a matching stub. It reads the
+    // row's optimistic-concurrency version in the same query, so the stub returns
+    // the { state, version } shape the repository does.
     workbookRepo: {
       async getWorkbookState(_key) {
         if (fs.existsSync(tempStorePath)) {
@@ -475,8 +477,20 @@ test('State - loadState initializes default sheet metadata and migrates legacy f
           return JSON.parse(data);
         }
         return undefined;
+      },
+      async getWorkbookStateWithVersion(_key) {
+        if (!fs.existsSync(tempStorePath)) return undefined;
+        return { state: JSON.parse(fs.readFileSync(tempStorePath, 'utf8')), version: 0 };
       }
-    }
+    },
+    // loadState stamps the version the state was read at into this map, which lives
+    // outside the extracted slice (it is declared with the workbook cache, below
+    // `let sheetState`).
+    workbookVersions: new Map(),
+    // loadState's catch arm logs. Without a stub a mistake in the sandbox surfaces
+    // as `ReferenceError: logger is not defined` from inside the catch, hiding the
+    // error that actually got us there.
+    logger: { error: (...args) => console.error('[sandbox logger]', ...args) }
   };
 
   const vmContext = vm.createContext(sandbox);

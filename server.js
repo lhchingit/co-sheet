@@ -43,7 +43,7 @@ import { parseXlsx } from './services/xlsx-import.js';
 import { createRateLimiters } from './services/rate-limit.js';
 import { createWriteCoalescer } from './services/workbook-writer.js';
 import { logger, component } from './services/logger.js';
-import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware } from './services/metrics.js';
+import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware, recordWorkbookWriteConflict } from './services/metrics.js';
 
 // Per-subsystem child loggers. Each tags its lines with a `component` field so
 // logs can be filtered by area; the default `logger` covers the REST handlers.
@@ -1427,7 +1427,13 @@ const setupCellsProxy = (state) => {
  */
 const loadState = async (key = 'default') => {
   try {
-    const stored = await workbookRepo.getWorkbookState(key);
+    const row = await workbookRepo.getWorkbookStateWithVersion(key);
+    // Remember which stored version this state is a copy of, before anything mutates
+    // it. The first write from this instance presents that version, so a write built
+    // on a document another replica has already moved past is rejected rather than
+    // applied blind (see writeWorkbookNow).
+    workbookVersions.set(key, row ? row.version : 0);
+    const stored = row ? row.state : undefined;
     if (stored !== undefined) {
       let parsed = stored;
       if (typeof parsed === 'string') {
@@ -1618,6 +1624,15 @@ const workbooks = new Map();
 /** @type {Map<string, number>} */
 const workbookLastUse = new Map();
 
+// The stored `workbook_state.version` each cached workbook was loaded from or last
+// written to, keyed like `workbooks` (plus 'default'). It is the compare-and-set
+// predicate for the next write: a whole-document write built on version N is only
+// applied while the row is still at N, so a document that predates another replica's
+// write is caught instead of silently overwriting it. An absent entry means "unknown"
+// — the writer reads the current version rather than guessing.
+/** @type {Map<string, number>} */
+const workbookVersions = new Map();
+
 /**
  * Cache a workbook under its file id and mark it in use now.
  * @param {string} fileId
@@ -1640,6 +1655,10 @@ const cacheWorkbook = (fileId, state) => {
 const uncacheWorkbook = (fileId) => {
   workbooks.delete(fileId);
   workbookLastUse.delete(fileId);
+  // Dropped rather than kept: the next load re-reads the row, and a remembered
+  // version would only be right if nothing wrote the row while we weren't watching —
+  // which is exactly the assumption the version is here to stop us making.
+  workbookVersions.delete(fileId);
 };
 
 // Accessor for the live default workbook binding, so callers that shadow the
@@ -1712,11 +1731,43 @@ const getWorkbook = async (fileId) => {
 const writeWorkbookNow = async (key) => {
   const state = key === 'default' ? getDefaultState() : workbooks.get(key);
   if (!state) return; // not loaded / not served on this instance
-  if (key === 'default') {
-    await workbookRepo.updateDefaultWorkbookState(JSON.stringify(state));
-  } else {
-    await workbookRepo.updateWorkbookState(JSON.stringify(state), key);
+  const json = JSON.stringify(state);
+
+  // The version this instance believes the row is still at. Unknown only when the
+  // load failed or the entry was swept between the edit and the write, in which case
+  // read it rather than guess — a wrong guess would report a conflict that isn't one.
+  let expected = workbookVersions.get(key);
+  if (expected === undefined) {
+    const current = await workbookRepo.getWorkbookVersion(key);
+    if (current === null) return; // the file was deleted; nothing to write onto
+    expected = current;
   }
+
+  const next = await workbookRepo.updateWorkbookStateIfVersion(json, key, expected);
+  if (next !== null) {
+    workbookVersions.set(key, next);
+    return;
+  }
+
+  // Another writer moved the row since we read or last wrote it. Because a write
+  // rewrites the WHOLE document from this instance's cache and there is no op log to
+  // replay, we cannot merge the two — so the behaviour is unchanged, last writer
+  // wins. What changes is that it is no longer silent: every collision is counted
+  // (workbook_write_conflicts_total) and logged. On a single instance this never
+  // fires; on several it is the signal that edits are being dropped, and the reason
+  // to put one file on one instance (fileId-affine routing) rather than let every
+  // replica write the same row.
+  const current = await workbookRepo.getWorkbookVersion(key);
+  if (current === null) return; // deleted underneath us
+  recordWorkbookWriteConflict();
+  logger.warn(
+    { key, expected, found: current },
+    'Workbook write conflict: another instance wrote this workbook first — overwriting, so edits made there may be lost'
+  );
+  // One retry, at the version we just observed. If that loses too, another writer is
+  // mid-flight; adopt its version and let the next scheduled write carry our state.
+  const forced = await workbookRepo.updateWorkbookStateIfVersion(json, key, current);
+  workbookVersions.set(key, forced === null ? current : forced);
 };
 
 // Every state-changing op persists the whole workbook, so a bulk edit — one
@@ -3193,6 +3244,44 @@ const processStateOp = ({ fileId, type, payload, excludeWsId = null, persist }) 
 };
 
 /**
+ * Record (or refresh) a user connected to another instance, following them if they
+ * moved to a different file. Every write to `remoteUsers` goes through here so the
+ * `lastSeen` stamp the expiry sweep reads is never forgotten on one path.
+ * @param {string} fileId
+ * @param {{ userId: string, username: string, color: string, activeCell: any, activeSheet: string }} u
+ * @returns {boolean} True if this instance had not heard of the user before.
+ */
+const upsertRemoteUser = (fileId, u) => {
+  const previous = remoteUsers.get(u.userId);
+  if (previous && previous.fileId !== fileId) unindexUser(remoteUsersByFile, previous.fileId, u.userId);
+  remoteUsers.set(u.userId, {
+    username: u.username,
+    color: u.color,
+    activeCell: u.activeCell,
+    activeSheet: u.activeSheet,
+    fileId,
+    lastSeen: Date.now()
+  });
+  indexUser(remoteUsersByFile, fileId, u.userId);
+  return !previous;
+};
+
+/**
+ * This instance's own presence entries for a file, in the shape peers mirror.
+ * @param {string} fileId
+ * @returns {Array<{ userId: string, username: string, color: string, activeCell: any, activeSheet: string }>}
+ */
+const localRosterFor = (fileId) => {
+  const users = [];
+  for (const id of usersOnFile(localUsersByFile, fileId)) {
+    const info = activeUsers.get(id);
+    if (!info) continue;
+    users.push({ userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' });
+  }
+  return users;
+};
+
+/**
  * Build the presence list for a file: local sockets plus mirrored remote users.
  * @param {string} fileId
  * @returns {Array<{ userId: string, username: string, color: string, activeCell: any, activeSheet: string }>}
@@ -3229,13 +3318,27 @@ const handleBusMessage = (msg) => {
       const { event, fileId } = msg;
       if (event === 'join' || event === 'update') {
         const u = msg.user;
-        // A re-announced user may have moved to another file, so the index follows
-        // the entry it is replacing rather than assuming the file is the same.
-        const previous = remoteUsers.get(u.userId);
-        if (previous && previous.fileId !== fileId) unindexUser(remoteUsersByFile, previous.fileId, u.userId);
-        remoteUsers.set(u.userId, { username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet, fileId });
-        indexUser(remoteUsersByFile, fileId, u.userId);
+        // A re-announced user may have moved to another file; upsertRemoteUser
+        // follows the entry it is replacing rather than assuming the file is the same.
+        upsertRemoteUser(fileId, u);
         localBroadcast(fileId, { type: 'cursor-update', payload: { userId: u.userId, username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet } });
+      } else if (event === 'roster') {
+        // A peer's periodic (or sync-requested) re-announcement of everyone it holds
+        // on this file. Refreshing `lastSeen` is the point: it is what keeps a user
+        // who is connected but idle from being expired by the sweep below.
+        const users = Array.isArray(msg.users) ? msg.users : [];
+        for (const u of users) {
+          if (!u || typeof u.userId !== 'string') continue;
+          const isNew = upsertRemoteUser(fileId, u);
+          // Only a user we had never heard of is announced to local sockets — a join
+          // published before we subscribed, or one Redis pub/sub dropped. Without
+          // that guard a roster would re-broadcast every remote user to every local
+          // socket on every beat, which is the O(N^2) fan-out this server already
+          // has too much of.
+          if (isNew) {
+            localBroadcast(fileId, { type: 'cursor-update', payload: { userId: u.userId, username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet } });
+          }
+        }
       } else if (event === 'leave') {
         // The stored entry is authoritative about which file the user was on.
         const leaving = remoteUsers.get(msg.userId);
@@ -3244,12 +3347,12 @@ const handleBusMessage = (msg) => {
         localBroadcast(fileId, { type: 'user-leave', payload: { userId: msg.userId } });
       } else if (event === 'sync-request') {
         // A peer (re)joined and wants the current roster — re-announce our local
-        // users for that file so the requester's clients can render them.
-        for (const id of usersOnFile(localUsersByFile, fileId)) {
-          const info = activeUsers.get(id);
-          if (!info) continue;
-          bus.publish({ kind: 'presence', event: 'join', fileId, user: { userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' } });
-        }
+        // users for that file so the requester's clients can render them. One
+        // message for the whole roster, not one per user: every connection triggers
+        // a sync-request, so the per-user form made a reconnect storm cost O(N^2)
+        // Redis messages.
+        const users = localRosterFor(fileId);
+        if (users.length) bus.publish({ kind: 'presence', event: 'roster', fileId, users });
       }
     }
   } catch (e) {
@@ -3258,6 +3361,51 @@ const handleBusMessage = (msg) => {
 };
 
 bus.onMessage(handleBusMessage);
+
+// Presence liveness ACROSS instances. A local socket that dies is reaped by the
+// WebSocket heartbeat, which fires `close` and publishes a `leave`. Nothing plays
+// that role for a whole instance: when a pod is killed — a rolling update, an
+// OOMKill, a scale-down — it publishes no leaves, so every other instance keeps its
+// users in `remoteUsers` forever and their cursors haunt the sheet. Rollouts are
+// routine, so this is not an edge case.
+//
+// The fix is the usual one for a mirror with no delete guarantee: make the entries
+// expire, and have each instance keep its own alive. Every beat, publish one roster
+// per file we hold sockets on (which also heals a join that Redis pub/sub dropped,
+// since pub/sub is at-most-once), then drop the remote users we stopped hearing about.
+const PRESENCE_HEARTBEAT_MS = parseInt(process.env.PRESENCE_HEARTBEAT_MS || '10000', 10);
+// Three missed beats before a user is considered gone, so one slow tick or one
+// dropped message does not blink a live collaborator out of everyone's roster.
+const PRESENCE_TTL_MS = parseInt(process.env.PRESENCE_TTL_MS || '30000', 10);
+
+const presenceHeartbeat = setInterval(() => {
+  try {
+    // 1. Tell peers our users are still here. Skipped entirely in local mode, where
+    //    publish is a no-op and nothing mirrors us.
+    if (bus.enabled) {
+      for (const fileId of localUsersByFile.keys()) {
+        const users = localRosterFor(fileId);
+        if (users.length) bus.publish({ kind: 'presence', event: 'roster', fileId, users });
+      }
+    }
+
+    // 2. Expire peers we have stopped hearing from, telling local clients to clear
+    //    their tags exactly as an explicit `leave` would. In local mode remoteUsers
+    //    is always empty, so this costs one empty iteration.
+    const cutoff = Date.now() - PRESENCE_TTL_MS;
+    for (const [userId, info] of remoteUsers) {
+      if (info.lastSeen > cutoff) continue;
+      unindexUser(remoteUsersByFile, info.fileId, userId);
+      remoteUsers.delete(userId);
+      localBroadcast(info.fileId, { type: 'user-leave', payload: { userId } });
+      realtimeLog.info(`Expired stale remote presence ${userId} on file ${info.fileId}`);
+    }
+  } catch (e) {
+    realtimeLog.error({ err: e }, 'presence heartbeat failed');
+  }
+}, PRESENCE_HEARTBEAT_MS);
+// Don't let the heartbeat keep the event loop alive during tests/shutdown.
+presenceHeartbeat.unref();
 
 // Handle incoming WebSocket connection requests.
 wss.on('connection', async (ws, req) => {

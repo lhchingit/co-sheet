@@ -190,6 +190,57 @@ test('workbook repository - state read/write, existence, timestamps, delete', as
   assert.strictEqual(await workbook.getWorkbookUpdatedAt('missing'), null);
 });
 
+test('workbook repository - compare-and-set writes reject a stale version', async () => {
+  const { workbook } = repo;
+
+  // --- Arrange ---
+  await workbook.insertWorkbookState(JSON.stringify({ sheets: { Sheet1: {} } }), 'cas1');
+  const fresh = await workbook.getWorkbookStateWithVersion('cas1');
+  assert.strictEqual(fresh.version, 0, 'a new row starts at version 0');
+  assert.strictEqual(await workbook.getWorkbookVersion('cas1'), 0);
+
+  // --- Act / Assert: a write at the current version applies and advances it. ---
+  const v1 = await workbook.updateWorkbookStateIfVersion(
+    JSON.stringify({ sheets: { Sheet1: { A1: { value: 'first' } } } }), 'cas1', 0
+  );
+  assert.strictEqual(v1, 1, 'a winning write returns the new version');
+  const afterFirst = await workbook.getWorkbookStateWithVersion('cas1');
+  assert.strictEqual(afterFirst.sheets, undefined, 'the state comes back under .state, not spread');
+  assert.strictEqual(afterFirst.state.sheets.Sheet1.A1.value, 'first');
+  assert.strictEqual(afterFirst.version, 1);
+
+  // --- Act / Assert: a second writer still holding version 0 is rejected... ---
+  const stale = await workbook.updateWorkbookStateIfVersion(
+    JSON.stringify({ sheets: { Sheet1: { A1: { value: 'stale' } } } }), 'cas1', 0
+  );
+  assert.strictEqual(stale, null, 'a write built on a superseded version must not apply');
+  const unchanged = await workbook.getWorkbookStateWithVersion('cas1');
+  assert.strictEqual(unchanged.state.sheets.Sheet1.A1.value, 'first', 'the row is untouched by a losing write');
+  assert.strictEqual(unchanged.version, 1, 'a losing write does not advance the version either');
+
+  // --- ...and succeeds once it re-reads and retries at the version it found. ---
+  const v2 = await workbook.updateWorkbookStateIfVersion(
+    JSON.stringify({ sheets: { Sheet1: { A1: { value: 'retried' } } } }), 'cas1', 1
+  );
+  assert.strictEqual(v2, 2);
+  assert.strictEqual((await workbook.getWorkbookStateWithVersion('cas1')).state.sheets.Sheet1.A1.value, 'retried');
+
+  // The unconditional writers keep the counter honest, so a version read after one
+  // of them is still a value a later CAS can present.
+  await workbook.updateWorkbookState(JSON.stringify({ sheets: { Sheet1: {} } }), 'cas1');
+  assert.strictEqual(await workbook.getWorkbookVersion('cas1'), 3, 'a plain update bumps the version too');
+
+  // Absent rows report no version rather than throwing or reading as 0.
+  assert.strictEqual(await workbook.getWorkbookVersion('missing'), null);
+  assert.strictEqual(await workbook.getWorkbookStateWithVersion('missing'), undefined);
+  assert.strictEqual(
+    await workbook.updateWorkbookStateIfVersion(JSON.stringify({}), 'missing', 0), null,
+    'there is nothing to compare against on a row that does not exist'
+  );
+
+  await workbook.deleteWorkbookState('cas1');
+});
+
 test('versions repository - insert, list newest-first, fetch state (per file)', async () => {
   const { versions } = repo;
 

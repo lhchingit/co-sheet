@@ -27,9 +27,16 @@ export async function applySchema(db) {
     CREATE TABLE IF NOT EXISTS workbook_state (
       key VARCHAR(50) PRIMARY KEY,
       state TEXT,
+      version BIGINT NOT NULL DEFAULT 0,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Idempotent migration for databases provisioned before optimistic concurrency
+  // existed. `version` is the predicate a whole-document write presents to prove it
+  // is not overwriting a newer document (see db/workbook.js
+  // updateWorkbookStateIfVersion). Existing rows start at 0, which is exactly what a
+  // freshly loaded instance will present.
+  await db.query(`ALTER TABLE workbook_state ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0`);
   // Convert databases provisioned while the column was JSONB. Guarded on the
   // current type rather than run unconditionally: ALTER COLUMN ... TYPE rewrites
   // the table, so an unguarded statement would rewrite it on every boot.

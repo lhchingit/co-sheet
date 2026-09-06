@@ -22,6 +22,9 @@ import { component } from './logger.js';
  *   - ws_active_connections          Gauge of live WebSocket clients on this instance.
  *   - active_users                   Gauge of tracked collaborators on this instance.
  *   - cached_workbooks               Gauge of workbooks held in memory on this instance.
+ *   - workbook_write_conflicts_total Counter of whole-document writes that lost the
+ *                                    compare-and-set to another replica (a possible
+ *                                    lost update — see db/workbook.js).
  *   - db_up / redis_up               Gauges (1/0) sampled at scrape time, mirroring
  *                                    the readyz dependency checks.
  *
@@ -66,6 +69,12 @@ const cachedWorkbooks = new client.Gauge({
   registers: [register],
 });
 
+const workbookWriteConflicts = new client.Counter({
+  name: 'workbook_write_conflicts_total',
+  help: 'Whole-document workbook writes rejected because another instance had already written the row. Each one is an overwrite that may have dropped edits made on the other instance — with more than one replica this should be alerted on, not merely graphed.',
+  registers: [register],
+});
+
 const dbUp = new client.Gauge({
   name: 'db_up',
   help: 'Whether Postgres was reachable at the last scrape (1 = up, 0 = down).',
@@ -77,6 +86,16 @@ const redisUp = new client.Gauge({
   help: 'Whether the realtime bus / Redis was reachable at the last scrape (1 = up, 0 = down). Always 1 in single-instance mode.',
   registers: [register],
 });
+
+/**
+ * Count a workbook write that lost the compare-and-set against another writer.
+ * Safe to call unconditionally: the counter lives in this module's private
+ * registry, so incrementing it costs nothing when METRICS_PORT is unset and no
+ * server is scraping.
+ */
+export function recordWorkbookWriteConflict() {
+  workbookWriteConflicts.inc();
+}
 
 /**
  * Resolve the configured metrics port, or null when metrics are disabled. Enabled
