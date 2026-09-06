@@ -43,6 +43,18 @@ jobs:
           npm run lint -- --max-warnings 0 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # Blocking, same as lint. The source is JS with JSDoc types under `// @ts-check`,
+      # so tsc is the only thing checking those annotations still mean anything — and
+      # until this step existed it was not being checked at all: the script was there,
+      # no workflow invoked it, and it had been failing on two errors long enough that
+      # pull requests described them as expected.
+      - name: Typecheck
+        run: |
+          echo "## 🧩 TypeScript" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npm run typecheck 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run tests with coverage
         id: tests
         env:
