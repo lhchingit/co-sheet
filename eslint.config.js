@@ -74,6 +74,18 @@ export default [
     },
   },
 
+  // Tests that drive a real browser (tests/browser-*.test.js). They are Node
+  // modules, but they also contain callbacks that Playwright serialises and runs
+  // INSIDE the page — so `window` and friends are genuinely in scope in the same
+  // file, and only Node globals would flag them. Both sets, rather than switching
+  // no-undef off: a typo in the Node half should still be caught.
+  {
+    files: ['tests/browser-*.test.js'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+
   // Browser UI: classic scripts sharing one global scope.
   {
     files: ['public/**/*.js'],
