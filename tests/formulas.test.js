@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import vm from 'vm';
 import { readAppBundle } from './helpers/app-bundle.js';
+import { withSharedText } from './helpers/cell-editor-sandbox.js';
 
 /**
  * Helper to create a mock DOM element with classList and custom event dispatching capabilities.
@@ -660,11 +661,13 @@ test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears c
   const documentListeners = {};
   
   // Mock element representing a cell in the DOM
-  const mockCellEl = {
+  // withSharedText, because the editor seeds itself through textContent and commits
+  // back out through innerText (#242); separate fields would let one of those pass
+  // while the other quietly held stale text.
+  const mockCellEl = withSharedText({
     attributes: {},
     setAttribute(name, val) { this.attributes[name] = val; },
     removeAttribute(name) { delete this.attributes[name]; },
-    innerText: 'Initial',
     focus() {},
     appendChild() {},
     querySelectorAll: () => [],
@@ -675,7 +678,8 @@ test('Direct Typing - Alphanumeric key starts inline edit and Backspace clears c
       remove() {},
       contains() { return false; }
     }
-  };
+  });
+  mockCellEl.innerText = 'Initial';
 
   // VM sandbox context representing the global window/document context
   const sandbox = {
