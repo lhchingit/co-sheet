@@ -30,14 +30,18 @@ export async function getFileOwner(fileId) {
 }
 
 /**
- * Fetch a file's link-access mode ('restricted' | 'anyone').
+ * Fetch the two columns an access check needs: who owns the file and whether its
+ * link grants general access. Both live in the same row, and the access check used
+ * to read that row twice — once for each — so reading them together halves its
+ * file lookups.
  * @param {string} fileId
- * @returns {Promise<string|null>}
+ * @returns {Promise<{ created_by: string|null, link_access: string|null } | null>}
  */
-export async function getFileLinkAccess(fileId) {
-  const r = await pool.query('SELECT link_access FROM files WHERE id = $1', [fileId]);
+export async function getFileAccessRow(fileId) {
+  const r = await pool.query('SELECT created_by, link_access FROM files WHERE id = $1', [fileId]);
   const row = r.rows && r.rows[0];
-  return row ? (row.link_access || null) : null;
+  if (!row) return null;
+  return { created_by: row.created_by || null, link_access: row.link_access || null };
 }
 
 /**

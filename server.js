@@ -282,6 +282,27 @@ async function getFileOwner(fileId) {
 }
 
 /**
+ * The owner and link-access mode of a file, in one query. Both columns live in the
+ * same `files` row, and an access check needs both — reading them separately made
+ * it read that row twice.
+ * @param {string} fileId
+ * @returns {Promise<{ owner: string|null, linkAccess: 'restricted'|'anyone' }>}
+ *   Defaults to no owner and 'restricted' for an unknown file or a failed read,
+ *   matching what getFileOwner/getFileAccess each returned on their own.
+ */
+async function getFileAccessInfo(fileId) {
+  try {
+    const row = await filesRepo.getFileAccessRow(fileId);
+    return {
+      owner: row ? row.created_by : null,
+      linkAccess: row && row.link_access === 'anyone' ? 'anyone' : 'restricted'
+    };
+  } catch (e) {
+    return { owner: null, linkAccess: 'restricted' };
+  }
+}
+
+/**
  * Whether a user may edit / rename / delete a file. The legacy 'default' workbook
  * is a shared document and stays editable by any authenticated user; for every
  * other file only the owner, admins, and super admins are allowed.
@@ -293,11 +314,18 @@ async function canModifyFile(user, fileId) {
   if (fileId === 'default') return true;
   const role = await getUserRole(user);
   if (role === 'admin' || role === 'superadmin') return true;
-  const owner = await getFileOwner(fileId);
   const id = userIdentity(user);
-  if (id && owner && id === owner) return true;
+  // Neither lookup depends on the other, so they go together: this is two round
+  // trips rather than three, at the cost of reading the share row for an owner who
+  // would have short-circuited before it. One indexed read, in parallel with one
+  // this path was making anyway, is worth a round trip on every gated request.
+  const [file, shareRole] = await Promise.all([
+    getFileAccessInfo(fileId),
+    getShareRole(fileId, id)
+  ]);
+  if (id && file.owner && id === file.owner) return true;
   // A user shared as 'editor' or co-'owner' may modify the file; 'viewer' may not.
-  return ['editor', 'owner'].includes(await getShareRole(fileId, id));
+  return ['editor', 'owner'].includes(shareRole);
 }
 
 /**
@@ -316,20 +344,6 @@ async function getShareRole(fileId, userId) {
 }
 
 /**
- * The general (link-based) access mode for a file.
- * @param {string} fileId
- * @returns {Promise<'restricted'|'anyone'>} Defaults to 'restricted'.
- */
-async function getFileAccess(fileId) {
-  try {
-    const linkAccess = await filesRepo.getFileLinkAccess(fileId);
-    return linkAccess === 'anyone' ? 'anyone' : 'restricted';
-  } catch (e) {
-    return 'restricted';
-  }
-}
-
-/**
  * Whether a user may open / view a file. The 'default' workbook is public; otherwise
  * the creator, admins, any explicitly-shared user, or anyone when general access is
  * 'anyone' may view. ('anyone' grants view-only — editing is still gated by
@@ -342,11 +356,17 @@ async function canViewFile(user, fileId) {
   if (fileId === 'default') return true;
   const role = await getUserRole(user);
   if (role === 'admin' || role === 'superadmin') return true;
-  const owner = await getFileOwner(fileId);
   const id = userIdentity(user);
-  if (id && owner && id === owner) return true;
-  if (id && (await getShareRole(fileId, id)) !== null) return true;
-  return (await getFileAccess(fileId)) === 'anyone';
+  // Two round trips, not four: the file row carries owner AND link access (it used
+  // to be read once for each), and the share role is fetched alongside it rather
+  // than after it. See canModifyFile for why an owner's share read is worth paying.
+  const [file, shareRole] = await Promise.all([
+    getFileAccessInfo(fileId),
+    getShareRole(fileId, id)
+  ]);
+  if (id && file.owner && id === file.owner) return true;
+  if (id && shareRole !== null) return true;
+  return file.linkAccess === 'anyone';
 }
 
 /**
@@ -1743,15 +1763,19 @@ app.get('/api/files', ensureAuthenticated, async (req, res) => {
     // the cost of one drive load follows the requester's own data — and rows they
     // have no right to see are never read in the first place. Admins genuinely want
     // the unfiltered listing, so they get it.
-    const visible = isAdmin
-      ? await filesRepo.listFiles()
-      : await filesRepo.listVisibleFiles(selfId);
+    // The listing, the share roles and the starred set are three independent reads
+    // of the requester's own data, so they go together rather than one after
+    // another: one round trip for the drive instead of three.
+    //
     // Each row also carries `owner` and `canModify` (owner / admin / default) so the
     // UI can show/hide edit affordances; the server enforces the same rules. The
     // share roles are still needed per row for that, beyond deciding visibility.
-    const sharedRoles = isAdmin ? new Map() : await getSharedRoleMap(selfId);
     // Per-user starred set, so each row can carry whether the viewer has starred it.
-    const starredIds = await getStarredFileIds(selfId);
+    const [visible, sharedRoles, starredIds] = await Promise.all([
+      isAdmin ? filesRepo.listFiles() : filesRepo.listVisibleFiles(selfId),
+      isAdmin ? Promise.resolve(new Map()) : getSharedRoleMap(selfId),
+      getStarredFileIds(selfId)
+    ]);
     res.json(visible.map(r => {
       const isCreator = !!(selfId && r.created_by && r.created_by === selfId);
       // 'system' is a sentinel for the seeded legacy 'default' workbook, not a real
