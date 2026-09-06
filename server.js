@@ -1705,9 +1705,17 @@ const writeWorkbookNow = async (key) => {
 // against a bounded pool. Coalescing keeps that at ~2 writes per burst. The
 // default workbook had a hand-rolled version of this latch and every real user
 // file had none; both now go through the same path.
+//
+// Coalescing bounds how many writes a key has AT ONCE, not how many it has per
+// second: the trailing write used to start the instant the previous one settled,
+// so a file under sustained editing was written as fast as Postgres would answer —
+// ~1.58 MB and ~6 ms of JSON.stringify per round trip for a 25,000-cell workbook,
+// all of it queued against PG_POOL_MAX. The floor makes that a bounded write RATE
+// (#248).
+const WORKBOOK_WRITE_MIN_INTERVAL_MS = parseInt(process.env.WORKBOOK_WRITE_MIN_INTERVAL_MS || '250', 10);
 const workbookWriter = createWriteCoalescer(writeWorkbookNow, (err, key) => {
   logger.error({ err }, `Failed to save workbook ${key}`);
-});
+}, { minIntervalMs: WORKBOOK_WRITE_MIN_INTERVAL_MS });
 
 /**
  * Persist whichever workbook a file id refers to (default vs. a cached file),
@@ -2840,9 +2848,9 @@ const fileHasLocalSockets = (fileId) => {
  *  - no socket on this instance is on it;
  *  - it has not been handed out by getWorkbook for WORKBOOK_IDLE_EVICT_MS, which
  *    covers a request that is between its load and its write;
- *  - no write is in flight for it — and because persistWorkbook starts its write
- *    synchronously, "not writing" means every op so far is already persisted, so
- *    there is nothing to flush before dropping the state;
+ *  - no write is in flight for it and none is armed behind the write floor — with
+ *    neither, every op so far is already persisted, so there is nothing to flush
+ *    before dropping the state;
  *  - the autosave engine owes it no snapshot, which would otherwise re-load the
  *    workbook from Postgres just to copy it.
  */
@@ -2853,7 +2861,7 @@ const sweepIdleWorkbooks = () => {
     if (now - (workbookLastUse.get(fileId) || 0) < WORKBOOK_IDLE_EVICT_MS) continue;
     const autosave = autosaveByFile.get(fileId);
     if (autosave && autosave.pending) continue;
-    if (!workbookWriter.forget(fileId)) continue; // a write is in flight
+    if (!workbookWriter.forget(fileId)) continue; // a write is in flight or armed
     uncacheWorkbook(fileId);
     autosaveByFile.delete(fileId);
     autosaveLog.debug(`Evicted idle workbook ${fileId} from the cache`);
