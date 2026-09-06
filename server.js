@@ -1584,7 +1584,43 @@ let sheetState = null;
 // In-memory cache of non-default workbooks, keyed by file id. The 'default'
 // workbook always lives in the global `sheetState` binding (so existing
 // single-document behavior and tests are untouched).
+//
+// Entries are evicted once a file is idle — see sweepIdleWorkbooks. A cached
+// workbook is not small (~4 MB of heap for 25,000 cells) and every route that
+// touches a file caches it, download included, so without eviction an instance
+// accumulates every file it has ever served for the life of the process (#247).
 const workbooks = new Map();
+
+// When each cached workbook was last handed to a caller by getWorkbook (i.e. last
+// attached to a connection or a request), so the sweep can tell a file nobody is
+// using from one between two operations. Keyed like `workbooks` and kept in step
+// with it.
+/** @type {Map<string, number>} */
+const workbookLastUse = new Map();
+
+/**
+ * Cache a workbook under its file id and mark it in use now.
+ * @param {string} fileId
+ * @param {Object} state
+ * @returns {Object} The state, so call sites can cache and use in one expression.
+ */
+const cacheWorkbook = (fileId, state) => {
+  workbooks.set(fileId, state);
+  workbookLastUse.set(fileId, Date.now());
+  return state;
+};
+
+/**
+ * Drop a workbook from this instance's cache. Safe by construction: every op
+ * persists, `resolveCachedWorkbook` already returns null for a file this instance
+ * is not serving (the replica path skips those ops), and the next connection
+ * re-loads the file from Postgres.
+ * @param {string} fileId
+ */
+const uncacheWorkbook = (fileId) => {
+  workbooks.delete(fileId);
+  workbookLastUse.delete(fileId);
+};
 
 // Accessor for the live default workbook binding, so callers that shadow the
 // `sheetState` name locally can still reach the current global (which may be
@@ -1635,10 +1671,13 @@ const requireFileAccess = ({ level, param = 'id', allowDefault = true, forbidden
  */
 const getWorkbook = async (fileId) => {
   if (!fileId || fileId === 'default') return sheetState;
-  if (workbooks.has(fileId)) return workbooks.get(fileId);
-  const st = await loadState(fileId);
-  workbooks.set(fileId, st);
-  return st;
+  // Every hand-out marks the file in use, so a request served while nobody holds a
+  // socket on it still keeps the entry out of the sweep's reach for a window.
+  if (workbooks.has(fileId)) {
+    workbookLastUse.set(fileId, Date.now());
+    return workbooks.get(fileId);
+  }
+  return cacheWorkbook(fileId, await loadState(fileId));
 };
 
 /**
@@ -1792,7 +1831,7 @@ app.post('/api/files', ensureAuthenticated, async (req, res) => {
 
     await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
     await filesRepo.insertFile(id, name, creator);
-    workbooks.set(id, setupCellsProxy(freshState));
+    cacheWorkbook(id, setupCellsProxy(freshState));
 
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     res.json({ id, name, url: `${baseUrl}/sheet?file=${id}` });
@@ -1861,7 +1900,7 @@ app.post('/api/files/:id/copy', ensureAuthenticated,
     for (const [sheetName, cellMap] of Object.entries(clonedState.sheets)) {
       cachedSheets[sheetName] = Object.assign(Object.create(null), cellMap);
     }
-    workbooks.set(id, setupCellsProxy({
+    cacheWorkbook(id, setupCellsProxy({
       sheets: cachedSheets,
       sheetOrder: clonedState.sheetOrder,
       sheetColors: Object.assign(Object.create(null), clonedState.sheetColors),
@@ -2002,7 +2041,7 @@ app.post('/api/files/import',
     const id = crypto.randomBytes(12).toString('hex');
     await workbookRepo.insertWorkbookState(JSON.stringify(freshState), id);
     await filesRepo.insertFile(id, name, creator);
-    workbooks.set(id, setupCellsProxy(freshState));
+    cacheWorkbook(id, setupCellsProxy(freshState));
 
     logger.info({ fileId: id, sheets: sheetOrder.length, cells: totalCells }, 'Imported xlsx workbook');
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
@@ -2111,7 +2150,12 @@ app.delete('/api/files/:id', ensureAuthenticated,
     await workbookRepo.deleteWorkbookState(id);
     await sharesRepo.deleteSharesByFile(id);
     await starsRepo.deleteStarsByFile(id);
-    workbooks.delete(id);
+    // Forget the file everywhere this process tracks it, not just in the workbook
+    // cache: a leftover autosave entry would send the engine to snapshot a file
+    // that no longer exists, re-loading it from a row that has just been deleted.
+    uncacheWorkbook(id);
+    autosaveByFile.delete(id);
+    workbookWriter.forget(id);
     res.json({ success: true });
   } catch (err) {
     logger.error({ err: err }, 'Error deleting file');
@@ -2476,7 +2520,7 @@ app.post('/api/versions/:id/restore', ensureAuthenticated, async (req, res) => {
     if (fileId === 'default') {
       sheetState = restored;
     } else {
-      workbooks.set(fileId, restored);
+      cacheWorkbook(fileId, restored);
     }
     // Awaited: the restore is only announced once it is durable.
     await persistWorkbook(fileId);
@@ -2710,6 +2754,7 @@ const ready = (async () => {
     metricsServer = startMetricsServer({
       getWsConnectionCount: () => wss.clients.size,
       getActiveUserCount: () => activeUsers.size,
+      getCachedWorkbookCount: () => workbooks.size,
       checkDb: async () => {
         try { await pool.query('SELECT 1'); return true; } catch (e) { return false; }
       },
@@ -2767,9 +2812,57 @@ const AUTOSAVE_CHECK_INTERVAL = parseInt(process.env.AUTOSAVE_CHECK_INTERVAL || 
 const AUTOSAVE_INACTIVITY_LIMIT = parseInt(process.env.AUTOSAVE_INACTIVITY_LIMIT || '15000', 10);
 const AUTOSAVE_ACTIVE_LIMIT = parseInt(process.env.AUTOSAVE_ACTIVE_LIMIT || '300000', 10);
 
+// How long a cached workbook must go unused before the sweep may drop it. Long
+// enough that a reload, or a second request in a burst, finds the file still
+// cached; short enough that a file nobody is on does not outlive its session by
+// much. Only files with no local socket are candidates at all.
+const WORKBOOK_IDLE_EVICT_MS = parseInt(process.env.WORKBOOK_IDLE_EVICT_MS || '60000', 10);
+
+/**
+ * Whether any socket on THIS instance is currently on `fileId`. Users on other
+ * instances are deliberately not counted: each instance caches for its own
+ * sockets, and an instance with none has nothing to keep the workbook for.
+ * @param {string} fileId
+ * @returns {boolean}
+ */
+const fileHasLocalSockets = (fileId) => {
+  for (const info of activeUsers.values()) {
+    if (info.fileId === fileId) return true;
+  }
+  return false;
+};
+
+/**
+ * Drop cached workbooks nobody is using, so an instance's memory follows the files
+ * being worked on rather than every file it has ever touched (#247).
+ *
+ * A file is only dropped when all four hold:
+ *  - no socket on this instance is on it;
+ *  - it has not been handed out by getWorkbook for WORKBOOK_IDLE_EVICT_MS, which
+ *    covers a request that is between its load and its write;
+ *  - no write is in flight for it — and because persistWorkbook starts its write
+ *    synchronously, "not writing" means every op so far is already persisted, so
+ *    there is nothing to flush before dropping the state;
+ *  - the autosave engine owes it no snapshot, which would otherwise re-load the
+ *    workbook from Postgres just to copy it.
+ */
+const sweepIdleWorkbooks = () => {
+  const now = Date.now();
+  for (const fileId of [...workbooks.keys()]) {
+    if (fileHasLocalSockets(fileId)) continue;
+    if (now - (workbookLastUse.get(fileId) || 0) < WORKBOOK_IDLE_EVICT_MS) continue;
+    const autosave = autosaveByFile.get(fileId);
+    if (autosave && autosave.pending) continue;
+    if (!workbookWriter.forget(fileId)) continue; // a write is in flight
+    uncacheWorkbook(fileId);
+    autosaveByFile.delete(fileId);
+    autosaveLog.debug(`Evicted idle workbook ${fileId} from the cache`);
+  }
+};
+
 // Setup the periodic check interval for the autosave engine.
 // On each tick, snapshot every file with pending changes whose inactivity or
-// active-work threshold has been reached.
+// active-work threshold has been reached, then drop the workbooks nobody is using.
 const autosaveInterval = setInterval(async () => {
   const now = Date.now();
   for (const [fileId, entry] of autosaveByFile) {
@@ -2812,6 +2905,10 @@ const autosaveInterval = setInterval(async () => {
       autosaveLog.error({ err }, `Error creating version snapshot for ${fileId}`);
     }
   }
+
+  // After the snapshots, so a file whose last editor just left is written to
+  // version history on this same tick and only becomes evictable on the next one.
+  sweepIdleWorkbooks();
 }, AUTOSAVE_CHECK_INTERVAL);
 
 // Prevent the interval from keeping the Node.js event loop active during tests/shutdown.
