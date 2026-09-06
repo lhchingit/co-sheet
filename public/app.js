@@ -565,9 +565,7 @@ let autoFontRowHeightsStale = false;
  */
 const markAutoFontRowHeightStale = (cellId, value, style) => {
   if (autoFontRowHeightsStale) return;
-  const wanted = (style && style.fontSize && value != null && value !== '')
-    ? getCellMinHeight(style.fontSize)
-    : null;
+  const wanted = modelledCellHeight(value, style);
   const coord = parseCellCoord(cellId);
   if (!coord) return;
   const modelled = autoFontRowHeights[coord.row];
@@ -3492,18 +3490,23 @@ const scanActiveSheetModel = () => {
 
     const cell = cells[id];
     const style = cell && cell.style;
-    if (!style) continue;
-    if (style.textWrap === 'wrap') hasWrappedRows = true;
-    if (styleHasMerge(style)) {
-      merges.push({
-        anchorId: id, r: parseInt(id.slice(i), 10), c: colNumber - 1,
-        rows: style.merge.rows, cols: style.merge.cols
-      });
+    if (style) {
+      if (style.textWrap === 'wrap') hasWrappedRows = true;
+      if (styleHasMerge(style)) {
+        merges.push({
+          anchorId: id, r: parseInt(id.slice(i), 10), c: colNumber - 1,
+          rows: style.merge.rows, cols: style.merge.cols
+        });
+      }
     }
-    // Only a value-bearing cell above the default font grows its row (this
-    // mirrors the renderer's `val ?`); 0 / false count as present.
-    if (!style.fontSize || cell.value == null || cell.value === '') continue;
-    const minHeight = getCellMinHeight(style.fontSize);
+    // Not gated on the cell having a style: a break can arrive in a plain value,
+    // from a paste or from Alt+Enter, with no style object behind it at all.
+    if (!cell) continue;
+    // Only a value-bearing cell grows its row (this mirrors the renderer's
+    // `val ?`); 0 / false count as present. Above the default font size, or drawn
+    // on more than one line because its value carries a break (#240) -- the model
+    // has to hold both, or the rows below a broken cell are placed too high.
+    const minHeight = modelledCellHeight(cell.value, style);
     if (!minHeight) continue;
     const row = parseInt(id.slice(i), 10);
     if (!(fontRowHeights[row] >= minHeight)) fontRowHeights[row] = minHeight;
@@ -3766,7 +3769,13 @@ const buildGridRow = (r, ctx) => {
       const escapedLink = escapeHtml(cellData.style.link);
       cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
     } else {
-      cellEl.innerText = val;
+      // textContent, not innerText: the innerText setter turns each newline into a
+      // <br>, and a <br> the model knows nothing about is what put every row below
+      // a pasted break out of place (#240). The break is kept as a real newline in
+      // one text node, drawn by the white-space set below and counted by
+      // modelledCellHeight, so what is on screen and what the model believes agree.
+      cellEl.textContent = val;
+      cellEl.style.whiteSpace = cellWhiteSpace(val, cellData && cellData.style);
     }
 
     // Apply saved cell styles
@@ -3779,7 +3788,7 @@ const buildGridRow = (r, ctx) => {
         // Grow the row to fit larger fonts (no-op at or below the default size).
         // Only an empty cell's font size is ignored: a blank cell keeps the base
         // row height, and the row grows once text is actually entered.
-        const minHeight = val ? getCellMinHeight(cellData.style.fontSize) : null;
+        const minHeight = val ? getCellMinHeight(cellData.style.fontSize, cellLineCount(val)) : null;
         if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
       }
       if (cellData.style.color) cellEl.style.backgroundColor = cellData.style.color;
@@ -3791,7 +3800,9 @@ const buildGridRow = (r, ctx) => {
       // Text wrapping mode: 'wrap' reflows within the cell (rows auto-grow),
       // 'clip' truncates at the cell edge; the default spills across empties.
       if (cellData.style.textWrap === 'wrap') {
-        cellEl.style.whiteSpace = 'normal';
+        // white-space comes from cellWhiteSpace above (pre-wrap here), which also
+        // keeps a break in the value visible: `normal` collapsed it to a space, so
+        // turning wrapping on did not show the break the value carries (#240).
         cellEl.style.overflow = 'hidden';
         cellEl.style.wordBreak = 'break-word';
       } else if (cellData.style.textWrap === 'clip') {
@@ -4655,7 +4666,10 @@ const updateGridDOMCell = (cellId, value, style) => {
     const escapedLink = escapeHtml(style.link);
     cellEl.innerHTML = `<a href="${escapedLink}" target="_blank" class="text-blue-600 underline cursor-pointer hover:text-blue-800">${escapedValue}</a>`;
   } else {
-    cellEl.innerText = val;
+    // See the render's copy of this: textContent so a newline in the value cannot
+    // force a <br>, with the white-space above drawing the break it holds on the
+    // lines modelledCellHeight has already accounted for (#240).
+    cellEl.textContent = val;
   }
 
   // Re-append cursors
@@ -4680,7 +4694,10 @@ const updateGridDOMCell = (cellId, value, style) => {
   cellEl.style.fontFamily = '';
   cellEl.style.fontSize = '';
   cellEl.style.minHeight = '';
-  cellEl.style.whiteSpace = '';
+  // Not '': this element is being reused, so the white-space is set from the text it
+  // now holds -- `pre` while that text carries a break, and back to the stylesheet's
+  // nowrap once it does not (#240).
+  cellEl.style.whiteSpace = cellWhiteSpace(val, style);
   cellEl.style.overflow = '';
   cellEl.style.wordBreak = '';
 
@@ -4694,7 +4711,7 @@ const updateGridDOMCell = (cellId, value, style) => {
       // Grow the row to fit larger fonts (no-op at or below the default size).
       // Only an empty cell's font size is ignored: a blank cell keeps the base
       // row height, and the row grows once text is actually entered.
-      const minHeight = val ? getCellMinHeight(style.fontSize) : null;
+      const minHeight = val ? getCellMinHeight(style.fontSize, cellLineCount(val)) : null;
       if (minHeight) cellEl.style.minHeight = `${minHeight}px`;
     }
     if (style.color) cellEl.style.backgroundColor = style.color;
@@ -4705,7 +4722,7 @@ const updateGridDOMCell = (cellId, value, style) => {
     if (deco.length) cellEl.style.textDecoration = deco.join(' ');
     // Text wrapping mode (see renderSpreadsheetGrid for the full description).
     if (style.textWrap === 'wrap') {
-      cellEl.style.whiteSpace = 'normal';
+      // white-space is set with the text above; see the render's copy.
       cellEl.style.overflow = 'hidden';
       cellEl.style.wordBreak = 'break-word';
     } else if (style.textWrap === 'clip') {
@@ -6390,6 +6407,12 @@ const CELL_LINE_HEIGHT_FACTOR = 1.2;   // .grid-cell `line-height`
 const CELL_VERTICAL_PADDING_EM = 0.4;  // .grid-cell `padding: 0.2em ...`, top + bottom
 const CELL_GRIDLINE_HEIGHT = 1;        // .grid-cell `border-bottom`
 const PT_TO_PX = 96 / 72;
+// What the browser draws a cell with when the cell carries no font size of its own:
+// the .text-body-sm the render puts on every cell (12px, see public/styles-editor.css).
+// Deliberately not DEFAULT_FONT_SIZE, which is the 10pt the toolbar shows and the
+// unit an explicit size is given in; the two are not the same number of pixels, and
+// it is the stylesheet's that an unstyled cell is actually laid out at.
+const DEFAULT_CELL_FONT_PX = 12;
 
 /**
  * Computes the height (px) a cell's box takes at a given font size, which is the
@@ -6399,12 +6422,61 @@ const PT_TO_PX = 96 / 72;
  * @param {number} fontSize - Font size in points.
  * @returns {number|null} Height in px, or null to use the default row height.
  */
-const getCellMinHeight = (fontSize) => {
+const getCellMinHeight = (fontSize, lines = 1) => {
   const size = clampFontSize(fontSize);
-  if (size === null) return null;
-  const px = size * PT_TO_PX;
-  const height = Math.ceil(px * (CELL_LINE_HEIGHT_FACTOR + CELL_VERTICAL_PADDING_EM) + CELL_GRIDLINE_HEIGHT);
+  // No explicit font size and a single line is the default box, which the default
+  // row height already covers; a second line has to be modelled whatever the size.
+  if (size === null && lines <= 1) return null;
+  const px = (size === null) ? DEFAULT_CELL_FONT_PX : size * PT_TO_PX;
+  const height = Math.ceil(
+    px * (CELL_LINE_HEIGHT_FACTOR * lines + CELL_VERTICAL_PADDING_EM) + CELL_GRIDLINE_HEIGHT);
   return height > DEFAULT_ROW_HEIGHT ? height : null;
+};
+
+/**
+ * How many lines a cell's text is drawn on. Counted rather than split, because the
+ * sheet scan runs over every populated cell and allocates nothing else (#236).
+ * @param {*} value
+ * @returns {number} At least 1.
+ */
+const cellLineCount = (value) => {
+  if (value == null) return 1;
+  const text = String(value);
+  let lines = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++;
+  return lines;
+};
+
+/**
+ * The `white-space` a cell needs for the text it is showing, or '' to leave the
+ * stylesheet's nowrap in place. A value carrying an explicit break has to be drawn
+ * on that many lines whether or not the cell wraps -- that is what Alt+Enter means
+ * -- and `pre` does exactly that, without also wrapping at the column edge, which
+ * is what textWrap: 'wrap' asks for and nothing else should get. The height those
+ * lines come to is modelled by modelledCellHeight, so the rows below stay put.
+ * @param {*} val - The text the cell is showing.
+ * @param {{textWrap?: string}|null|undefined} style
+ * @returns {string} A white-space value, or '' for the stylesheet's own.
+ */
+const cellWhiteSpace = (val, style) => {
+  if (style && style.textWrap === 'wrap') return 'pre-wrap';
+  return (val != null && String(val).indexOf('\n') !== -1) ? 'pre' : '';
+};
+
+/**
+ * The row height a cell needs according to the model, or null when the default row
+ * height still covers it. Shared by the scan that builds the row-height map and the
+ * write-time check that invalidates it, so the two cannot disagree about a row.
+ * @param {*} value - The cell's value; an empty cell never grows its row.
+ * @param {{fontSize?: number, textWrap?: string}|null|undefined} style
+ * @returns {number|null}
+ */
+const modelledCellHeight = (value, style) => {
+  if (value == null || value === '') return null;
+  // A wrapped cell's height depends on where the text breaks against the column
+  // width, which only a render can know: that path is measured, not modelled.
+  if (style && style.textWrap === 'wrap') return null;
+  return getCellMinHeight(style && style.fontSize, cellLineCount(value));
 };
 
 /**
