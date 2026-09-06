@@ -24,7 +24,7 @@
  * @param {(err: unknown, key: string) => void} [onError] Notified when a write
  *   throws. A failed write never rejects the caller and never wedges the key: the
  *   next schedule() starts a fresh write.
- * @returns {{ schedule(key: string): Promise<void>, isWriting(key: string): boolean }}
+ * @returns {{ schedule(key: string): Promise<void>, isWriting(key: string): boolean, forget(key: string): boolean }}
  */
 export const createWriteCoalescer = (write, onError) => {
   /** @type {Map<string, { writing: boolean, queued: Promise<void>|null, settleQueued: (() => void)|null }>} */
@@ -81,5 +81,21 @@ export const createWriteCoalescer = (write, onError) => {
   /** Whether a write is currently in flight for `key` (used by tests). */
   const isWriting = (key) => !!(states.get(key) || {}).writing;
 
-  return { schedule, isWriting };
+  /**
+   * Drop the bookkeeping for a key whose document the caller is done with, so the
+   * map does not accumulate an entry per document the process has ever written.
+   * Refuses while a write is in flight, since that write's `finally` still needs
+   * the entry to find its trailing write.
+   * @param {string} key
+   * @returns {boolean} True if the entry was dropped (or was never there).
+   */
+  const forget = (key) => {
+    const s = states.get(key);
+    if (!s) return true;
+    if (s.writing) return false;
+    states.delete(key);
+    return true;
+  };
+
+  return { schedule, isWriting, forget };
 };
