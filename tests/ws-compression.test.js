@@ -75,7 +75,7 @@ async function connectWhenFilled(port, fileId, cookie, sheet, expected, timeout 
 
 test('the workbook init frame is deflated, and survives the round trip intact', async () => {
   // --- Arrange ---
-  const PORT = '31401';
+  const PORT = '31405';
   const db = await createTestDb('wsdeflate');
   const child = spawn('node', ['server.js'], { env: { ...process.env, PORT, NODE_ENV: 'test', DATABASE_URL: db.url } });
   child.stderr.on('data', (d) => console.error(`[srv] ${d.toString().trim()}`));
