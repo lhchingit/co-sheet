@@ -2814,6 +2814,57 @@ const activeUsers = new Map();
 // wsId -> { username, color, activeCell, activeSheet, fileId }
 const remoteUsers = new Map();
 
+// Which user ids are on which file, for `activeUsers` and `remoteUsers`
+// respectively. Both maps are keyed by user id, so finding everyone on one file
+// meant walking every user the instance knows about — on every op, and again on
+// every presence event, which is the one place per-op cost multiplies by the number
+// of connected users. These indexes make that O(recipients) (#256).
+//
+// Strictly derived state: every write to the two maps above goes through the
+// add/remove helpers below, and an empty set is deleted rather than left behind so
+// the index does not become its own leak.
+/** @type {Map<string, Set<string>>} */
+const localUsersByFile = new Map();
+/** @type {Map<string, Set<string>>} */
+const remoteUsersByFile = new Map();
+
+/**
+ * Record that `userId` is on `fileId` in the given index.
+ * @param {Map<string, Set<string>>} index
+ * @param {string} fileId
+ * @param {string} userId
+ */
+const indexUser = (index, fileId, userId) => {
+  let set = index.get(fileId);
+  if (!set) { set = new Set(); index.set(fileId, set); }
+  set.add(userId);
+};
+
+/**
+ * Remove `userId` from `fileId` in the given index, dropping the file's entry once
+ * nobody is left on it.
+ * @param {Map<string, Set<string>>} index
+ * @param {string} fileId
+ * @param {string} userId
+ */
+const unindexUser = (index, fileId, userId) => {
+  const set = index.get(fileId);
+  if (!set) return;
+  set.delete(userId);
+  if (set.size === 0) index.delete(fileId);
+};
+
+/** Shared empty result, so a lookup for a file with nobody on it allocates nothing. */
+const NO_USERS = new Set();
+
+/**
+ * The user ids on `fileId` in the given index.
+ * @param {Map<string, Set<string>>} index
+ * @param {string} fileId
+ * @returns {Set<string>} Empty when nobody is on the file.
+ */
+const usersOnFile = (index, fileId) => index.get(fileId) || NO_USERS;
+
 // Autosave bookkeeping, tracked per workbook (file id). Each edited file gets an
 // entry; the periodic engine snapshots whichever files have pending changes once a
 // threshold is met. The legacy 'default' workbook is tracked under 'default' like
@@ -2857,12 +2908,7 @@ const WORKBOOK_IDLE_EVICT_MS = parseInt(process.env.WORKBOOK_IDLE_EVICT_MS || '6
  * @param {string} fileId
  * @returns {boolean}
  */
-const fileHasLocalSockets = (fileId) => {
-  for (const info of activeUsers.values()) {
-    if (info.fileId === fileId) return true;
-  }
-  return false;
-};
+const fileHasLocalSockets = (fileId) => usersOnFile(localUsersByFile, fileId).size > 0;
 
 /**
  * Drop cached workbooks nobody is using, so an instance's memory follows the files
@@ -2961,11 +3007,13 @@ const userColors = ['#1471e6', '#1e8e3e', '#d93025', '#e37400', '#a142f4', '#f06
  * @param {string|null} [excludeWsId]
  */
 const localBroadcast = (fileId, msg, excludeWsId = null) => {
+  const ids = usersOnFile(localUsersByFile, fileId);
+  if (ids.size === 0) return; // nobody here; don't serialize a message for no one
   const data = JSON.stringify(msg);
-  for (const [id, info] of activeUsers) {
-    if (info.fileId === fileId && id !== excludeWsId && info.ws.readyState === WebSocket.OPEN) {
-      info.ws.send(data);
-    }
+  for (const id of ids) {
+    if (id === excludeWsId) continue;
+    const info = activeUsers.get(id);
+    if (info && info.ws.readyState === WebSocket.OPEN) info.ws.send(data);
   }
 };
 
@@ -3151,16 +3199,15 @@ const processStateOp = ({ fileId, type, payload, excludeWsId = null, persist }) 
  */
 const presenceForFile = (fileId) => {
   const list = [];
-  for (const [id, info] of activeUsers) {
-    if (info.fileId === fileId) {
+  const add = (index, users) => {
+    for (const id of usersOnFile(index, fileId)) {
+      const info = users.get(id);
+      if (!info) continue;
       list.push({ userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' });
     }
-  }
-  for (const [id, info] of remoteUsers) {
-    if (info.fileId === fileId) {
-      list.push({ userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' });
-    }
-  }
+  };
+  add(localUsersByFile, activeUsers);
+  add(remoteUsersByFile, remoteUsers);
   return list;
 };
 
@@ -3182,18 +3229,26 @@ const handleBusMessage = (msg) => {
       const { event, fileId } = msg;
       if (event === 'join' || event === 'update') {
         const u = msg.user;
+        // A re-announced user may have moved to another file, so the index follows
+        // the entry it is replacing rather than assuming the file is the same.
+        const previous = remoteUsers.get(u.userId);
+        if (previous && previous.fileId !== fileId) unindexUser(remoteUsersByFile, previous.fileId, u.userId);
         remoteUsers.set(u.userId, { username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet, fileId });
+        indexUser(remoteUsersByFile, fileId, u.userId);
         localBroadcast(fileId, { type: 'cursor-update', payload: { userId: u.userId, username: u.username, color: u.color, activeCell: u.activeCell, activeSheet: u.activeSheet } });
       } else if (event === 'leave') {
+        // The stored entry is authoritative about which file the user was on.
+        const leaving = remoteUsers.get(msg.userId);
+        unindexUser(remoteUsersByFile, (leaving && leaving.fileId) || fileId, msg.userId);
         remoteUsers.delete(msg.userId);
         localBroadcast(fileId, { type: 'user-leave', payload: { userId: msg.userId } });
       } else if (event === 'sync-request') {
         // A peer (re)joined and wants the current roster — re-announce our local
         // users for that file so the requester's clients can render them.
-        for (const [id, info] of activeUsers) {
-          if (info.fileId === fileId) {
-            bus.publish({ kind: 'presence', event: 'join', fileId, user: { userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' } });
-          }
+        for (const id of usersOnFile(localUsersByFile, fileId)) {
+          const info = activeUsers.get(id);
+          if (!info) continue;
+          bus.publish({ kind: 'presence', event: 'join', fileId, user: { userId: id, username: info.username, color: info.color, activeCell: info.activeCell, activeSheet: info.activeSheet || 'Sheet1' } });
         }
       }
     }
@@ -3249,6 +3304,7 @@ wss.on('connection', async (ws, req) => {
 
   // Store user connection state details in our memory map (scoped by file id).
   activeUsers.set(wsId, { ws, username, color, activeCell: null, fileId });
+  indexUser(localUsersByFile, fileId, wsId);
 
   // Heartbeat liveness: mark alive now and on every pong. The interval above pings
   // each socket and terminates any still marked dead from the previous round, so a
@@ -3373,8 +3429,10 @@ wss.on('connection', async (ws, req) => {
     wsLog.info(`Closed: ${username} (${wsId})`);
     // Remove user entry from active users registry.
     activeUsers.delete(wsId);
+    unindexUser(localUsersByFile, fileId, wsId);
 
-    // Notify local clients and other instances that this user left.
+    // Notify local clients and other instances that this user left. Safe after the
+    // un-index: this socket is the one excluded from the broadcast anyway.
     localBroadcast(fileId, { type: 'user-leave', payload: { userId: wsId } }, wsId);
     bus.publish({ kind: 'presence', event: 'leave', fileId, userId: wsId });
   });
