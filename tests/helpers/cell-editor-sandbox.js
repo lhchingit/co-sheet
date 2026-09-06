@@ -18,9 +18,10 @@ const CSS_COLOR_KEYWORDS = { red: 'rgb(255, 0, 0)', white: 'rgb(255, 255, 255)' 
 /**
  * Backs innerText and textContent with one string, as a real element does. They were
  * separate fields here, so a test that wrote one and read the other passed or failed
- * for the wrong reason — and the cell editor does both: a line break is spliced in
- * through textContent, which is what the caret arithmetic counts, and committed back
- * out through innerText (#238).
+ * for the wrong reason, and both editors do exactly that: a line break is spliced
+ * in through textContent, which is what the caret arithmetic counts, and committed
+ * back out through innerText (#238); cell text is written through textContent and
+ * read back through innerText (#240).
  * @param {Object} node
  * @returns {Object} The same node.
  */
