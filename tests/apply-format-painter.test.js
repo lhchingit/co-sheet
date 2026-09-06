@@ -310,10 +310,16 @@ test('the toolbar button markup is enabled and localized in both bundled locales
   assert.ok(!/\bdisabled\b/.test(btn[0]), 'the roller button must no longer be disabled');
   assert.ok(btn[0].includes('data-i18n-title="tip.paintFormat"'), 'the tooltip must go through i18n');
 
-  // The armed painter shows a dashed outline on the source cell, and must NOT
+  // The armed painter shows a dashed ring on the source cell, and must NOT
   // change the pointer over target cells (it stays the normal arrow).
-  const outlineRule = /\.grid-cell\.paint-format-source\s*\{[^}]*dashed[^}]*\}/.exec(html);
-  assert.ok(outlineRule, 'the dashed source-cell outline rule must exist');
+  const ringRule = /\.grid-cell\.paint-format-source::after\s*\{[^}]*dashed[^}]*\}/.exec(html);
+  assert.ok(ringRule, 'the dashed source-cell ring rule must exist');
+  // Drawn as a pseudo-element, never an outline: the anchor's frame owns the
+  // outline property (see .grid-cell-active), and the painter's source IS the
+  // anchor while the painter is armed — so an outline here would mean only one of
+  // the two rings could ever show, exactly when both apply (#262).
+  assert.ok(!/\boutline\b/.test(ringRule[0]),
+    'the source ring must not use outline — the anchor frame needs that property');
   assert.ok(!/paint-format-mode[^{]*\{[^}]*cursor/.test(html),
     'no paint-mode cursor override may remain — the pointer stays an arrow');
 

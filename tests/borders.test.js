@@ -452,3 +452,57 @@ test('rendering a fully-bordered sheet stays within the 1s budget (#88)', () => 
   assert.ok(elapsedMs < 1000,
     `border render pass over ${ROWS * COLS} cells must finish within 1s, took ${elapsedMs.toFixed(0)}ms`);
 });
+
+test('no cell class may change a cell\'s box model, which the overlay insets assume (#262)', async () => {
+  // addBorderBox positions an overlay's right/bottom edges at
+  // -(GRIDLINE_W + half), because an absolutely positioned child is laid out
+  // against its parent's PADDING box, which it assumes sits one gridline inside
+  // the track boundary. That assumption is only true while every cell actually
+  // carries its 1px right/bottom gridline border.
+  //
+  // .grid-cell-active used to zero those two widths so its inset-box-shadow frame
+  // looked even, which moved the anchor's padding box and pushed any custom border
+  // on it 1px outside the track. Nothing recomputes the overlay when the anchor
+  // moves — it is positioned in CSS and simply shifts with the padding box — so
+  // there is no JS-side compensation available. The frame is an outline now (laid
+  // out against the BORDER box, so it is symmetric without touching the box model).
+  //
+  // Guarding the stylesheet rather than the layout: the suite has no browser, and
+  // this is the exact edit that would reintroduce the bug.
+  const { readFileSync } = await import('fs');
+  const html = readFileSync(new URL('../private/index.html', import.meta.url), 'utf8');
+
+  // Comments first: they quote property names (this one does), and a selector
+  // capture that swallowed the preceding comment would read them as declarations.
+  const css = html.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Every rule, then filtered in JS. Matching `.grid-cell` inside the selector
+  // pattern itself puts two greedy runs either side of a literal, which backtracks
+  // quadratically over a file this size (it took ~12s).
+  const all = [...css.matchAll(/([^{}]*)\{([^}]*)\}/g)];
+  const rules = all.filter(([, sel]) => sel.includes('.grid-cell'));
+  assert.ok(rules.length > 5, 'the grid-cell rules should be found in the stylesheet');
+
+  let checked = 0;
+  for (const [, rawSelector, body] of rules) {
+    const selector = rawSelector.trim().split(/\s*,\s*/).pop().trim();
+    // The base .grid-cell rule is where the gridlines are DEFINED.
+    if (selector === '.grid-cell') continue;
+    // A pseudo-element has its own box; a border on ::before/::after says nothing
+    // about the cell's. (The format painter's dashed ring is one.)
+    if (selector.includes('::')) continue;
+    checked++;
+    assert.ok(
+      !/border(-(right|bottom|top|left))?-?width\s*:/.test(body) && !/(^|;)\s*border\s*:/.test(body),
+      `${selector} must not change a cell's border widths — addBorderBox's overlay `
+      + 'insets are measured against the padding box those widths define'
+    );
+  }
+  assert.ok(checked > 3, `the scan should have reached several rules, saw ${checked}`);
+
+  // And the anchor frame must be the mechanism that makes that possible.
+  const active = /\.grid-cell-active\s*\{([^}]*)\}/.exec(html);
+  assert.ok(active, '.grid-cell-active rule must exist');
+  assert.ok(/outline\s*:/.test(active[1]),
+    'the anchor frame must be an outline (laid out against the border box), not an '
+    + 'inset shadow that would need the gridline widths zeroed to look even');
+});

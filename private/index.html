@@ -193,25 +193,37 @@
            applied only to the OTHER selected cells (.grid-cell-selected). The
            border is an inset shadow so the cell's own gridline borders survive. */
         .grid-cell-active {
-            box-shadow: inset 0 0 0 2px #1a73e8 !important;
-            /* Drop this cell's own gray right/bottom gridlines while it is the
-               anchor. The 2px blue frame is an inset shadow drawn inside the
-               padding box; with border-box sizing the 1px gridlines on the
-               right/bottom would otherwise push the blue inward and sit over
-               its outer edge, making those two sides look thicker than the
-               (borderless) top/left. Zeroing the widths makes the frame
-               symmetric on all four sides. */
-            border-right-width: 0 !important;
-            border-bottom-width: 0 !important;
+            /* An OUTLINE, not an inset box-shadow, and the cell's box model is left
+               exactly as every other cell's.
+
+               An outline is laid out against the BORDER box, so a -2px offset puts
+               it on the outer 2px ring of the track and it is symmetric on all four
+               sides whatever the cell's borders do (it also covers the gray
+               gridlines underneath, which is why they need not be suppressed). An
+               inset box-shadow is laid out against the PADDING box instead, which
+               is 1px smaller on the right/bottom where the gridline borders live —
+               so the shadow version had to zero those two widths to look even.
+
+               That zeroing is what broke custom borders (#262): it moved the
+               anchor's padding box, and addBorderBox positions a border overlay's
+               right/bottom edges against that padding box on the assumption that
+               the 1px gridline is present. On the anchor it was not, and an outer
+               border landed 1px outside the track. Nothing recomputes that overlay
+               when the anchor moves — it is CSS-relative and simply shifts — so the
+               only correct fix is the one here: keep every cell's box model
+               identical, and never make the JS assumption false. */
+            outline: 2px solid #1a73e8 !important;
+            outline-offset: -2px !important;
             z-index: 6;
         }
         /* When the anchor is part of a multi-cell range it carries BOTH the 2px
-           border and the light-blue range fill, so a blank anchor reflects the
-           tint and a colored one keeps its background — matching the other
-           selected cells. This two-class selector outranks .grid-cell-active
-           alone, whose border-only shadow would otherwise suppress the fill. */
+           frame and the light-blue range fill, so a blank anchor reflects the tint
+           and a colored one keeps its background — matching the other selected
+           cells. The frame is an outline now, so the two no longer compete for the
+           box-shadow property and this rule only has to restate the tint (which the
+           !important on .grid-cell-selected's own shadow would otherwise win). */
         .grid-cell-active.grid-cell-selected {
-            box-shadow: inset 0 0 0 2px #1a73e8, inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
+            box-shadow: inset 0 0 0 999px rgba(26, 115, 232, 0.1) !important;
         }
         /* Overlay border showing the current cell selection range. The outer
            border is intentionally thinner than the active (first-selected)
@@ -543,12 +555,28 @@
         body.fill-dragging, body.fill-dragging * { cursor: crosshair !important; }
         body.fill-dragging { user-select: none; }
         /* Armed format painter ("Apply format" roller): the source cell whose
-           format was copied wears a dashed outline until the paint lands or is
+           format was copied wears a dashed ring until the paint lands or is
            cancelled. The pointer stays the normal arrow while picking targets.
-           Inset far enough (-4px) to stay visible inside the solid active-cell
-           border, which covers the cell's outer 2px ring while the source is
-           still the active cell (always true at the moment of arming). */
-        .grid-cell.paint-format-source { outline: 2px dashed #1a73e8; outline-offset: -4px; }
+           Inset far enough to stay visible inside the solid active-cell frame,
+           which covers the cell's outer 2px ring while the source is still the
+           active cell (always true at the moment of arming).
+
+           Drawn as a pseudo-element rather than an outline: a cell has only ONE
+           outline, and the anchor's frame now uses it (see .grid-cell-active), so
+           an outline here would mean the two states could never be shown at once —
+           exactly when both apply. A pseudo-element is inset against the padding
+           box, which is one gridline smaller on the right/bottom, so those two
+           sides sit 1px further in than the other two; at a 4px inset that is not
+           perceptible, and unlike the anchor frame nothing measures this box. */
+        .grid-cell.paint-format-source::after {
+            content: '';
+            position: absolute;
+            inset: 4px;
+            border: 2px dashed #1a73e8;
+            box-sizing: border-box;
+            pointer-events: none;
+            z-index: 4;
+        }
         /* Find/Replace Tailwind custom styles */
         /* Secondary button styling for less prominent actions */
         .btn-secondary {
