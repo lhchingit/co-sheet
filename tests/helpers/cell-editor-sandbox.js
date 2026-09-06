@@ -15,14 +15,35 @@ import { readAppBundle } from './app-bundle.js';
 // Colour keywords the stub browser can compute, for the paste path's probe.
 const CSS_COLOR_KEYWORDS = { red: 'rgb(255, 0, 0)', white: 'rgb(255, 255, 255)' };
 
+/**
+ * Backs innerText and textContent with one string, as a real element does. They were
+ * separate fields here, so a test that wrote one and read the other passed or failed
+ * for the wrong reason — and the cell editor does both: a line break is spliced in
+ * through textContent, which is what the caret arithmetic counts, and committed back
+ * out through innerText (#238).
+ * @param {Object} node
+ * @returns {Object} The same node.
+ */
+function withSharedText(node) {
+  let text = '';
+  for (const prop of ['innerText', 'textContent']) {
+    Object.defineProperty(node, prop, {
+      get: () => text,
+      set: (v) => { text = (v == null) ? '' : String(v); },
+      configurable: true,
+    });
+  }
+  return node;
+}
+
 /** Generic element stub for the bits of the DOM the bundle touches on start-up. */
 export function createMockElement() {
-  return {
-    value: '', innerText: '', innerHTML: '', className: '', style: {},
+  return withSharedText({
+    value: '', innerHTML: '', className: '', style: {}, childNodes: [],
     classList: { add() {}, remove() {}, contains() { return false; } },
     querySelectorAll: () => [], appendChild() {}, remove() {},
     setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {}, blur() {}
-  };
+  });
 }
 
 /**
@@ -39,20 +60,23 @@ export function createCellEditorSandbox(cellState) {
 
   // The cell under edit. blur() runs the handler startCellInlineEdit installed,
   // which is what a real blur does and what commits (or, after Escape, does not).
-  const cell = {
+  const cell = withSharedText({
     attributes: {},
     setAttribute(name, val) { this.attributes[name] = val; },
     removeAttribute(name) { delete this.attributes[name]; },
     getAttribute(name) { return this.attributes[name] != null ? this.attributes[name] : null; },
-    innerText: '',
     innerHTML: '',
+    // Empty, so ceSetCaret finds no text node to land in and falls back to the end
+    // of the content — which is where the caret is here anyway, the selection stub
+    // below reporting none.
+    childNodes: [],
     className: '',
     style: {},
     classList: { add() {}, remove() {}, contains() { return false; } },
     querySelectorAll: () => [],
     appendChild() {}, focus() {},
     blur() { if (typeof this.onblur === 'function') this.onblur(); }
-  };
+  });
 
   const sandbox = {
     document: {
@@ -99,6 +123,8 @@ export function createCellEditorSandbox(cellState) {
       get: () => activeCellId, set: (v) => { activeCellId = v; }, configurable: true
     });
     globalThis.startCellInlineEdit = startCellInlineEdit;
+    globalThis.setFormulaBarText = setFormulaBarText;
+    globalThis.formulaBarText = formulaBarText;
     globalThis.fnAutocomplete = window.CoSheet.fnAutocomplete;
   `, sandbox);
 
@@ -108,11 +134,20 @@ export function createCellEditorSandbox(cellState) {
   sandbox.activeCellId = 'A1';
   sandbox.cell = cell;
   sandbox.formulaBar = formulaBar;
+  // Put text in the bar, and read it back, the way the app does. The bar is a
+  // contenteditable div (#238), so a test that assigned `.value` would be setting a
+  // property nothing reads.
+  sandbox.setBarText = (text) => sandbox.setFormulaBarText(formulaBar, text);
+  sandbox.barText = () => sandbox.formulaBarText(formulaBar);
 
-  /** Presses a key on the cell being edited. */
-  sandbox.pressKey = (key) => cell.onkeydown({
+  /**
+   * Presses a key on the cell being edited. `mods` carries the modifier flags a
+   * real event would — Ctrl/Alt+Enter breaks a line here rather than committing
+   * (#238), so a test has to be able to say which.
+   */
+  sandbox.pressKey = (key, mods = {}) => cell.onkeydown(Object.assign({
     key, preventDefault() {}, stopPropagation() {}
-  });
+  }, mods));
 
   /**
    * Presses a key on the formula bar. A browser bubbles it on to the
@@ -120,9 +155,10 @@ export function createCellEditorSandbox(cellState) {
    * would otherwise skip that handler has already been defeated by the blur, so
    * model the bubbling rather than assuming it away.
    */
-  sandbox.pressBarKey = (key) => {
+  sandbox.pressBarKey = (key, mods = {}) => {
     let propagates = true;
-    const event = { key, preventDefault() {}, stopPropagation() { propagates = false; } };
+    const event = Object.assign(
+      { key, preventDefault() {}, stopPropagation() { propagates = false; } }, mods);
     (barListeners['keydown'] || []).forEach((cb) => cb(event));
     if (propagates) (documentListeners['keydown'] || []).forEach((cb) => cb(event));
   };

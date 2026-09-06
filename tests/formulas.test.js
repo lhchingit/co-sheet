@@ -1128,7 +1128,7 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
   const code = readAppBundle();
 
   // A formula bar whose value we can read back to verify it follows the selection.
-  const formulaBar = { value: '', focus() {}, setSelectionRange() {} };
+  const formulaBar = { textContent: '', innerText: '', appendChild() {}, focus() {} };
   const makeEl = () => ({
     style: {}, attributes: {}, innerText: '', innerHTML: '',
     appendChild() {}, remove() {}, addEventListener() {}, focus() {},
@@ -1193,7 +1193,7 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
   // --- Act 1: select A2 on Sheet1, then visit Sheet2 (fresh) ---
   sandbox.handleCellSelect('A2', sandbox.document.querySelector('[data-cell-id="A2"]'));
   assert.strictEqual(sandbox.activeCellId, 'A2');
-  assert.strictEqual(formulaBar.value, 'apple');
+  assert.strictEqual(formulaBar.textContent, 'apple');
 
   sandbox.switchSheet('Sheet2');
   // A not-yet-visited sheet auto-focuses A1, and the switch is persisted.
@@ -1201,7 +1201,7 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
   assert.strictEqual(sandbox.localStorage.getItem(SHEET_KEY), 'Sheet2');
 
   sandbox.handleCellSelect('B3', sandbox.document.querySelector('[data-cell-id="B3"]'));
-  assert.strictEqual(formulaBar.value, 'banana');
+  assert.strictEqual(formulaBar.textContent, 'banana');
 
   // --- Act 2: switch back to Sheet1 — A2 should be restored ---
   sandbox.switchSheet('Sheet1');
@@ -1209,13 +1209,13 @@ test('Sheets - Switching restores each sheet\'s last selection and formula bar',
   // --- Assert ---
   assert.strictEqual(sandbox.activeSheetName, 'Sheet1');
   assert.strictEqual(sandbox.activeCellId, 'A2');
-  assert.strictEqual(formulaBar.value, 'apple');
+  assert.strictEqual(formulaBar.textContent, 'apple');
   assert.strictEqual(sandbox.localStorage.getItem(SHEET_KEY), 'Sheet1');
 
   // --- Act 3: and back to Sheet2 — B3 should be restored ---
   sandbox.switchSheet('Sheet2');
   assert.strictEqual(sandbox.activeCellId, 'B3');
-  assert.strictEqual(formulaBar.value, 'banana');
+  assert.strictEqual(formulaBar.textContent, 'banana');
 });
 
 test('Selection - Selecting a cell highlights the corresponding row and column header indexes', () => {
@@ -1746,8 +1746,10 @@ test('Formula Bar - Selecting a cell updates input value and pressing Enter upda
 
   // Mocks for DOM elements
   const mockFormulaBar = {
-    value: '',
+    textContent: '',
+    innerText: '',
     listeners: {},
+    appendChild() {},
     addEventListener(event, cb) { this.listeners[event] = cb; },
     blur() {}
   };
@@ -1829,11 +1831,11 @@ test('Formula Bar - Selecting a cell updates input value and pressing Enter upda
 
   // --- Assert 1 ---
   // Formula bar displays the cell's formula
-  assert.strictEqual(mockFormulaBar.value, '=10+5');
+  assert.strictEqual(mockFormulaBar.textContent, '=10+5');
 
   // --- Act 2: Modify formula bar value and hit Enter ---
   // Update value and trigger keydown with key='Enter'
-  mockFormulaBar.value = '=B1+30';
+  mockFormulaBar.textContent = '=B1+30';
   mockFormulaBar.listeners['keydown']({
     key: 'Enter',
     preventDefault() {},

@@ -239,6 +239,23 @@
             pointer-events: none;
             z-index: 8;
         }
+        /* The formula bar's editor. `pre-wrap` is what makes the line breaks
+           Ctrl+Enter inserts visible while still soft-wrapping a long single line,
+           matching Google Sheets (whose own bar computes to pre-wrap). The padding
+           reproduces the <input> this replaced: 20px of line over 4px above and
+           below is the height the bar has always been, so it looks unchanged. The
+           bar does not grow when a formula is split — Google Sheets keeps its own at
+           one line and scrolls, and the drag handle below is how it is made taller —
+           so `overflow-y: auto` is what carries the extra lines. */
+        .formula-bar-editor {
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+            overflow-y: auto;
+            padding: 4px 8px;
+            line-height: 20px;
+            outline: none;
+            cursor: text;
+        }
         .grid-header {
             background-color: #f8f9fa;
             border-right: 1px solid #c3c6d6;
@@ -1596,8 +1613,11 @@
 <span class="material-symbols-outlined leading-none" style="font-size: 20px; font-variation-settings: 'wght' 300;">function</span>
 </div>
 <div class="flex-grow h-full">
-<!-- Formula Bar Input element used for displaying and editing cell formulas -->
-<input id="formula-bar-input" class="w-full h-full bg-transparent border-none focus:ring-0 text-mono-data font-mono-data px-2" type="text" value="=SUM(C4:C20) * 1.15"/>
+<!-- Formula bar. A contenteditable div rather than an <input>, because an input
+     cannot hold a line break and Ctrl+Enter splits a formula across lines (#238).
+     Google Sheets does the same, and shares one editor between its formula bar and
+     its in-cell editor; this matches that — makeCellEditor drives both here. -->
+<div id="formula-bar-input" class="formula-bar-editor w-full h-full bg-transparent text-mono-data font-mono-data" role="textbox" aria-multiline="true" contenteditable="true" spellcheck="false" dir="ltr" data-i18n-aria="formula.editor"></div>
 </div>
 </div>
 <!-- Resize handle: drag down to grow the formula bar. 1px-tall strip (matching

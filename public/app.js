@@ -165,6 +165,51 @@ function ensureKey(obj, key, factory) {
   return obj[key];
 }
 
+// The formula bar is a contenteditable div, not an input: only rich text can hold
+// the line breaks Ctrl+Enter inserts (#238).
+//
+// It is kept in one shape: a single text node carrying the whole formula, newlines
+// and all, plus — only when the formula ends with one — a trailing <br>. That <br>
+// is a rendering sentinel, not content. `white-space: pre-wrap` does not draw a
+// trailing newline, so without it the browser has nowhere to put the caret on the
+// new last line and pulls it back to the end of the previous one, which sent the
+// next keystroke in front of the break instead of after it.
+//
+// Because every real newline lives in the text node, textContent is the exact value
+// and the sentinel contributes nothing to it. The single text node is also what
+// ceCaretOffset / ceSetCaret and the autocomplete adapter expect.
+const formulaBarText = (fb) => (fb ? (fb.textContent || '') : '');
+const setFormulaBarText = (fb, text) => { if (fb) setEditableText(fb, text); };
+
+/**
+ * Writes plain text into a contenteditable, keeping it to the shape described above:
+ * one text node, plus the trailing <br> a final newline needs to be drawn at all.
+ * Shared by the formula bar and an inline cell edit.
+ * @param {HTMLElement} el
+ * @param {string} text
+ */
+const setEditableText = (el, text) => {
+  const value = (text == null) ? '' : String(text);
+  el.textContent = value;
+  if (value.endsWith('\n')) el.appendChild(document.createElement('br'));
+};
+
+/**
+ * Splices a line break in at the caret and leaves the caret after it, rewriting the
+ * content as text rather than letting execCommand leave a <div> behind. Shared by
+ * the formula bar and an inline cell edit — Ctrl/Alt+Enter breaks a line in both,
+ * as it does in Google Sheets, whose bar and cell editor are one component.
+ * @param {HTMLElement} el
+ * @param {(el: HTMLElement) => string} read
+ */
+const breakLineAtCaret = (el, read) => {
+  const text = read(el);
+  const caret = ceCaretOffset(el);
+  const at = caret < 0 ? text.length : caret;
+  setEditableText(el, `${text.slice(0, at)}\n${text.slice(at)}`);
+  ceSetCaret(el, at + 1);
+};
+
 // Global state variables
 let localSheets = Object.create(null);
 // Bumped by every write to a sheet's cell map, so scanActiveSheetModel can tell that
@@ -1739,7 +1784,7 @@ const pasteSelectedCells = () => {
     if (localCells[activeCellId]) {
       const formulaBar = document.getElementById('formula-bar-input');
       if (formulaBar) {
-        formulaBar.value = localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value;
+        setFormulaBarText(formulaBar, localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value);
       }
     }
   }
@@ -2092,7 +2137,7 @@ const pasteCellGrid = (rows) => {
 
   const formulaBar = document.getElementById('formula-bar-input');
   if (formulaBar && localCells[activeCellId]) {
-    formulaBar.value = localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value;
+    setFormulaBarText(formulaBar, localCells[activeCellId].formula ? localCells[activeCellId].formula : localCells[activeCellId].value);
   }
 };
 
@@ -2357,7 +2402,7 @@ const syncCellState = (cellId) => {
     // Update top formula bar
     const formulaBar = document.getElementById('formula-bar-input');
     if (formulaBar) {
-      formulaBar.value = cell.formula ? cell.formula : cell.value;
+      setFormulaBarText(formulaBar, cell.formula ? cell.formula : cell.value);
     }
     updateToolbarFormattingStates(cell.style);
   }
@@ -4695,7 +4740,7 @@ const handleCellSelect = (cellId, cellEl, silent = false) => {
   // (set by updateRangeSelectionUI); don't overwrite it with the anchor cell ID.
   if (coordDisplay && !isColumnSelection && !isRowSelection) coordDisplay.innerText = cellId;
   if (formulaBar) {
-    formulaBar.value = cellData && cellData.formula ? cellData.formula : (cellData && cellData.value ? cellData.value : '');
+    setFormulaBarText(formulaBar, cellData && cellData.formula ? cellData.formula : (cellData && cellData.value ? cellData.value : ''));
   }
 
   // Notify server of active cell cursor movement
@@ -4817,6 +4862,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   cellEl.setAttribute('contenteditable', 'true');
   // Suppress the browser's spellcheck squiggles on cell data (numbers, codes).
   cellEl.setAttribute('spellcheck', 'false');
+  // A cell is nowrap, which cannot draw a line break; while it is being edited it
+  // has to, so Ctrl/Alt+Enter shows what it did. The cell grows with the lines, as
+  // Sheets' in-cell editor does. Cleared on commit, where the cell's own wrap style
+  // is reapplied by the re-render.
+  cellEl.style.whiteSpace = 'pre-wrap';
   
   // Set cell text: either the initial text or the cell's formula/value
   if (initialText !== null) {
@@ -4861,6 +4911,9 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     cellEl.removeAttribute('contenteditable');
     // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4" → ")").
     const text = balanceFormulaParens(cellEl.innerText.trim());
+    // Only now: innerText reads what is laid out, so putting the cell back to
+    // nowrap first would collapse a break the edit inserted into a space.
+    cellEl.style.whiteSpace = '';   // see startCellInlineEdit
     activeFormulaEditor = null;
     resetFormulaPick();
     if (editAbandoned) {
@@ -4875,6 +4928,18 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
 
   cellEl.onblur = saveInlineEdit;
   cellEl.onkeydown = (e) => {
+    // Ctrl/Cmd/Alt+Enter breaks the line here too, not just in the formula bar:
+    // Google Sheets uses one editor for both, and a formula is as likely to be
+    // written in the cell as above it. Ahead of the autocomplete branch, which
+    // would otherwise take the Enter to accept a suggestion.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.altKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.CoSheet.fnAutocomplete.close();
+      breakLineAtCaret(cellEl, (el) => el.textContent || '');
+      onFormulaEditorTyped();
+      return;
+    }
     // When the autocomplete is open, let it consume navigation/accept keys
     // first so Enter/Tab pick a suggestion instead of committing the cell.
     if (window.CoSheet.fnAutocomplete.isOpen()) {
@@ -4999,7 +5064,7 @@ const saveCellUpdate = (cellId, text) => {
   // away to another cell).
   if (activeCellId === cellId) {
     const formulaBar = document.getElementById('formula-bar-input');
-    if (formulaBar) formulaBar.value = cell.formula ? cell.formula : cell.value;
+    if (formulaBar) setFormulaBarText(formulaBar, cell.formula ? cell.formula : cell.value);
     updateToolbarFormattingStates(cell.style);
   }
 };
@@ -5030,7 +5095,7 @@ const cancelFormulaBarEdit = () => {
   // Restore from stored state directly, so the bar is right even when the cell
   // has no element to re-select (scrolled out of a windowed grid).
   const cellData = localCells[cellId] || { formula: '', value: '' };
-  if (formulaBar) formulaBar.value = cellData.formula ? cellData.formula : cellData.value;
+  if (formulaBar) setFormulaBarText(formulaBar, cellData.formula ? cellData.formula : cellData.value);
   const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
   if (cellEl) handleCellSelect(cellId, cellEl);
 };
@@ -5038,7 +5103,39 @@ const cancelFormulaBarEdit = () => {
 // Hook up changes from the top Formula Bar when hitting Enter
 const formulaBarInput = document.getElementById('formula-bar-input');
 if (formulaBarInput) {
+  /**
+   * Returns the bar to the one shape described at setFormulaBarText: a single text
+   * node, plus the trailing sentinel when the formula ends with a newline. Nothing
+   * here inserts markup, but a paste goes through the browser and can leave <div>s
+   * behind. innerText is what recovers the text from those, since it renders them
+   * back as "\n" — which is why it is used here and textContent everywhere else.
+   */
+  const normaliseFormulaBarDom = () => {
+    const only = formulaBarInput.firstElementChild;
+    // A lone trailing <br> is the sentinel this puts there itself.
+    if (!only || (only.nodeName === 'BR' && only === formulaBarInput.lastChild && !only.nextSibling)) return;
+    const caret = ceCaretOffset(formulaBarInput);
+    setFormulaBarText(formulaBarInput, formulaBarInput.innerText || '');
+    if (caret >= 0) ceSetCaret(formulaBarInput, caret);
+  };
+
   formulaBarInput.addEventListener('keydown', (e) => {
+    // Ctrl+Enter, Cmd+Enter and Alt+Enter all split the formula across lines instead
+    // of committing it, matching Google Sheets. The engine already treats a newline
+    // as whitespace (see the tokenizer), so the break is purely for reading. Ahead of
+    // the autocomplete branch below, which would otherwise take the Enter to accept
+    // a suggestion — a line break is what was asked for either way.
+    //
+    // The bar's height does not change: Sheets keeps its own at one line and scrolls,
+    // and the drag handle is how it is made taller.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.altKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.CoSheet.fnAutocomplete.close();
+      breakLineAtCaret(formulaBarInput, formulaBarText);
+      onFormulaEditorTyped();
+      return;
+    }
     // When the function autocomplete is open, let it consume navigation/accept
     // keys first so Enter/Tab pick a suggestion instead of committing the cell.
     if (window.CoSheet.fnAutocomplete.isOpen()) {
@@ -5072,7 +5169,7 @@ if (formulaBarInput) {
       e.stopPropagation();
       // Commit to the cell the edit started in. For a cross-sheet pick this also
       // returns to that cell's sheet; balanceFormulaParens auto-closes any "(".
-      commitFormulaToOrigin(formulaBarInput.value);
+      commitFormulaToOrigin(formulaBarText(formulaBarInput));
       formulaBarInput.blur(); // Remove focus from the formula bar
     }
   });
@@ -5085,7 +5182,7 @@ if (formulaBarInput) {
     // not reset the in-progress edit. In both cases leave the existing state.
     if (fpHandoff) return;
     if (fpOriginSheet != null && fpOriginSheet !== activeSheetName) return;
-    activeFormulaEditor = makeInputEditor(formulaBarInput);
+    activeFormulaEditor = makeFormulaBarEditor(formulaBarInput);
     resetFormulaPick();
     // The formula bar edits the active cell on the active sheet.
     fpOriginSheet = activeSheetName;
@@ -5096,8 +5193,12 @@ if (formulaBarInput) {
   // Recompute suggestions as the user types / moves the caret. These are
   // wrapped in arrows so the (const) handlers are resolved lazily at event
   // time rather than read here during top-level execution (TDZ-safe).
-  formulaBarInput.addEventListener('input', () => { onFormulaEditorTyped(); window.CoSheet.fnAutocomplete.update(makeInputEditor(formulaBarInput)); });
-  formulaBarInput.addEventListener('click', () => { window.CoSheet.fnAutocomplete.update(makeInputEditor(formulaBarInput)); });
+  formulaBarInput.addEventListener('input', () => {
+    normaliseFormulaBarDom();
+    onFormulaEditorTyped();
+    window.CoSheet.fnAutocomplete.update(makeFormulaBarEditor(formulaBarInput));
+  });
+  formulaBarInput.addEventListener('click', () => { window.CoSheet.fnAutocomplete.update(makeFormulaBarEditor(formulaBarInput)); });
   // Close when leaving the field (delayed so a click on a suggestion still
   // registers via its mousedown handler before blur tears the popup down). A
   // point-mode grid click keeps focus (preventDefault), so this only runs on a
@@ -5117,26 +5218,6 @@ if (formulaBarInput) {
 // (window.CoSheet.fnAutocomplete). The editor adapters below are also used by
 // formula point mode (activeFormulaEditor), so they stay here.
 
-/** Adapter for the formula-bar <input> (value / selection / setSelectionRange). */
-function makeInputEditor(input) {
-  return {
-    el: input,
-    getValue: () => input.value,
-    // Collapsed caret only; -1 signals a selection (insertion would be ambiguous).
-    getCaret: () => (input.selectionStart === input.selectionEnd ? input.selectionStart : -1),
-    getRect: () => input.getBoundingClientRect(),
-    focus: () => input.focus(),
-    replaceToken: (start, caret, insert) => {
-      const value = input.value;
-      const next = value.slice(0, start) + insert + value.slice(caret);
-      input.value = next;
-      const newCaret = start + insert.length;
-      input.setSelectionRange(newCaret, newCaret);
-      input.focus();
-    },
-  };
-}
-
 /**
  * Caret offset (in characters from the start of the element) for a collapsed
  * selection inside a contenteditable. Returns -1 when there is no collapsed
@@ -5154,22 +5235,61 @@ function ceCaretOffset(el) {
   return pre.toString().length;
 }
 
-/** Places a collapsed caret at character `offset` inside a contenteditable. */
+/**
+ * Places a collapsed caret at character `offset` inside a contenteditable.
+ *
+ * Walks the text nodes rather than indexing into the first one: typing splits the
+ * content across several, and a formula broken across lines carries real newlines
+ * inside them, so the offset is not an index into any single node. <br> is skipped
+ * for the same reason ceCaretOffset can measure with Range.toString(), which does
+ * not see it — the only <br> in these editors is the formula bar's trailing
+ * rendering sentinel, which nothing sits after.
+ */
 function ceSetCaret(el, offset) {
   const sel = window.getSelection();
   if (!sel) return;
   const range = document.createRange();
-  const node = el.firstChild;
-  if (node && node.nodeType === 3 /* TEXT_NODE */) {
-    range.setStart(node, Math.min(offset, node.textContent.length));
-    range.collapse(true);
-  } else {
-    range.selectNodeContents(el);
-    range.collapse(false);
-  }
+  let remaining = Math.max(0, offset);
+  let placed = false;
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (placed) return;
+      if (child.nodeType === 3 /* TEXT_NODE */) {
+        const len = child.data.length;
+        if (remaining <= len) { range.setStart(child, remaining); placed = true; return; }
+        remaining -= len;
+      } else if (child.nodeType === 1 /* ELEMENT_NODE */ && child.nodeName !== 'BR') {
+        walk(child);
+      }
+    }
+  };
+  walk(el);
+  if (placed) range.collapse(true);
+  else { range.selectNodeContents(el); range.collapse(false); }
   sel.removeAllRanges();
   sel.addRange(range);
   el.focus();
+}
+
+/**
+ * Adapter for the formula bar. It shares the caret helpers with an inline cell edit
+ * — both are contenteditable — but writes through setFormulaBarText, which keeps the
+ * single-text-node-plus-sentinel shape the bar depends on. Assigning innerText, as
+ * the cell adapter does, would turn each newline into a <br> and break it.
+ */
+function makeFormulaBarEditor(el) {
+  return {
+    el,
+    getValue: () => formulaBarText(el),
+    getCaret: () => ceCaretOffset(el),
+    getRect: () => el.getBoundingClientRect(),
+    focus: () => el.focus(),
+    replaceToken: (start, caret, insert) => {
+      const value = formulaBarText(el);
+      setFormulaBarText(el, value.slice(0, start) + insert + value.slice(caret));
+      ceSetCaret(el, start + insert.length);
+    },
+  };
 }
 
 /** Adapter for an inline-editing cell (contenteditable <div>). */
@@ -5202,7 +5322,8 @@ function makeCellEditor(cellEl) {
  * any unbalanced "(" is auto-closed with ")".
  *
  * The two editors are reached through the same getValue/getCaret/replaceToken
- * adapters used by the function autocomplete (makeInputEditor / makeCellEditor),
+ * adapters used by the function autocomplete (makeFormulaBarEditor / makeCellEditor,
+ * which share the contenteditable caret helpers and differ only in how they write),
  * stored in `activeFormulaEditor` while that editor holds focus.
  * ------------------------------------------------------------------------- */
 
@@ -5492,8 +5613,8 @@ const beginCrossSheetFormulaSwitch = (targetSheet) => {
       window.CoSheet.fnAutocomplete.close();
     }
     // Adopt the formula bar as the live editor, preserving text + caret.
-    formulaBar.value = text;
-    activeFormulaEditor = makeInputEditor(formulaBar);
+    setFormulaBarText(formulaBar, text);
+    activeFormulaEditor = makeFormulaBarEditor(formulaBar);
     formulaBar.focus();
     const pos = (typeof caret === 'number' && caret >= 0) ? caret : text.length;
     try { formulaBar.setSelectionRange(pos, pos); } catch (e) {}
@@ -6999,7 +7120,7 @@ const applyCellLink = (cellId, text, url) => {
   updateGridDOMCell(cellId, getCellValue(cellId), cell.style);
   if (activeCellId === cellId) {
     const formulaBar = document.getElementById('formula-bar-input');
-    if (formulaBar) formulaBar.value = cell.formula ? cell.formula : cell.value;
+    if (formulaBar) setFormulaBarText(formulaBar, cell.formula ? cell.formula : cell.value);
     updateToolbarFormattingStates(cell.style);
   }
 };
@@ -7336,7 +7457,7 @@ const performStructuralInsert = (mode, at) => {
   const fb = document.getElementById('formula-bar-input');
   if (fb && activeCellId) {
     const cell = localCells[activeCellId];
-    fb.value = cell ? (cell.formula || cell.value || '') : '';
+    setFormulaBarText(fb, cell ? (cell.formula || cell.value || '') : '');
   }
 };
 
@@ -7400,7 +7521,7 @@ const performCellInsert = (direction) => {
   const fb = document.getElementById('formula-bar-input');
   if (fb && activeCellId) {
     const cell = localCells[activeCellId];
-    fb.value = cell ? (cell.formula || cell.value || '') : '';
+    setFormulaBarText(fb, cell ? (cell.formula || cell.value || '') : '');
   }
 };
 
@@ -7535,7 +7656,7 @@ const performCellDelete = (direction) => {
   const fb = document.getElementById('formula-bar-input');
   if (fb && activeCellId) {
     const cell = localCells[activeCellId];
-    fb.value = cell ? (cell.formula || cell.value || '') : '';
+    setFormulaBarText(fb, cell ? (cell.formula || cell.value || '') : '');
   }
 };
 
@@ -7659,7 +7780,7 @@ const performStructuralDelete = (mode, at) => {
   const fb = document.getElementById('formula-bar-input');
   if (fb && activeCellId) {
     const cell = localCells[activeCellId];
-    fb.value = cell ? (cell.formula || cell.value || '') : '';
+    setFormulaBarText(fb, cell ? (cell.formula || cell.value || '') : '');
   }
 };
 
