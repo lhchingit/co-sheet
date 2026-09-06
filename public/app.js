@@ -2933,10 +2933,34 @@ const colLeft = (colIndex) => {
  *  Without windowing (wrapped text, history mode) every row is rendered, so the
  *  live box is measured as before and picks up content-driven growth. */
 const resolvedRowHeight = (row) => {
-  if (activeSheetWindowed) return getRowHeight(row);
+  // The row under an open inline edit is measured even on a windowed sheet: the
+  // editor grows with the lines it is showing and the track grows with it, and the
+  // model has nothing to predict that from -- it is built from stored values, and an
+  // open edit has stored nothing yet (#244). Exactly one row is ever in this state.
+  if (activeSheetWindowed && row !== inlineEditRow) return getRowHeight(row);
   const rh = getRowHeaderEl(row);
   const h = rh && rh.offsetHeight;
   return (typeof h === 'number' && h > 0) ? h : getRowHeight(row);
+};
+
+// The row holding the cell under inline edit (0 when no edit is open), and how many
+// lines that editor is currently showing. The line count is what the overlay is
+// redrawn on: it changes only when the cell's height does, so typing within a line
+// costs a string scan and nothing else -- no layout read per keystroke.
+let inlineEditRow = 0;
+let inlineEditLines = 1;
+
+/**
+ * Redraws the selection frame if the open editor now covers a different number of
+ * lines. Called from the editor's input handler and from the line-break key, which
+ * changes the content without an input event of its own.
+ * @param {HTMLElement} cellEl
+ */
+const syncInlineEditOverlay = (cellEl) => {
+  const lines = cellLineCount(cellEl.textContent);
+  if (lines === inlineEditLines) return;
+  inlineEditLines = lines;
+  updateRangeSelectionUI();
 };
 
 // Cumulative row heights for the active sheet: rowOffsets[r] is the total height of
@@ -4913,6 +4937,12 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     const cellData = localCells[cellId] || { formula: '', value: '' };
     setEditableText(cellEl, cellData.formula ? cellData.formula : cellData.value);
   }
+  // From here until the commit, this row is measured rather than modelled; see
+  // resolvedRowHeight.
+  const editCoord = parseCellCoord(cellId);
+  inlineEditRow = editCoord ? editCoord.row : 0;
+  inlineEditLines = cellLineCount(cellEl.textContent);
+
   cellEl.focus();
 
   // Position caret at end of cell content using Range and Selection APIs
@@ -4939,6 +4969,7 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   refreshFormulaRefHighlights();
   cellEl.oninput = () => {
     normaliseEditableDom(cellEl);
+    syncInlineEditOverlay(cellEl);
     onFormulaEditorTyped();
     window.CoSheet.fnAutocomplete.update(makeCellEditor(cellEl));
   };
@@ -4949,6 +4980,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   // Handle saving inline edits on blur
   const saveInlineEdit = () => {
     window.CoSheet.fnAutocomplete.close();
+    // Back to the modelled height (see resolvedRowHeight). An editor that had grown
+    // leaves the frame at the height it grew to, so redraw once the cell is back to
+    // what the model says -- committed or discarded, either way it moved.
+    const grew = inlineEditRow !== 0 && inlineEditLines > 1;
+    inlineEditRow = 0;
     cellEl.oninput = null;
     cellEl.removeAttribute('contenteditable');
     // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4" → ")").
@@ -4963,9 +4999,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
       // holds, so the typed text leaves no trace and nothing is committed.
       const cellData = localCells[cellId] || { formula: '', value: '', style: {} };
       updateGridDOMCell(cellId, getCellValue(cellId), cellData.style || {});
+      if (grew) updateRangeSelectionUI();
       return;
     }
     saveCellUpdate(cellId, text);
+    if (grew) updateRangeSelectionUI();
   };
 
   cellEl.onblur = saveInlineEdit;
@@ -4979,6 +5017,8 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
       e.stopPropagation();
       window.CoSheet.fnAutocomplete.close();
       breakLineAtCaret(cellEl, (el) => el.textContent || '');
+      // The break is a programmatic change, so it fires no input event of its own.
+      syncInlineEditOverlay(cellEl);
       onFormulaEditorTyped();
       return;
     }
