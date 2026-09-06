@@ -66,6 +66,12 @@ function buildStore({ redisClient, cluster, prefix }) {
  * @returns {{ authLimiter: import('express').RequestHandler, writeLimiter: import('express').RequestHandler }}
  */
 export function createRateLimiters({ redisClient = null, cluster = false, enabled = true } = {}) {
+  // Typed against the library's own options rather than left to inference: in a bare
+  // object literal `standardHeaders: 'draft-7'` widens to `string`, which is not
+  // assignable to the union the library declares, and every rateLimit() call below
+  // failed to type-check. Annotating also means a misspelled option name is caught
+  // here rather than silently ignored at runtime.
+  /** @type {Partial<import('express-rate-limit').Options>} */
   const common = {
     windowMs: 15 * 60 * 1000,
     standardHeaders: 'draft-7',
