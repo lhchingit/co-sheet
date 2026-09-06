@@ -165,12 +165,6 @@ function ensureKey(obj, key, factory) {
   return obj[key];
 }
 
-// The height the user dragged the formula bar to, or 0 while they have not. The
-// bar also grows on its own to fit a formula split across lines (#238); the two are
-// reconciled by taking whichever is taller, so a drag is never undone by typing.
-let formulaBarDraggedHeight = 0;
-const FORMULA_BAR_MIN_HEIGHT = 28;
-
 // The formula bar is a contenteditable div, not an input: only rich text can hold
 // the line breaks Ctrl+Enter inserts (#238).
 //
@@ -185,35 +179,35 @@ const FORMULA_BAR_MIN_HEIGHT = 28;
 // and the sentinel contributes nothing to it. The single text node is also what
 // ceCaretOffset / ceSetCaret and the autocomplete adapter expect.
 const formulaBarText = (fb) => (fb ? (fb.textContent || '') : '');
-const setFormulaBarText = (fb, text) => {
-  if (!fb) return;
-  const value = (text == null) ? '' : String(text);
-  fb.textContent = value;
-  if (value.endsWith('\n')) fb.appendChild(document.createElement('br'));
-  syncFormulaBarHeight();
-};
-
-// How many lines the bar grows to on its own before it starts scrolling instead.
-const MAX_AUTO_FORMULA_LINES = 6;
+const setFormulaBarText = (fb, text) => { if (fb) setEditableText(fb, text); };
 
 /**
- * Sizes the bar to the formula it holds. Without this a break inserted by Ctrl+Enter
- * lands outside a one-line box and the key looks like it did nothing. Called from
- * setFormulaBarText, so every path that fills the bar — selecting a cell, an undo, a
- * peer's edit, a history preview — leaves it the right height, and a formula that
- * fits on one line puts it back. A height the user dragged to wins when it is the
- * taller of the two, so the drag handle is never undone by typing.
+ * Writes plain text into a contenteditable, keeping it to the shape described above:
+ * one text node, plus the trailing <br> a final newline needs to be drawn at all.
+ * Shared by the formula bar and an inline cell edit.
+ * @param {HTMLElement} el
+ * @param {string} text
  */
-const syncFormulaBarHeight = () => {
-  const fb = document.getElementById('formula-bar-input');
-  const bar = document.getElementById('formula-bar');
-  if (!fb || !bar || typeof getComputedStyle !== 'function') return;
-  const cs = getComputedStyle(fb);
-  const line = parseFloat(cs.lineHeight) || 20;
-  const padding = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-  const lines = Math.min(MAX_AUTO_FORMULA_LINES, formulaBarText(fb).split('\n').length);
-  const wanted = Math.round(line * lines + padding);
-  bar.style.height = `${Math.max(formulaBarDraggedHeight, FORMULA_BAR_MIN_HEIGHT, wanted)}px`;
+const setEditableText = (el, text) => {
+  const value = (text == null) ? '' : String(text);
+  el.textContent = value;
+  if (value.endsWith('\n')) el.appendChild(document.createElement('br'));
+};
+
+/**
+ * Splices a line break in at the caret and leaves the caret after it, rewriting the
+ * content as text rather than letting execCommand leave a <div> behind. Shared by
+ * the formula bar and an inline cell edit — Ctrl/Alt+Enter breaks a line in both,
+ * as it does in Google Sheets, whose bar and cell editor are one component.
+ * @param {HTMLElement} el
+ * @param {(el: HTMLElement) => string} read
+ */
+const breakLineAtCaret = (el, read) => {
+  const text = read(el);
+  const caret = ceCaretOffset(el);
+  const at = caret < 0 ? text.length : caret;
+  setEditableText(el, `${text.slice(0, at)}\n${text.slice(at)}`);
+  ceSetCaret(el, at + 1);
 };
 
 // Global state variables
@@ -4868,6 +4862,11 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
   cellEl.setAttribute('contenteditable', 'true');
   // Suppress the browser's spellcheck squiggles on cell data (numbers, codes).
   cellEl.setAttribute('spellcheck', 'false');
+  // A cell is nowrap, which cannot draw a line break; while it is being edited it
+  // has to, so Ctrl/Alt+Enter shows what it did. The cell grows with the lines, as
+  // Sheets' in-cell editor does. Cleared on commit, where the cell's own wrap style
+  // is reapplied by the re-render.
+  cellEl.style.whiteSpace = 'pre-wrap';
   
   // Set cell text: either the initial text or the cell's formula/value
   if (initialText !== null) {
@@ -4912,6 +4911,9 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
     cellEl.removeAttribute('contenteditable');
     // Auto-close any unbalanced "(" before committing (e.g. "=SUM(B1:B4" → ")").
     const text = balanceFormulaParens(cellEl.innerText.trim());
+    // Only now: innerText reads what is laid out, so putting the cell back to
+    // nowrap first would collapse a break the edit inserted into a space.
+    cellEl.style.whiteSpace = '';   // see startCellInlineEdit
     activeFormulaEditor = null;
     resetFormulaPick();
     if (editAbandoned) {
@@ -4926,6 +4928,18 @@ const startCellInlineEdit = (cellId, cellEl, initialText = null) => {
 
   cellEl.onblur = saveInlineEdit;
   cellEl.onkeydown = (e) => {
+    // Ctrl/Cmd/Alt+Enter breaks the line here too, not just in the formula bar:
+    // Google Sheets uses one editor for both, and a formula is as likely to be
+    // written in the cell as above it. Ahead of the autocomplete branch, which
+    // would otherwise take the Enter to accept a suggestion.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.altKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.CoSheet.fnAutocomplete.close();
+      breakLineAtCaret(cellEl, (el) => el.textContent || '');
+      onFormulaEditorTyped();
+      return;
+    }
     // When the autocomplete is open, let it consume navigation/accept keys
     // first so Enter/Tab pick a suggestion instead of committing the cell.
     if (window.CoSheet.fnAutocomplete.isOpen()) {
@@ -5090,21 +5104,6 @@ const cancelFormulaBarEdit = () => {
 const formulaBarInput = document.getElementById('formula-bar-input');
 if (formulaBarInput) {
   /**
-   * Inserts a line break at the caret, rewriting the content as one text node.
-   * execCommand('insertText', '\n') leaves a <div> behind instead of a newline
-   * character — innerText still reads it back as "\n", but textContent does not and
-   * ceSetCaret walks a single text node — so the break is spliced into the text
-   * directly and the caret put after it.
-   */
-  const breakFormulaLine = () => {
-    const text = formulaBarText(formulaBarInput);
-    const caret = ceCaretOffset(formulaBarInput);
-    const at = caret < 0 ? text.length : caret;
-    setFormulaBarText(formulaBarInput, `${text.slice(0, at)}\n${text.slice(at)}`);
-    ceSetCaret(formulaBarInput, at + 1);
-  };
-
-  /**
    * Returns the bar to the one shape described at setFormulaBarText: a single text
    * node, plus the trailing sentinel when the formula ends with a newline. Nothing
    * here inserts markup, but a paste goes through the browser and can leave <div>s
@@ -5121,17 +5120,19 @@ if (formulaBarInput) {
   };
 
   formulaBarInput.addEventListener('keydown', (e) => {
-    // Ctrl+Enter (Cmd+Enter on macOS) splits the formula across lines instead of
-    // committing it, matching Google Sheets. The engine already treats a newline as
-    // whitespace (see the tokenizer), so the break is purely for reading. Ahead of
+    // Ctrl+Enter, Cmd+Enter and Alt+Enter all split the formula across lines instead
+    // of committing it, matching Google Sheets. The engine already treats a newline
+    // as whitespace (see the tokenizer), so the break is purely for reading. Ahead of
     // the autocomplete branch below, which would otherwise take the Enter to accept
     // a suggestion — a line break is what was asked for either way.
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    //
+    // The bar's height does not change: Sheets keeps its own at one line and scrolls,
+    // and the drag handle is how it is made taller.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || e.altKey)) {
       e.preventDefault();
       e.stopPropagation();
       window.CoSheet.fnAutocomplete.close();
-      breakFormulaLine();
-      syncFormulaBarHeight();
+      breakLineAtCaret(formulaBarInput, formulaBarText);
       onFormulaEditorTyped();
       return;
     }
@@ -5194,7 +5195,6 @@ if (formulaBarInput) {
   // time rather than read here during top-level execution (TDZ-safe).
   formulaBarInput.addEventListener('input', () => {
     normaliseFormulaBarDom();
-    syncFormulaBarHeight();
     onFormulaEditorTyped();
     window.CoSheet.fnAutocomplete.update(makeFormulaBarEditor(formulaBarInput));
   });
@@ -10933,7 +10933,6 @@ if (langSwitchBtn && langSwitchMenu && typeof langSwitchMenu.querySelectorAll ==
   window.addEventListener('mousemove', (e) => {
     if (!dragging) return;
     const newH = Math.max(minHeight, startH + (e.clientY - startY));
-    formulaBarDraggedHeight = newH;
     bar.style.height = `${newH}px`;
   });
   window.addEventListener('mouseup', () => {

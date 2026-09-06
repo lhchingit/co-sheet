@@ -98,9 +98,6 @@ function createSandbox() {
   vm.runInContext(readAppBundle() + `
     globalThis.getText = () => formulaBarText(document.getElementById('formula-bar-input'));
     globalThis.setText = (t) => setFormulaBarText(document.getElementById('formula-bar-input'), t);
-    globalThis.MAX_AUTO_FORMULA_LINES = MAX_AUTO_FORMULA_LINES;
-    globalThis.FORMULA_BAR_MIN_HEIGHT = FORMULA_BAR_MIN_HEIGHT;
-    globalThis.setDraggedHeight = (h) => { formulaBarDraggedHeight = h; };
     globalThis.evaluate = (text) => window.CoSheet.formula.evaluateFormula
       ? window.CoSheet.formula.evaluateFormula(text)
       : evaluateFormula(text);
@@ -141,14 +138,12 @@ test('its styling is what makes a line break visible', () => {
   assert.match(rule, /white-space:\s*pre-wrap/, 'newlines are drawn');
   assert.match(rule, /overflow-wrap:\s*break-word/, 'and a long line still wraps');
 
-  // --- Assert: the height a single line comes to is the height the bar has always
-  //     been. Checked rather than duplicated, so the CSS and the constant that
-  //     mirrors it cannot drift apart. ---
-  const s = createSandbox();
+  // --- Assert: the box is one line tall and the extra lines scroll inside it,
+  //     which is what lets the bar keep its height when a formula is split ---
   const line = Number(/line-height:\s*(\d+)px/.exec(rule)[1]);
   const pad = Number(/padding:\s*(\d+)px/.exec(rule)[1]);
-  assert.strictEqual(line + pad * 2, s.FORMULA_BAR_MIN_HEIGHT,
-    'one line of the editor is exactly FORMULA_BAR_MIN_HEIGHT tall');
+  assert.strictEqual(line + pad * 2, 28, 'one line comes to the 28px the bar has always been');
+  assert.match(rule, /overflow-y:\s*auto/, 'and anything past it scrolls rather than growing the bar');
 });
 
 test('the text round-trips through the bar with its newlines', () => {
@@ -185,55 +180,31 @@ test('a formula ending in a newline gets a sentinel that is not part of it', () 
     'nothing is appended when the last line has content');
 });
 
-test('the bar grows a line at a time, and shrinks back', () => {
+test('splitting a formula leaves the bar the height it was', () => {
+  // Google Sheets keeps its own formula bar at one line and scrolls the rest; the
+  // drag handle is how it is made taller. An earlier version of this grew the bar to
+  // fit, which is not what it does.
+  const s = createSandbox();
+  s.setText('=A1+1');
+  const before = s.bar.style.height;
+
+  // --- Act ---
+  s.setText('=A1+\n1+\n2+\n3');
+
+  // --- Assert ---
+  assert.strictEqual(s.bar.style.height, before, 'the bar is not resized by its content');
+});
+
+test('a height the user dragged to is left alone', () => {
   // --- Arrange ---
   const s = createSandbox();
+  s.bar.style.height = '200px';
 
-  // --- Act & Assert ---
-  s.setText('=A1+1');
-  const one = s.barHeight();
-  assert.strictEqual(one, s.FORMULA_BAR_MIN_HEIGHT, 'one line sits at the minimum height');
-
+  // --- Act ---
   s.setText('=A1+\n1');
-  const two = s.barHeight();
-  assert.strictEqual(two, one + 20, 'a second line adds exactly one line height');
-
-  s.setText('=A1+\n1+\n2');
-  assert.strictEqual(s.barHeight(), one + 40, 'and a third adds another');
-
-  s.setText('=A1+1');
-  assert.strictEqual(s.barHeight(), one, 'a flat formula puts it back');
-});
-
-test('the growth stops at the cap and lets the rest scroll', () => {
-  // --- Arrange ---
-  const s = createSandbox();
-  const lines = (n) => '=1' + '+\n1'.repeat(n - 1);
-
-  // --- Act ---
-  s.setText(lines(s.MAX_AUTO_FORMULA_LINES));
-  const atCap = s.barHeight();
-  s.setText(lines(s.MAX_AUTO_FORMULA_LINES + 8));
 
   // --- Assert ---
-  assert.strictEqual(s.barHeight(), atCap, 'past the cap the bar stops growing');
-});
-
-test('a height the user dragged to is not undone by typing', () => {
-  // --- Arrange: the drag handle records what was chosen ---
-  const s = createSandbox();
-  s.setDraggedHeight(200);
-
-  // --- Act ---
-  s.setText('=A1+1');
-
-  // --- Assert ---
-  assert.strictEqual(s.barHeight(), 200, 'a one-line formula leaves the dragged height alone');
-
-  // --- Act & Assert: a formula taller than the drag still wins ---
-  s.setDraggedHeight(40);
-  s.setText('=1+\n1+\n1+\n1');
-  assert.ok(s.barHeight() > 40, 'and the taller of the two is used');
+  assert.strictEqual(s.bar.style.height, '200px', 'filling the bar does not undo the drag');
 });
 
 test('the engine reads a broken formula exactly as the flat one', () => {

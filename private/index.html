@@ -242,10 +242,11 @@
         /* The formula bar's editor. `pre-wrap` is what makes the line breaks
            Ctrl+Enter inserts visible while still soft-wrapping a long single line,
            matching Google Sheets (whose own bar computes to pre-wrap). The padding
-           reproduces the <input> this replaced: 20px of line over 4px above and below
-           is the 28px the bar has always been, so a single line looks unchanged and
-           extra lines grow downwards from there. Keep it in step with
-           FORMULA_BAR_MIN_HEIGHT in public/app.js, which is that same 28px. */
+           reproduces the <input> this replaced: 20px of line over 4px above and
+           below is the height the bar has always been, so it looks unchanged. The
+           bar does not grow when a formula is split — Google Sheets keeps its own at
+           one line and scrolls, and the drag handle below is how it is made taller —
+           so `overflow-y: auto` is what carries the extra lines. */
         .formula-bar-editor {
             white-space: pre-wrap;
             overflow-wrap: break-word;
