@@ -6596,6 +6596,23 @@ const borderCss = (spec) =>
 // positioned relative to the padding box, which sits this far inside the track
 // boundary on the gridline sides, so the offset is compensated by it.
 const GRIDLINE_W = 1;
+// Half a pixel, subtracted from every border line's position so the line lands on
+// the pixel the gridline occupies instead of the one after it.
+//
+// A line "centred on the boundary" spans [b - w/2, b + w/2]. For an odd width that
+// is not pixel-aligned, and the renderer resolves it outward: a 1px border painted
+// the pixel STARTING at the boundary, while the gray gridline it replaces — a real
+// CSS border, drawn inside the border box — occupies the pixel ENDING there. Every
+// custom border therefore sat one pixel right/below its own gridline. Invisible on
+// the left/top, where that pixel is still inside the cell; on the right/bottom it
+// put the line outside the cell entirely (#264).
+//
+// The shift is toward the top-left in PAGE coordinates, not "inward" — a boundary
+// is drawn by both neighbours, and inward means opposite directions for the two of
+// them, which would split one line across two pixels. So the near sides (top/left)
+// move further out and the far sides (right/bottom) less far out, by the same half
+// pixel, and the two copies stay exactly coincident.
+const BORDER_PIXEL_BIAS = 0.5;
 // Shared read-only stand-in for a blank cell's (absent) style, so applyCellBorders
 // can still be asked to paint a bordered neighbour's edge without allocating.
 const EMPTY_STYLE = Object.freeze({});
@@ -6642,7 +6659,11 @@ const addBorderLine = (cellEl, edge, spec) => {
   // inside the track boundary there; left/top have no default border, so their
   // padding box already sits on the boundary.
   const half = w / 2;
-  const off = (edge === 'right' || edge === 'bottom') ? -(GRIDLINE_W + half) : -half;
+  // Same half-pixel shift as addBorderBox, so this reinforcing copy stays exactly
+  // on top of the box's edge rather than one pixel beside it.
+  const off = (edge === 'right' || edge === 'bottom')
+    ? -(GRIDLINE_W + half - BORDER_PIXEL_BIAS)
+    : -(half + BORDER_PIXEL_BIAS);
   const el = document.createElement('div');
   el.className = 'grid-border-line';
   // Span the full track on the cross axis, overrunning the padding box at BOTH
@@ -6708,9 +6729,14 @@ const addBorderBox = (cellEl, top, right, bottom, left) => {
     `${BORDER_WEIGHT[spec.style] || 1}px ${BORDER_LINE[spec.style] || 'solid'} ${spec.color || '#000000'}`;
   const el = document.createElement('div');
   el.className = 'grid-border-line';
+  // A present side is offset by half its width plus BORDER_PIXEL_BIAS, so the line
+  // lands on the gridline's pixel; an absent side keeps the flush inset it always
+  // had, so it neither paints nor moves the box.
+  const near = (spec) => (spec ? half(spec) + BORDER_PIXEL_BIAS : 0);
+  const far = (spec) => (spec ? GRIDLINE_W + half(spec) - BORDER_PIXEL_BIAS : GRIDLINE_W);
   let css = 'position:absolute;pointer-events:none;z-index:3;box-sizing:border-box;';
-  css += `top:-${half(top)}px;left:-${half(left)}px;`;
-  css += `right:-${GRIDLINE_W + half(right)}px;bottom:-${GRIDLINE_W + half(bottom)}px;`;
+  css += `top:-${near(top)}px;left:-${near(left)}px;`;
+  css += `right:-${far(right)}px;bottom:-${far(bottom)}px;`;
   if (top) css += `border-top:${sideCss(top)};`;
   if (right) css += `border-right:${sideCss(right)};`;
   if (bottom) css += `border-bottom:${sideCss(bottom)};`;

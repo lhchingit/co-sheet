@@ -1,9 +1,11 @@
 /**
  * @file borders.test.js
  * @description Unit tests for the neighbour-aware cell-border renderer
- * (applyCellBorders / addBorderBox in public/app.js). Borders are CENTRED on the
- * cell boundary (half their width each side, like Excel/Sheets), so a centred
- * border bleeds across the boundary. The key invariant under test is that EACH
+ * (applyCellBorders / addBorderBox in public/app.js). Borders STRADDLE the cell
+ * boundary (half their width each side, like Excel/Sheets), so a border bleeds
+ * across the boundary. Every line is then shifted half a pixel toward the top-left
+ * (BORDER_PIXEL_BIAS), which lands an odd-width line on the pixel its gridline
+ * occupies rather than the one after it (#264). The key invariant under test is that EACH
  * cell draws its own copy of every edge it touches — a shared interior boundary
  * is drawn by BOTH neighbours (e.g. the left cell's right and the right cell's
  * left) — so the half a higher stacking neighbour (the active cell) would paint
@@ -192,22 +194,24 @@ test('the grid frame (column A left / row 1 top) is reinforced so it is not thin
   // neighbour to draw that second copy, so a lone box edge there anti-aliases to
   // half intensity and looks thinner. The frame cell adds a single-edge copy that
   // coincides with the box edge. Both the box edge and the reinforcer stay CENTRED
-  // (offset -1.5 for thick), never inset.
+  // (offset -2 for thick: half the weight plus BORDER_PIXEL_BIAS), never inset.
   const sandbox = createSandbox();
   sandbox.localCells = { A1: { style: { borders: { left: thick(), top: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.A1.style, 'A1');
 
-  assert.strictEqual(boxInset(el, 'left'), -1.5, 'box left edge stays centred (-1.5px)');
-  assert.strictEqual(boxInset(el, 'top'), -1.5, 'box top edge stays centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'left'), -2, 'box left edge straddles the boundary (-(1.5 + 0.5))');
+  assert.strictEqual(boxInset(el, 'top'), -2, 'box top edge straddles the boundary (-(1.5 + 0.5))');
   const css = reinforcers(el).map((l) => l.style.cssText || '');
-  const reLeft = css.filter((c) => /width:0;\s*left:\s*-1\.5px/.test(c));
-  const reTop = css.filter((c) => /height:0;\s*top:\s*-1\.5px/.test(c));
-  assert.strictEqual(reLeft.length, 1, 'left frame edge reinforced by one coincident centred copy');
-  assert.strictEqual(reTop.length, 1, 'top frame edge reinforced by one coincident centred copy');
+  // The reinforcer carries the same half-pixel shift as the box, so the two stay
+  // exactly on top of each other rather than one pixel apart.
+  const reLeft = css.filter((c) => /width:0;\s*left:\s*-2px/.test(c));
+  const reTop = css.filter((c) => /height:0;\s*top:\s*-2px/.test(c));
+  assert.strictEqual(reLeft.length, 1, 'left frame edge reinforced by one coincident copy');
+  assert.strictEqual(reTop.length, 1, 'top frame edge reinforced by one coincident copy');
 });
 
-test('an interior left/top edge (not on the grid frame) stays centred and unreinforced', () => {
+test('an interior left/top edge (not on the grid frame) is unreinforced', () => {
   // An interior cell's left/top straddle the boundary, backed by the neighbour's
   // own coincident box — so they need no single-edge reinforcer.
   const sandbox = createSandbox();
@@ -215,31 +219,36 @@ test('an interior left/top edge (not on the grid frame) stays centred and unrein
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
 
-  assert.strictEqual(boxInset(el, 'left'), -1.5, 'interior left must be centred (-1.5px)');
-  assert.strictEqual(boxInset(el, 'top'), -1.5, 'interior top must be centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'left'), -2, 'interior left straddles the boundary (-(1.5 + 0.5))');
+  assert.strictEqual(boxInset(el, 'top'), -2, 'interior top straddles the boundary (-(1.5 + 0.5))');
   assert.strictEqual(reinforcers(el).length, 0, 'an interior edge is not reinforced (the neighbour draws the second copy)');
 });
 
 const thick = () => ({ color: '#000000', style: 'thick' });
 
-test('a thick border is centred on the boundary, half its width each side', () => {
+test('a thick border straddles the boundary, half its width each side', () => {
   // Borders straddle the boundary (Excel/Sheets behaviour). A 3px thick border
   // sits 1.5px each side. The gridline-bearing sides (right/bottom) reference a
   // padding box GRIDLINE_W (1px) inside the boundary, so their inset is
-  // -(GRIDLINE_W + w/2) = -2.5px; the borderless sides (left/top) reference a
-  // padding box on the boundary, so their inset is -w/2 = -1.5px. The box is safe
-  // to bleed because the facing neighbour draws its own coincident box.
+  // -(GRIDLINE_W + w/2); the borderless sides (left/top) reference a padding box
+  // on the boundary, so their inset is -w/2. The box is safe to bleed because the
+  // facing neighbour draws its own coincident box.
+  //
+  // Every inset then moves half a pixel toward the top-left (BORDER_PIXEL_BIAS),
+  // which is what puts the line on the gridline's own pixel instead of the next
+  // one (#264) — so the far sides are -(1 + 1.5 - 0.5) = -2 and the near sides
+  // -(1.5 + 0.5) = -2. Both neighbours shift the same way in page coordinates, so
+  // the two coincident copies stay on the same pixel.
   const sandbox = createSandbox();
   sandbox.localCells = { B2: { style: { borders: { top: thick(), right: thick(), bottom: thick(), left: thick() } } } };
   const el = makeEl();
   sandbox.applyCellBorders(el, sandbox.localCells.B2.style, 'B2');
 
   assert.strictEqual(boxEdgeSet(el).size, 4, 'B2 box draws all four of its own edges');
-  // Gridline sides: -(1 + 1.5) = -2.5px. Borderless sides: -1.5px.
-  assert.strictEqual(boxInset(el, 'right'), -2.5, 'right edge must be centred (-2.5px)');
-  assert.strictEqual(boxInset(el, 'bottom'), -2.5, 'bottom edge must be centred (-2.5px)');
-  assert.strictEqual(boxInset(el, 'left'), -1.5, 'left edge must be centred (-1.5px)');
-  assert.strictEqual(boxInset(el, 'top'), -1.5, 'top edge must be centred (-1.5px)');
+  assert.strictEqual(boxInset(el, 'right'), -2, 'right edge: -(1 + 1.5 - 0.5)');
+  assert.strictEqual(boxInset(el, 'bottom'), -2, 'bottom edge: -(1 + 1.5 - 0.5)');
+  assert.strictEqual(boxInset(el, 'left'), -2, 'left edge: -(1.5 + 0.5)');
+  assert.strictEqual(boxInset(el, 'top'), -2, 'top edge: -(1.5 + 0.5)');
   // Each side is drawn at its full integer width so weights stay distinct.
   const sides = boxSides(el);
   ['top', 'right', 'bottom', 'left'].forEach((s) =>
@@ -262,20 +271,50 @@ test('a cell draws ONE box that mitres its corners closed (#82, #86, #80)', () =
   assert.strictEqual(boxEdgeSet(el).size, 4, 'the box paints all four sides');
 });
 
-test('the box centres each border on its boundary, inset by half the weight (#85, #86)', () => {
+test('the box straddles each boundary, shifted half a pixel onto the gridline (#85, #86, #264)', () => {
   // In the box model the corner closes by CSS mitre at any weight; what scales
-  // with weight is the centring inset (-half on the near sides). thin = -0.5,
-  // medium = -1, thick = -1.5.
+  // with weight is the inset (half the weight on the near sides).
+  //
+  // Plus BORDER_PIXEL_BIAS. A line centred exactly on the boundary spans
+  // [b - w/2, b + w/2], which for an odd width is not pixel-aligned, and the
+  // renderer resolves it outward — a 1px border painted the pixel starting at the
+  // boundary while the gridline it replaces occupies the pixel ending there, so
+  // every border sat one pixel right/below its own gridline (#264). The extra half
+  // pixel lands it on the gridline's own pixel.
   const sandbox = createSandbox();
-  const leftInset = (style) => {
-    sandbox.localCells = { C3: { style: { borders: { top: { color: '#000', style }, left: { color: '#000', style } } } } };
+  const insetOf = (style, side) => {
+    sandbox.localCells = { C3: { style: { borders: {
+      top: { color: '#000', style }, left: { color: '#000', style },
+      right: { color: '#000', style }, bottom: { color: '#000', style }
+    } } } };
     const el = makeEl();
     sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
-    return boxInset(el, 'left');
+    return boxInset(el, side);
   };
-  assert.strictEqual(leftInset('thin'), -0.5, 'thin centred (half = 0.5)');
-  assert.strictEqual(leftInset('medium'), -1, 'medium centred (half = 1)');
-  assert.strictEqual(leftInset('thick'), -1.5, 'thick centred (half = 1.5)');
+  // Near sides: half the weight, plus the half-pixel shift.
+  assert.strictEqual(insetOf('thin', 'left'), -1, 'thin: 0.5 + 0.5');
+  assert.strictEqual(insetOf('medium', 'left'), -1.5, 'medium: 1 + 0.5');
+  assert.strictEqual(insetOf('thick', 'left'), -2, 'thick: 1.5 + 0.5');
+
+  // Far sides carry the gridline compensation and take the shift the OTHER way,
+  // because the shift is in page coordinates: a boundary is drawn by both
+  // neighbours, and moving each "inward" would split one line across two pixels.
+  assert.strictEqual(insetOf('thin', 'right'), -1, 'thin: 1 + 0.5 - 0.5');
+  assert.strictEqual(insetOf('medium', 'right'), -1.5, 'medium: 1 + 1 - 0.5');
+  assert.strictEqual(insetOf('thick', 'right'), -2, 'thick: 1 + 1.5 - 0.5');
+});
+
+test('an absent side keeps a flush inset, so it neither paints nor moves the box', () => {
+  // The half-pixel shift applies to a side that is drawn. A side with no border
+  // must stay where it was, or the box would move for an edge that paints nothing.
+  const sandbox = createSandbox();
+  sandbox.localCells = { C3: { style: { borders: { left: { color: '#000', style: 'thin' } } } } };
+  const el = makeEl();
+  sandbox.applyCellBorders(el, sandbox.localCells.C3.style, 'C3');
+
+  assert.strictEqual(boxInset(el, 'left'), -1, 'the drawn side takes the shift');
+  assert.strictEqual(boxInset(el, 'top'), -0, 'an absent near side stays flush');
+  assert.strictEqual(boxInset(el, 'right'), -1, 'an absent far side stays on the gridline');
 });
 
 const edgeSet = (el) => boxEdgeSet(el);
