@@ -125,20 +125,20 @@ test('Escape closes the function autocomplete before it cancels anything', () =>
 test('Escape restores the formula bar to what the cell holds', () => {
   // --- Arrange: A1 holds 100 and the bar has been edited to 999 ---
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '999';
+  s.setBarText('999');
 
   // --- Act ---
   s.pressBarKey('Escape');
 
   // --- Assert ---
-  assert.strictEqual(s.formulaBar.value, '100', 'the bar should show the stored value again');
+  assert.strictEqual(s.barText(), '100', 'the bar should show the stored value again');
   assert.strictEqual(s.localCells['A1'].value, '100');
 });
 
 test('Enter after Escape commits nothing from the formula bar', () => {
   // --- Arrange ---
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '999';
+  s.setBarText('999');
 
   // --- Act: this is the data-loss case — Escape then Enter used to save 999 ---
   s.pressBarKey('Escape');
@@ -150,7 +150,7 @@ test('Enter after Escape commits nothing from the formula bar', () => {
 
 test('an abandoned formula bar entry leaves an empty cell empty', () => {
   const s = createSandbox({ value: '', formula: '', style: {} });
-  s.formulaBar.value = 'draft';
+  s.setBarText('draft');
 
   s.pressBarKey('Escape');
   s.pressBarKey('Enter');
@@ -161,7 +161,7 @@ test('an abandoned formula bar entry leaves an empty cell empty', () => {
 
 test('an abandoned formula is not committed from the bar either', () => {
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '=A1+';
+  s.setBarText('=A1+');
 
   s.pressBarKey('Escape');
   s.pressBarKey('Enter');
@@ -172,7 +172,7 @@ test('an abandoned formula is not committed from the bar either', () => {
 
 test('the formula bar still commits on Enter, so the happy path is intact', () => {
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '250';
+  s.setBarText('250');
 
   s.pressBarKey('Enter');
 
@@ -182,7 +182,7 @@ test('the formula bar still commits on Enter, so the happy path is intact', () =
 test('Escape closes the formula bar autocomplete before it cancels anything', () => {
   // --- Arrange: an edit in the bar with the suggestion popup open ---
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '=SU';
+  s.setBarText('=SU');
   s.fnAutocomplete.update({
     getValue: () => '=SU',
     getCaret: () => 3,
@@ -198,12 +198,12 @@ test('Escape closes the formula bar autocomplete before it cancels anything', ()
 
   // --- Assert: the edit is untouched ---
   assert.ok(!s.fnAutocomplete.isOpen());
-  assert.strictEqual(s.formulaBar.value, '=SU', 'the edit should still be in the bar');
+  assert.strictEqual(s.barText(), '=SU', 'the edit should still be in the bar');
 
   // --- Act: a second Escape has nothing left to close ---
   s.pressBarKey('Escape');
 
   // --- Assert ---
-  assert.strictEqual(s.formulaBar.value, '100');
+  assert.strictEqual(s.barText(), '100');
   assert.strictEqual(s.localCells['A1'].value, '100');
 });

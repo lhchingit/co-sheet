@@ -18,7 +18,9 @@ const CSS_COLOR_KEYWORDS = { red: 'rgb(255, 0, 0)', white: 'rgb(255, 255, 255)' 
 /** Generic element stub for the bits of the DOM the bundle touches on start-up. */
 export function createMockElement() {
   return {
-    value: '', innerText: '', innerHTML: '', className: '', style: {},
+    // textContent as well as value: the formula bar is a contenteditable div now
+    // (#238), and that is the property it reads and writes.
+    value: '', textContent: '', innerText: '', innerHTML: '', className: '', style: {},
     classList: { add() {}, remove() {}, contains() { return false; } },
     querySelectorAll: () => [], appendChild() {}, remove() {},
     setAttribute() {}, removeAttribute() {}, addEventListener() {}, focus() {}, blur() {}
@@ -99,6 +101,8 @@ export function createCellEditorSandbox(cellState) {
       get: () => activeCellId, set: (v) => { activeCellId = v; }, configurable: true
     });
     globalThis.startCellInlineEdit = startCellInlineEdit;
+    globalThis.setFormulaBarText = setFormulaBarText;
+    globalThis.formulaBarText = formulaBarText;
     globalThis.fnAutocomplete = window.CoSheet.fnAutocomplete;
   `, sandbox);
 
@@ -108,6 +112,11 @@ export function createCellEditorSandbox(cellState) {
   sandbox.activeCellId = 'A1';
   sandbox.cell = cell;
   sandbox.formulaBar = formulaBar;
+  // Put text in the bar, and read it back, the way the app does. The bar is a
+  // contenteditable div (#238), so a test that assigned `.value` would be setting a
+  // property nothing reads.
+  sandbox.setBarText = (text) => sandbox.setFormulaBarText(formulaBar, text);
+  sandbox.barText = () => sandbox.formulaBarText(formulaBar);
 
   /** Presses a key on the cell being edited. */
   sandbox.pressKey = (key) => cell.onkeydown({

@@ -17,7 +17,7 @@ import { createCellEditorSandbox as createSandbox } from './helpers/cell-editor-
 test('Enter in the formula bar does not re-open the cell for editing', () => {
   // --- Arrange: A1 holds 100, and a formula has been typed into the bar ---
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '=1+1';
+  s.setBarText('=1+1');
 
   // --- Act ---
   s.pressBarKey('Enter');
@@ -32,7 +32,7 @@ test('Enter in the formula bar does not re-open the cell for editing', () => {
 test('the committed cell shows its result, not its formula source', () => {
   // --- Arrange ---
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '=1+1';
+  s.setBarText('=1+1');
 
   // --- Act ---
   s.pressBarKey('Enter');
@@ -44,7 +44,7 @@ test('the committed cell shows its result, not its formula source', () => {
 
 test('a plain value committed from the bar behaves the same way', () => {
   const s = createSandbox({ value: '100', formula: '', style: {} });
-  s.formulaBar.value = '250';
+  s.setBarText('250');
 
   s.pressBarKey('Enter');
 
@@ -57,7 +57,7 @@ test('the cell keeps the committed state when nothing follows the Enter', () => 
   // --- Arrange: the abandoned edit only became visible when the user typed
   // next, so check the cell is not the focus of a live edit either ---
   const s = createSandbox({ value: '', formula: '', style: {} });
-  s.formulaBar.value = 'hello';
+  s.setBarText('hello');
 
   s.pressBarKey('Enter');
 
