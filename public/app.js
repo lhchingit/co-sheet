@@ -794,7 +794,15 @@ const currentFileId = (() => {
 })();
 const wsBase = `${protocol}//${window.location.host}`;
 // The socket is created (and re-created on reconnect) by connectSocket() below.
-const wsUrl = currentFileId ? `${wsBase}/?file=${currentFileId}` : wsBase;
+//
+// `?file=` is sent even for the legacy 'default' workbook, where the server would
+// have defaulted to it anyway. The parameter is no longer only how the server picks
+// a workbook: it is the key a file-affine load balancer hashes on to send everyone
+// editing one file to one replica (#273), and a request that omits it has no key, so
+// the proxy picks an arbitrary backend. Leaving it off put 'default' — the one
+// workbook every signed-in user may edit — on the weakest guarantee of any file.
+const wsFileId = currentFileId || 'default';
+const wsUrl = `${wsBase}/?file=${encodeURIComponent(wsFileId)}`;
 
 // Whether this client may modify the workbook. Authoritatively set from the server's
 // `init` payload (canEdit). A viewer-shared file arrives with canEdit === false and

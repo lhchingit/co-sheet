@@ -34,13 +34,18 @@
 
   /**
    * Build a version-history API URL, scoping it to the current workbook via the
-   * ?file=<id> query parameter when one is open (absent => the 'default' workbook).
+   * ?file=<id> query parameter. Sent unconditionally, 'default' included: the
+   * server treats an absent parameter as 'default' either way, but a file-affine
+   * load balancer hashes on it to route everyone editing one file to one replica
+   * (#273), and a request without it has no key for the proxy to hash. That matters
+   * most here — restoring a version writes a WHOLE document, so an unkeyed restore
+   * is a full-document write landing on an arbitrary replica.
    * @param {string} path - The base path, e.g. '/api/versions' or '/api/versions/3'.
    * @returns {string}
    */
   const versionsApiUrl = (path) => {
-    const fileId = getFileId();
-    return fileId ? `${path}?file=${encodeURIComponent(fileId)}` : path;
+    const fileId = getFileId() || 'default';
+    return `${path}?file=${encodeURIComponent(fileId)}`;
   };
 
   // ---------------------------------------------------------------------------

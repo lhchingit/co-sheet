@@ -529,9 +529,15 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
     return null;
   };
 
-  // Mock global fetch
+  // Mock global fetch. Matching is done on the path, not the whole URL: every
+  // version-history call now carries ?file= so a file-affine proxy has a key to hash
+  // on (#273), and the stub must not care which workbook is named. requestedUrls
+  // keeps the raw URLs so a test can assert the key is actually there.
+  const requestedUrls = [];
   const mockFetch = async (url, _options = null) => {
-    if (url === '/api/versions') {
+    requestedUrls.push(url);
+    const path = String(url).split('?')[0];
+    if (path === '/api/versions') {
       return {
         status: 200,
         json: async () => [
@@ -540,8 +546,8 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
         ]
       };
     }
-    if (url === '/api/versions/2' || url === '/api/versions/1') {
-      const id = url.endsWith('2') ? 2 : 1;
+    if (path === '/api/versions/2' || path === '/api/versions/1') {
+      const id = path.endsWith('2') ? 2 : 1;
       return {
         status: 200,
         json: async () => ({
@@ -648,6 +654,21 @@ test('Frontend Version History Logic - toggle, list, change highlights, row coll
   // --- Assert 3 ---
   assert.strictEqual(sandbox.get_isHistoryMode(), false, 'Should exit history mode after successful restore');
   assert.ok(headerMock.classList.contains('hidden') === false, 'Header should be visible again');
+
+  // --- Assert 4: every call named its workbook, 'default' included. ---
+  // The parameter is the key a file-affine load balancer hashes on (#273), so a
+  // request without it is routed to an arbitrary replica. This sandbox runs with no
+  // ?file= on the page — the legacy 'default' workbook, which used to send the
+  // parameter on none of these calls, and which is the one workbook every signed-in
+  // user may edit. Restore is the one that matters most: it writes a whole document.
+  assert.ok(requestedUrls.length >= 3, `expected the list, a snapshot and a restore, saw ${requestedUrls.length}`);
+  const unkeyed = requestedUrls.filter((u) => !/[?&]file=/.test(u));
+  assert.deepStrictEqual(unkeyed, [], 'every version-history request must carry ?file=');
+  const restores = requestedUrls.filter((u) => u.includes('/restore'));
+  assert.ok(restores.length > 0, 'the restore was issued');
+  for (const u of restores) {
+    assert.match(u, /[?&]file=default(&|$)/, 'a restore of the default workbook must name it explicitly');
+  }
 });
 
 
