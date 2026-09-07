@@ -23,6 +23,9 @@ tests
 # Design mockups — referenced during development, not served at runtime
 images
 
+# Deployment-time manifests — applied to the cluster, never read by the app
+k8s
+
 # Docker / misc
 Dockerfile
 docker-compose*.yml
