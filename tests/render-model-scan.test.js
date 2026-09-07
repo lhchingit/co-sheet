@@ -93,6 +93,7 @@ function createSandbox() {
     globalThis.scanActiveSheetModel = scanActiveSheetModel;
     globalThis.getRowHeight = getRowHeight;
     globalThis.getColCount = getColCount;
+    globalThis.COL_MARGIN = COL_MARGIN;
     globalThis.getCellEl = getCellEl;
     // Size of the index the last render built, so a test can assert WHICH
     // collection was the smaller one and therefore which branch ran.
@@ -145,7 +146,10 @@ test('the scan skips ids that are not cell coordinates, as the old regex did', (
 
   const model = s.scanActiveSheetModel();
 
-  assert.strictEqual(model.maxColIndex, 25, 'only A1 counts, so the grid keeps its default width');
+  // The raw data extent, with no floor applied — A1 is column 0. It used to read 25
+  // because the scan pre-floored its answer at the default width, which hid exactly
+  // what this test is asking (#282): that the two malformed ids contributed nothing.
+  assert.strictEqual(model.maxColIndex, 0, 'only A1 counts; the malformed ids are skipped');
 });
 
 test('a render publishes the rendered column count and the font row heights', () => {
@@ -161,9 +165,13 @@ test('a render publishes the rendered column count and the font row heights', ()
   s.renderSpreadsheetGrid();
 
   // --- Assert ---
-  assert.strictEqual(s.renderedColCount, 27, 'the grid was built 27 columns wide (A..AA)');
+  // AA is the rightmost populated column (index 26), and a sheet renders its data
+  // plus a margin to type into (#282). The claim here is that the render publishes
+  // the width it actually built and that the model agrees — not what the margin is,
+  // which is why the expected value is derived rather than spelled out.
+  assert.strictEqual(s.renderedColCount, 27 + s.COL_MARGIN, 'the grid was built as wide as the model says');
   assert.ok(s.getRowHeight(5) > 21, 'the large-font row height is authoritative after the render');
-  assert.strictEqual(s.getColCount(), 27, 'and agrees with the model-derived count');
+  assert.strictEqual(s.getColCount(), s.renderedColCount, 'and agrees with the model-derived count');
 });
 
 test('the rendered column count describes the grid, not a model that has since grown', () => {
@@ -172,17 +180,24 @@ test('the rendered column count describes the grid, not a model that has since g
   const s = createSandbox();
   s.setCells({ A1: { formula: '', value: 'x', style: {} } });
   s.renderSpreadsheetGrid();
-  assert.strictEqual(s.renderedColCount, 26, 'the default grid width');
+  const narrow = 1 + s.COL_MARGIN; // one populated column, plus room to type (#282)
+  assert.strictEqual(s.renderedColCount, narrow, "the width this sheet's data needs");
 
   // The model grows, with no render yet.
   s.localCells.BA9 = { formula: '', value: 'way out', style: {} };
-  assert.strictEqual(s.renderedColCount, 26, 'still describes what was rendered');
+  assert.strictEqual(s.renderedColCount, narrow, 'still describes what was rendered');
+  assert.strictEqual(s.getColCount(), 53 + s.COL_MARGIN, 'even though the model has already moved');
 
   s.renderSpreadsheetGrid();
-  assert.strictEqual(s.renderedColCount, 53, 'and catches up on the next render');
+  assert.strictEqual(s.renderedColCount, 53 + s.COL_MARGIN, 'and catches up on the next render');
 });
 
-test('a wrapped cell turns windowing off, so its rows are all rendered', () => {
+test('a wrapped cell falls back to the full render where it cannot be measured', () => {
+  // Wrapped rows are normally MEASURED with canvas text metrics and windowed like
+  // any other (#278). This sandbox has no canvas, which is exactly the environment
+  // the fallback exists for: without a line count the row height cannot be modelled,
+  // and a wrong height would put every row below it at the wrong offset. Rendering
+  // every row is the safe answer, and this pins that it is still taken.
   const s = createSandbox();
   s.setCells({ A1: { formula: '', value: 'x', style: {} } });
   s.renderSpreadsheetGrid();
@@ -190,7 +205,7 @@ test('a wrapped cell turns windowing off, so its rows are all rendered', () => {
 
   s.localCells.B2 = { formula: '', value: 'wrapped', style: { textWrap: 'wrap' } };
   s.renderSpreadsheetGrid();
-  assert.strictEqual(s.activeSheetWindowed, false, 'wrapped text falls back to the full render');
+  assert.strictEqual(s.activeSheetWindowed, false, 'an unmeasurable wrap falls back to the full render');
 });
 
 test('an unchanged re-render does not rewrite the grid template', () => {

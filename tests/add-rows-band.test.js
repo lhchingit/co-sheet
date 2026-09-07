@@ -108,14 +108,21 @@ function* walk(node) {
   }
 }
 
-/** The three parts of the add-rows control, from the last render. */
-function control(s) {
+/**
+ * The three parts of one grow control, from the last render. Selected by id, not by
+ * class: the band carries a row control and a column control (#283) and they share
+ * their styling classes, so a class lookup would just return whichever came first.
+ * @param {object} s sandbox
+ * @param {'rows'|'cols'} [which]
+ */
+function control(s, which = 'rows') {
   const nodes = [...walk(s.byId['grid-root'])];
+  const byId = (id) => nodes.find((n) => n.id === id);
   return {
     band: nodes.find((n) => n.classList.contains('grid-bottom-buffer')),
-    button: nodes.find((n) => n.classList.contains('add-rows-button')),
-    input: nodes.find((n) => n.classList.contains('add-rows-count')),
-    suffix: nodes.find((n) => n.classList.contains('add-rows-suffix')),
+    button: byId(`add-${which}-button`),
+    input: byId(`add-${which}-count`),
+    suffix: nodes.filter((n) => n.classList.contains('grid-grow-suffix'))[which === 'rows' ? 0 : 1],
   };
 }
 

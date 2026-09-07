@@ -696,8 +696,10 @@
                nothing here should be sized against the viewport. */
             box-sizing: border-box;
         }
-        /* "Add" — a text button in the primary colour, like the links in the menus. */
-        .add-rows-button {
+        /* "Add" — a text button in the primary colour, like the links in the menus.
+           Shared by the row and column grow controls that sit in this band, so the
+           names are about growing the grid rather than about rows (#283). */
+        .grid-grow-button {
             background: none;
             border: none;
             padding: 0 4px;
@@ -707,9 +709,9 @@
             cursor: pointer;
             border-radius: 4px;
         }
-        .add-rows-button:hover:not(:disabled) { background-color: #e8f0fe; }
-        .add-rows-button:disabled { color: #9aa0a6; cursor: default; }
-        .add-rows-count {
+        .grid-grow-button:hover:not(:disabled) { background-color: #e8f0fe; }
+        .grid-grow-button:disabled { color: #9aa0a6; cursor: default; }
+        .grid-grow-count {
             width: 62px;
             height: 26px;
             padding: 0 8px;
@@ -720,8 +722,8 @@
             border: 1px solid #c3c6d6;
             border-radius: 4px;
         }
-        .add-rows-count:focus { outline: none; border-color: #0b57d0; }
-        .add-rows-suffix { user-select: none; }
+        .grid-grow-count:focus { outline: none; border-color: #0b57d0; }
+        .grid-grow-suffix { user-select: none; }
         /* Custom styled tooltip (replaces native title tooltips) */
         #app-tooltip {
             position: fixed;

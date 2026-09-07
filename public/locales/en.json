@@ -421,5 +421,7 @@
   "share.transferOwnership": "Transfer ownership",
   "grid.addRows.action": "Add",
   "grid.addRows.suffix": "more rows at bottom",
+  "grid.addCols.action": "Add",
+  "grid.addCols.suffix": "more columns at the right",
   "share.readOnlyBadge": "View only"
 }

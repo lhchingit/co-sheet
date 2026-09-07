@@ -421,5 +421,7 @@
   "share.transferOwnership": "轉移擁有權",
   "grid.addRows.action": "新增",
   "grid.addRows.suffix": "列於底部",
+  "grid.addCols.action": "新增",
+  "grid.addCols.suffix": "欄於右側",
   "share.readOnlyBadge": "唯讀檢視"
 }
