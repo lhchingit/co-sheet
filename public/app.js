@@ -415,6 +415,12 @@ const getRowCount = (sheetName = activeSheetName) => {
 // every render, which would otherwise reset whatever the user typed.
 let addRowsCount = DEFAULT_ROWS;
 
+// The same, for the add-columns control that shares the band. Columns had no way
+// to be APPENDED at all: they grew only when data reached them, through undo/redo,
+// or through the right-click insert, which shifts cells right rather than making
+// room at the edge (#283).
+let addColsCount = 10;
+
 /**
  * Builds the band under the last row: Google Sheets' "add N rows at the bottom"
  * control. Rebuilt with the grid on every render, so its state lives in
@@ -422,29 +428,67 @@ let addRowsCount = DEFAULT_ROWS;
  * attributes keep a later language switch working on the built nodes).
  * @returns {HTMLElement} The band, ready to append to the grid.
  */
-const buildAddRowsBand = () => {
+const buildAddBand = () => {
   const band = document.createElement('div');
   band.className = 'grid-bottom-buffer';
 
+  const rows = buildGrowControl({
+    idPrefix: 'add-rows',
+    i18nKey: 'grid.addRows',
+    initial: addRowsCount,
+    remember: (n) => { addRowsCount = n; },
+    atCeiling: () => getRowCount() >= MAX_ROWS,
+    grow: addRowsAtBottom
+  });
+  const cols = buildGrowControl({
+    idPrefix: 'add-cols',
+    i18nKey: 'grid.addCols',
+    initial: addColsCount,
+    remember: (n) => { addColsCount = n; },
+    atCeiling: () => getColCount() >= MAX_COLS,
+    grow: addColsAtRight
+  });
+
+  // appendChild rather than append: the render's DOM surface is stubbed in the vm
+  // tests, and appendChild is the call the rest of this file already relies on.
+  for (const el of rows) band.appendChild(el);
+  for (const el of cols) band.appendChild(el);
+  return band;
+};
+
+/**
+ * One "Add [n] more X" control: the button, the count box and the trailing label.
+ * Both the row and the column control are this shape, so it is built once and
+ * configured rather than written twice.
+ *
+ * The typed count lives in the caller's variable, not in the input, because the
+ * band is rebuilt with the grid on every render — reading it back off the element
+ * would lose whatever the user typed on the next repaint.
+ *
+ * @param {{ idPrefix: string, i18nKey: string, initial: number,
+ *   remember: (n: number) => void, atCeiling: () => boolean, grow: () => void }} opts
+ * @returns {HTMLElement[]} The three elements, in order.
+ */
+const buildGrowControl = ({ idPrefix, i18nKey, initial, remember, atCeiling, grow }) => {
   const button = document.createElement('button');
   button.type = 'button';
-  button.id = 'add-rows-button';
-  button.className = 'add-rows-button';
-  button.setAttribute('data-i18n', 'grid.addRows.action');
-  button.textContent = t('grid.addRows.action');
+  button.id = `${idPrefix}-button`;
+  button.className = 'grid-grow-button';
+  button.setAttribute('data-i18n', `${i18nKey}.action`);
+  button.textContent = t(`${i18nKey}.action`);
 
   const input = document.createElement('input');
   input.type = 'text';
-  input.id = 'add-rows-count';
-  input.className = 'add-rows-count';
+  input.id = `${idPrefix}-count`;
+  input.className = 'grid-grow-count';
   input.inputMode = 'numeric';
-  input.value = String(addRowsCount);
-  input.setAttribute('aria-labelledby', 'add-rows-button');
+  input.value = String(initial);
+  input.setAttribute('aria-labelledby', `${idPrefix}-button`);
 
   const suffix = document.createElement('span');
-  suffix.className = 'add-rows-suffix';
-  suffix.setAttribute('data-i18n', 'grid.addRows.suffix');
-  suffix.textContent = t('grid.addRows.suffix');
+  suffix.className = 'grid-grow-suffix';
+  suffix.setAttribute('data-i18n', `${i18nKey}.suffix`);
+  suffix.textContent = t(`${i18nKey}.suffix`);
 
   // Remember what was typed so the next render restores it, and keep the button
   // disabled while the box doesn't hold a usable count.
@@ -454,22 +498,17 @@ const buildAddRowsBand = () => {
   };
   const syncButton = () => {
     const n = readCount();
-    if (n !== null) addRowsCount = n;
-    button.disabled = n === null || getRowCount() >= MAX_ROWS;
+    if (n !== null) remember(n);
+    button.disabled = n === null || atCeiling();
   };
   input.addEventListener('input', syncButton);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); addRowsAtBottom(); }
+    if (e.key === 'Enter') { e.preventDefault(); grow(); }
   });
-  button.addEventListener('click', addRowsAtBottom);
+  button.addEventListener('click', grow);
   syncButton();
 
-  // appendChild rather than append: the render's DOM surface is stubbed in the vm
-  // tests, and appendChild is the call the rest of this file already relies on.
-  band.appendChild(button);
-  band.appendChild(input);
-  band.appendChild(suffix);
-  return band;
+  return [button, input, suffix];
 };
 
 /**
@@ -482,6 +521,20 @@ const addRowsAtBottom = () => {
   const before = getRowCount();
   if (before >= MAX_ROWS) return;
   setActiveRowCount(before + addRowsCount);
+  renderSpreadsheetGrid();
+};
+
+/**
+ * Grows the active sheet rightwards by the count in the add-columns control.
+ * Appends empty tracks at the edge — deliberately NOT the right-click insert,
+ * which shifts existing cells right to make room at a position (#283). Clamped by
+ * setActiveColCount, so asking past the ceiling simply fills it.
+ */
+const addColsAtRight = () => {
+  if (!canEditWorkbook) return;
+  const before = getColCount();
+  if (before >= MAX_COLS) return;
+  setActiveColCount(before + addColsCount);
   renderSpreadsheetGrid();
 };
 
@@ -623,28 +676,63 @@ const getRowHeight = (row, sheetName = activeSheetName) => {
   return DEFAULT_ROW_HEIGHT;
 };
 
+// Empty columns kept to the right of a sheet's data, so there is somewhere to type
+// without reaching for the add-columns control on every entry. The grid used to
+// render a flat 26 columns whatever the data was, which on a 14-column import made
+// 46% of every rendered cell an empty column nobody asked for (#282).
+const COL_MARGIN = 5;
+
 /**
- * Number of columns the grid renders for a sheet. The floor is the rightmost
- * populated column (so columns holding data are always shown, growing past A-Z
- * as data extends), raised by any explicit count from column inserts and capped
- * at MAX_COLS. In history mode the count comes from the previewed snapshot.
+ * Turn a sheet's rightmost populated column into the width the grid renders.
+ *
+ * The single home for that rule. It used to be spelled out in three places —
+ * getColCount and both render paths — which agreed only because they all hard-coded
+ * the same floor; moving one of them was enough to make the model and the render
+ * disagree about how wide the grid is (#282).
+ *
+ * @param {number} maxColIndex Rightmost populated column, or -1 for an empty sheet.
  * @param {string} [sheetName]
- * @returns {number} Column count in [DEFAULT_COLS, MAX_COLS].
+ * @returns {number} Column count, capped at MAX_COLS.
+ */
+const columnCountFor = (maxColIndex, sheetName = activeSheetName) => {
+  // A sheet with no addressable cell has nothing to derive a width from, and a
+  // blank grid still has to show somewhere to start.
+  const derived = maxColIndex < 0 ? DEFAULT_COLS : maxColIndex + 1 + COL_MARGIN;
+  // History previews show the snapshot as-is; the live explicit count doesn't apply.
+  const explicit = isHistoryMode ? 0 : (colCounts[sheetName] || 0);
+  return Math.min(Math.max(derived, explicit), MAX_COLS);
+};
+
+/**
+ * Number of columns the grid renders for a sheet: the sheet's own data, plus a
+ * margin to type into, raised by any explicit count from column inserts or the
+ * add-columns control, and capped at MAX_COLS. A sheet with no data at all still
+ * gets the full default width — there is nothing to derive a width from, and an
+ * empty sheet has to show somewhere to start.
+ *
+ * The floor used to be DEFAULT_COLS for every sheet regardless. That was doing two
+ * jobs: giving an empty sheet a grid, and standing in for the append-columns control
+ * the grid did not have (#283). With that control built, only the first job is left,
+ * and it only applies to a sheet that is actually empty.
+ *
+ * In history mode the count comes from the previewed snapshot.
+ * @param {string} [sheetName]
+ * @returns {number} Column count in [1, MAX_COLS]; DEFAULT_COLS for an empty sheet.
  */
 const getColCount = (sheetName = activeSheetName) => {
   const cells = (isHistoryMode && selectedVersionState)
     ? (selectedVersionState.sheets && selectedVersionState.sheets[sheetName])
     : localSheets[sheetName];
-  let maxIndex = DEFAULT_COLS - 1;
+  let maxIndex = -1;
   if (cells) {
     for (const id in cells) {
       const coord = parseCellCoord(id);
       if (coord && coord.colIndex > maxIndex) maxIndex = coord.colIndex;
     }
   }
-  // History previews show the snapshot as-is; the live explicit count doesn't apply.
-  const explicit = isHistoryMode ? 0 : (colCounts[sheetName] || 0);
-  return Math.min(Math.max(maxIndex + 1, explicit), MAX_COLS);
+  // Note maxIndex is the rightmost POPULATED column and the margin sits past it, so
+  // a lone cell in Z1 still holds column Z — the margin never eats into data.
+  return columnCountFor(maxIndex, sheetName);
 };
 
 /**
@@ -3502,8 +3590,11 @@ let renderedColCount = DEFAULT_COLS;
  *
  * @returns {{maxColIndex: number, fontRowHeights: Object, hasWrappedRows: boolean,
  *   hasUnmodelledWrap: boolean, cellCount: number}}
- *   maxColIndex is the rightmost populated column (floored at the default grid
- *   width); fontRowHeights maps a row to the height its tallest cell grows it to,
+ *   maxColIndex is the rightmost populated column, or -1 for a sheet with none —
+ *   the raw extent, with no floor or margin applied (columnCountFor owns that rule,
+ *   and having the scan pre-floor it is what let the render and the model disagree
+ *   about the grid's width, #282); fontRowHeights maps a row to the height its
+ *   tallest cell grows it to,
  *   wrapped cells included (their line count is measured — see wrappedLineCount);
  *   hasWrappedRows is true if any cell wraps at all, which only the row-band
  *   recycling guard cares about; hasUnmodelledWrap is true only for a wrap this
@@ -3524,7 +3615,7 @@ const scanActiveSheetModel = () => {
   const cells = localSheets[activeSheetName];
   if (scannedModel && scannedCells === cells && scannedVersion === cellsVersion
       && scannedColWidths === colWidthsVersion) return scannedModel;
-  let maxColIndex = DEFAULT_COLS - 1;
+  let maxColIndex = -1;
   const fontRowHeights = Object.create(null);
   const merges = [];
   let hasWrappedRows = false;
@@ -3974,7 +4065,7 @@ const renderSpreadsheetGrid = () => {
   // Column count for this render — grows past A-Z as data extends rightward.
   const colCount = isHistoryMode
     ? getColCount()
-    : Math.min(Math.max(sheetModel.maxColIndex + 1, colCounts[activeSheetName] || 0), MAX_COLS);
+    : columnCountFor(sheetModel.maxColIndex);
   // Published for the consumers that describe the RENDERED grid rather than the
   // model — the selection highlight and the text-overflow spill. They ran
   // getColCount themselves, which walked every cell again: once per mousemove of a
@@ -4232,7 +4323,7 @@ const renderSpreadsheetGrid = () => {
   // The band under the final row, holding the add-rows control. With explicit
   // placement (merges) we must pin its row track, since it carries no auto-placed
   // cells of its own.
-  const bottomBuffer = buildAddRowsBand();
+  const bottomBuffer = buildAddBand();
   if (useExplicitPlacement) bottomBuffer.style.gridRow = `${getRowCount() + 2}`;
   frag.appendChild(bottomBuffer);
 
@@ -4381,7 +4472,7 @@ const updateRowBand = () => {
   // a column appearing or a row growing is caught here rather than assumed away.
   const model = scanActiveSheetModel();
   if (model.hasWrappedRows) return false;
-  const colCount = Math.min(Math.max(model.maxColIndex + 1, colCounts[activeSheetName] || 0), MAX_COLS);
+  const colCount = columnCountFor(model.maxColIndex);
   if (bandFingerprint(model, colCount) !== renderedBandFingerprint) return false;
 
   const rowWin = computeRowWindow();

@@ -109,6 +109,8 @@ function createSandbox() {
 
   const exportSuffix = `
     globalThis.renderSpreadsheetGrid = renderSpreadsheetGrid;
+    globalThis.getColCount = getColCount;
+    globalThis.getColLetter = getColLetter;
     Object.defineProperty(globalThis, 'localSheets', { get: () => localSheets, set: (v) => { localSheets = v; }, configurable: true });
     Object.defineProperty(globalThis, 'activeSheetName', { get: () => activeSheetName, set: (v) => { activeSheetName = v; }, configurable: true });
     Object.defineProperty(globalThis, 'selectionStartCellId', { get: () => selectionStartCellId, configurable: true });
@@ -192,8 +194,14 @@ test('the full-grid selection tracks columns added beyond Z', () => {
 
   fireKeydown({ key: 'a', ctrlKey: true });
 
+  // Derived, not spelled out: a sheet renders its data plus a margin to type into
+  // (#282), so the last column is not the last POPULATED one. The claim being made
+  // is that select-all reaches the end of the rendered grid whatever that is —
+  // spelling the letter out just pins whichever width the model happened to have.
+  const lastCol = sandbox.getColLetter(sandbox.getColCount() - 1);
+  assert.ok(sandbox.getColCount() > 26, 'the grid did grow past the default A-Z');
   assert.strictEqual(sandbox.selectionStartCellId, 'A1');
-  assert.strictEqual(sandbox.selectionEndCellId, 'AB1000',
+  assert.strictEqual(sandbox.selectionEndCellId, `${lastCol}1000`,
     'the selection must reach the last rendered column, not stop at Z');
 });
 

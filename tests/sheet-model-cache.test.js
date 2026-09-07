@@ -164,7 +164,10 @@ test('every path that changes a cell invalidates the model', () => {
     'deleting a cell': {
       setup: (s) => s.writeCell('AB9', cell()),
       act: (s) => s.deleteCell('AB9'),
-      then: (m) => assert.strictEqual(m.maxColIndex, 25, 'and shrank back to Z'),
+      // Every path starts with a cell in A1, so removing AB9 leaves the extent at
+      // column 0. It read 25 while the scan pre-floored its answer at the default
+      // width, which hid the shrink this case is about (#282).
+      then: (m) => assert.strictEqual(m.maxColIndex, 0, 'and shrank back to the one cell left'),
     },
     'a remote cell-update': {
       act: (s) => s.applyRemote({ cellId: 'AC1', formula: '', value: 'v', style: {}, sheetName: s.sheetName() }),
@@ -180,7 +183,9 @@ test('every path that changes a cell invalidates the model', () => {
     },
     'wrapping text': {
       act: (s) => s.writeCell('D6', cell('w', { textWrap: 'wrap' })),
-      then: (m) => assert.strictEqual(m.hasWrappedRows, true, 'the sheet falls back to the full render'),
+      // hasWrappedRows says a wrap EXISTS; it no longer decides the fallback, which
+      // is hasUnmodelledWrap's job now that wrapped heights are measured (#278).
+      then: (m) => assert.strictEqual(m.hasWrappedRows, true, 'the wrap is seen by the model'),
     },
     'switching sheet': {
       setup: (s) => s.putSheet('Sheet2', Object.assign(Object.create(null), { BB2: cell() })),
