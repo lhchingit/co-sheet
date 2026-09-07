@@ -1,0 +1,78 @@
+# Route everyone editing one workbook to one replica.
+#
+# WHY THIS EXISTS
+#
+# A workbook write rewrites the WHOLE document from the replica's in-memory cache,
+# and the realtime bus that carries other replicas' edits is Redis pub/sub, which
+# guarantees neither ordering between publishers nor delivery at all. With several
+# replicas holding the same file, one can therefore serialize a document that
+# predates an edit another has already persisted and put it straight over the top.
+# The same absence of an owner also lets a cold-starting replica read a workbook
+# another one has not flushed yet, then overwrite it.
+#
+# Hashing by file gives each workbook exactly one writer and one broadcaster, which
+# closes all of that without an operation log, a CRDT, or any change to how state is
+# stored. See issue #273 for the full analysis.
+#
+# WHY THE `file` QUERY PARAMETER IS THE RIGHT KEY
+#
+# Every path that mutates a workbook resolves it from `?file=`:
+#
+#   * the WebSocket upgrade  (server.js, connection handler)
+#   * POST /api/cells        (req.query.file)
+#   * POST /api/versions/:id/restore
+#
+# No mutating path keys off a URL path segment, so this single hash policy covers
+# every write. WebSockets work with it because Envoy computes the hash on the HTTP
+# upgrade request, which carries the query string; the connection then stays pinned
+# to that endpoint for its lifetime.
+#
+# BEFORE YOU APPLY
+#
+#   1. Replace <namespace> below with the namespace the co-sheet Service lives in,
+#      and confirm the Service name is `co-sheet`.
+#   2. A DestinationRule is evaluated by the CLIENT proxy. For ingress traffic that
+#      is the ingress gateway, so this must be visible to it: either apply it in the
+#      gateway's namespace, or set `exportTo` (see the commented field below).
+#   3. `istioctl analyze -n <namespace>` will tell you if the host does not resolve.
+#      If your Istio is old enough to reject `httpQueryParameterName`, the fallback
+#      is `httpHeaderName` with a header the client sets — which needs an
+#      application change, so check this field first.
+#
+# WHAT THIS DOES NOT FIX
+#
+#   * Scale events and rolling updates reshuffle the hash ring: roughly 1/N of
+#     workbooks change owner, and during that window two replicas can write one
+#     file. The compare-and-set on `workbook_state.version` (issue #271) is what
+#     covers it, and stays necessary after this lands. Alert on the
+#     `workbook_write_conflicts_total` metric.
+#   * The legacy `default` workbook is a single hash key, so it is one hot replica
+#     by construction. That is inherent to hashing by file.
+#   * A single workbook is still bounded by one Node process (one core). The
+#     measured knee is ~300 concurrent cursor-only editors on one shared document
+#     (see loadtest/README.md); past that, routing is not the constraint.
+#   * POST /api/cells also accepts the file id in the request BODY. A body field is
+#     invisible to Envoy, so a caller using it is hashed on no key and can write the
+#     workbook from an arbitrary replica. Open question on #273.
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: co-sheet-file-affinity
+  namespace: <namespace>
+spec:
+  host: co-sheet.<namespace>.svc.cluster.local
+  # Uncomment to publish this rule to the ingress gateway's namespace instead of
+  # applying a copy there. "." is this namespace; add the gateway's if it differs.
+  # exportTo:
+  #   - "."
+  #   - istio-system
+  trafficPolicy:
+    loadBalancer:
+      consistentHash:
+        # The workbook id. Absent on no mutating path — the client sends
+        # `?file=default` explicitly for the legacy shared workbook.
+        httpQueryParameterName: file
+        # Larger than the default 1024 so a handful of replicas still get an even
+        # spread of workbooks across the ring.
+        minimumRingSize: 4096

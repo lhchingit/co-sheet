@@ -97,6 +97,8 @@ co-sheet-1/
 │   ├── index.html         # Spreadsheet editor page (/sheet)
 │   └── drive.html         # Drive + admin permissions page (/)
 ├── tests/                 # Integration & unit tests (node --test)
+├── k8s/                   # Deployment-time policy the app cannot express itself
+│   └── destinationrule-file-affinity.yaml  # Istio: route one workbook to one replica
 └── docs/                  # Design specs and implementation plans
 ```
 
