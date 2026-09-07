@@ -11,6 +11,21 @@ why it is needed.
 |------|--------------|
 | `destinationrule-file-affinity.yaml` | Istio `DestinationRule` hashing on `?file=` so all traffic for one workbook reaches one replica ([#273](https://github.com/lhchingit/co-sheet/issues/273)). |
 
+## Running more than one replica: what must be true first
+
+Both of these are correctness, not tuning. The application cannot enforce either from
+inside itself, which is the only reason they are a checklist instead of code.
+
+- [ ] **The `DestinationRule` is applied**, so each workbook has one writer. See
+  [Applying it](#applying-it). Without it, two replicas holding one file overwrite
+  each other's edits and nothing records that it happened.
+- [ ] **`workbook_write_conflicts_total` is alerting**, not merely graphed. See
+  [What it still does not cover](#what-it-still-does-not-cover). It is the only signal
+  that the above has failed, or that a rolling update's ring reshuffle has cost
+  someone an edit. It reads zero on a single replica, so any increase is real.
+
+If you are running one replica, neither applies and nothing here is needed.
+
 ## Why routing is a correctness concern here, not a performance one
 
 A workbook write rewrites the **whole document** from the replica's in-memory cache,
