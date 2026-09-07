@@ -3533,12 +3533,18 @@ const scanActiveSheetModel = () => {
   // Content widths resolved once per column rather than per wrapped cell: a
   // column's width is the same for every cell in it, and getColWidth walks the
   // hidden-column list on each call.
-  const contentWidths = Object.create(null);
+  //
+  // A Map, not an object: the key comes from a cell id in the workbook, which
+  // arrives from the server and therefore from other users. The loop below only
+  // ever hands this an [A-Z]+ run it parsed itself, but a Map has no property
+  // semantics to abuse either way, and keeping it out of an object's key space
+  // means nothing has to be argued about (CodeQL js/remote-property-injection).
+  const contentWidths = new Map();
   const contentWidthFor = (colLetter) => {
-    const known = contentWidths[colLetter];
+    const known = contentWidths.get(colLetter);
     if (known !== undefined) return known;
     const w = cellContentWidth(colLetter);
-    contentWidths[colLetter] = w;
+    contentWidths.set(colLetter, w);
     return w;
   };
   if (!cells) {
