@@ -44,6 +44,7 @@ import { createRateLimiters } from './services/rate-limit.js';
 import { createWriteCoalescer } from './services/workbook-writer.js';
 import { logger, component } from './services/logger.js';
 import { isMetricsEnabled, startMetricsServer, httpMetricsMiddleware, recordWorkbookWriteConflict } from './services/metrics.js';
+import { createTokenBucket } from './services/token-bucket.js';
 
 // Per-subsystem child loggers. Each tags its lines with a `component` field so
 // logs can be filtered by area; the default `logger` covers the REST handlers.
@@ -3057,14 +3058,61 @@ const userColors = ['#1471e6', '#1e8e3e', '#d93025', '#e37400', '#a142f4', '#f06
  * @param {object} msg
  * @param {string|null} [excludeWsId]
  */
+// Outbound backpressure. `ws.send` queues into the socket's own buffer and returns;
+// nothing bounds that buffer, and it is the pod's heap. A client that is connected
+// but not draining — a suspended laptop, a phone on a dying connection — therefore
+// grows this instance's memory for as long as it stays half-alive, without ever
+// failing a readyState check.
+//
+// Two thresholds, because the right answer differs by message. Past the first, a
+// message we are allowed to lose is dropped: a cursor position is worthless late,
+// and cursor traffic is the bulk of what a backed-up socket is behind on. Past the
+// second the socket is not draining at all, so it is terminated and left to
+// reconnect — the client already re-inits on every new connection.
+const WS_SEND_BUFFER_DROP_BYTES = parseInt(process.env.WS_SEND_BUFFER_DROP_BYTES || '1048576', 10);
+const WS_SEND_BUFFER_MAX_BYTES = parseInt(process.env.WS_SEND_BUFFER_MAX_BYTES || '8388608', 10);
+
+/**
+ * Whether a broadcast may be dropped from a socket that is falling behind.
+ * Presence position updates only: they are superseded by the next one, so a late
+ * delivery is worth less than the memory it costs. Everything else — state updates,
+ * user-leave, init — must arrive or the client's view silently diverges.
+ * @param {object} msg
+ * @returns {boolean}
+ */
+const isDroppableUnderPressure = (msg) => msg.type === 'cursor-update';
+
 const localBroadcast = (fileId, msg, excludeWsId = null) => {
   const ids = usersOnFile(localUsersByFile, fileId);
   if (ids.size === 0) return; // nobody here; don't serialize a message for no one
   const data = JSON.stringify(msg);
+  const droppable = isDroppableUnderPressure(msg);
+  /** @type {Array<{ ws: any, username: string, buffered: number }>|null} */
+  let stuck = null;
+
   for (const id of ids) {
     if (id === excludeWsId) continue;
     const info = activeUsers.get(id);
-    if (info && info.ws.readyState === WebSocket.OPEN) info.ws.send(data);
+    if (!info || info.ws.readyState !== WebSocket.OPEN) continue;
+
+    const buffered = info.ws.bufferedAmount;
+    if (buffered > WS_SEND_BUFFER_MAX_BYTES) {
+      // Collected, not terminated here: terminate() runs the close handler, which
+      // broadcasts user-leave — a reentrant call into this function while we are
+      // still walking its index. Deal with them once the walk is done.
+      (stuck || (stuck = [])).push({ ws: info.ws, username: info.username, buffered });
+      continue;
+    }
+    if (droppable && buffered > WS_SEND_BUFFER_DROP_BYTES) continue;
+
+    info.ws.send(data);
+  }
+
+  if (stuck) {
+    for (const { ws, username, buffered } of stuck) {
+      wsLog.warn(`Terminating ${username}: ${buffered} bytes queued, above the ${WS_SEND_BUFFER_MAX_BYTES} ceiling`);
+      try { ws.terminate(); } catch (e) { /* already gone */ }
+    }
   }
 };
 
@@ -3085,6 +3133,23 @@ const resolveCachedWorkbook = (fileId) => {
 // Largest cell-edit-bulk a single message may carry. Mirrored by the client's
 // CELL_EDIT_BULK_MAX, which chunks longer bursts.
 const MAX_BULK_CELL_EDITS = 500;
+
+// Inbound budgets, per connection. MAX_BULK_CELL_EDITS bounds how much ONE message
+// may ask for; nothing bounded how many messages, and the HTTP limiters in
+// services/rate-limit.js do not see WebSocket traffic at all (their own header says
+// so). A single client looping cell-edit therefore drove a whole-document write
+// schedule and a fan-out to every peer on the file, as fast as it could type into a
+// socket — one client, no thousand needed.
+//
+// These are abuse ceilings, not flow control. They are set well above anything
+// interactive use produces so that no real editor ever meets them: a paste is a
+// legitimate burst of several hundred messages in one tick (the client chunks at
+// CELL_EDIT_BULK_MAX per message), which is what the burst allowance is sized for,
+// while a script is a rate that simply never stops, which is what the refill catches.
+const WS_OP_BURST = parseInt(process.env.WS_OP_BURST || '400', 10);
+const WS_OP_RATE = parseInt(process.env.WS_OP_RATE || '100', 10);
+const WS_PRESENCE_BURST = parseInt(process.env.WS_PRESENCE_BURST || '60', 10);
+const WS_PRESENCE_RATE = parseInt(process.env.WS_PRESENCE_RATE || '20', 10);
 
 /**
  * Apply a state-changing op to `workbook` and return the client messages to emit.
@@ -3454,6 +3519,13 @@ wss.on('connection', async (ws, req) => {
   activeUsers.set(wsId, { ws, username, color, activeCell: null, fileId });
   indexUser(localUsersByFile, fileId, wsId);
 
+  // This connection's inbound budgets. Presence and state-changing traffic get
+  // separate ones because the two differ in both volume and consequence: cursor
+  // moves are the chattiest thing on the wire and the cheapest to lose, while an
+  // edit must not be dropped behind the user's back.
+  const presenceBudget = createTokenBucket({ capacity: WS_PRESENCE_BURST, refillPerSec: WS_PRESENCE_RATE });
+  const opBudget = createTokenBucket({ capacity: WS_OP_BURST, refillPerSec: WS_OP_RATE });
+
   // Heartbeat liveness: mark alive now and on every pong. The interval above pings
   // each socket and terminates any still marked dead from the previous round, so a
   // silently-dropped connection is reaped instead of leaving a stale presence tag.
@@ -3525,6 +3597,11 @@ wss.on('connection', async (ws, req) => {
 
       // Handle client cell cursor navigation (presence — no state mutation).
       if (type === 'cursor-move') {
+        // Over budget: drop it and say nothing. A cursor position is superseded by
+        // the next one, so losing it costs the peers a stale tag for a moment and
+        // costs this client nothing — the one class of message that is genuinely
+        // safe to discard.
+        if (!presenceBudget.take()) return;
         const info = activeUsers.get(wsId);
         if (info) {
           // Verify that the sheetName is a string matching the sheet-name regex and exists before assigning it.
@@ -3546,6 +3623,24 @@ wss.on('connection', async (ws, req) => {
           localBroadcast(fileId, { type: 'cursor-update', payload: cu }, wsId);
           bus.publish({ kind: 'presence', event: 'update', fileId, user: cu });
         }
+        return;
+      }
+
+      // Everything that is not a cursor move is charged to the op budget, including
+      // types we do not handle and messages from a client that may not edit: the
+      // parse has already happened by this point, so an unknown type is as much of a
+      // lever as a known one.
+      //
+      // Over budget the socket is CLOSED, not throttled. A state-changing message may
+      // not be silently discarded — the client applies edits optimistically, so a
+      // dropped one leaves its view holding a value the server does not have, with
+      // nothing to tell it. Closing re-synchronises it for free: the client already
+      // reconnects with backoff and the server sends a full `init` on every new
+      // connection, so the reconnect IS the resync. 1008 is the policy-violation
+      // close code.
+      if (!opBudget.take()) {
+        wsLog.warn(`Rate limit exceeded by ${username} (${wsId}) on file ${fileId}; closing the socket`);
+        try { ws.close(1008, 'rate limit exceeded'); } catch (e) { /* already closing */ }
         return;
       }
 
