@@ -593,7 +593,12 @@ paths:
           in: query
           schema:
             type: string
-          description: File ID (may also be supplied in the body as `file`).
+          description: >-
+            File ID. Must be given here, in the query string — a `file` field in the
+            request body is rejected with 400. A load balancer cannot see the body,
+            and co-sheet routes a workbook's traffic to a single replica by hashing
+            this parameter, so an id hidden in the body can be served by a replica
+            that is not the file's owner. Absent means the legacy `default` workbook.
       requestBody:
         required: true
         content:
