@@ -2470,9 +2470,24 @@ app.post('/api/cells', ensureAuthenticated, async (req, res) => {
     return res.status(400).json({ error: 'bad_request', message: validation.message });
   }
 
-  const fileId = (req.query.file && isValidFileId(req.query.file))
-    ? req.query.file
-    : ((req.body.file && isValidFileId(req.body.file)) ? req.body.file : 'default');
+  // The workbook is named in the query string, and only there. It used to be
+  // accepted in the body as an alternative, which a load balancer cannot see: under
+  // file-affine routing (#273) a request carrying it there is hashed on no key at
+  // all, so it can be served — and therefore the workbook written — by a replica
+  // that is not the file's owner, which is the exact hole the routing closes.
+  //
+  // Rejected rather than ignored. Dropping the fallback silently would send a
+  // request that named its workbook in the body to the DEFAULT workbook instead,
+  // writing the caller's cell into a different document; a 400 that says where the
+  // id belongs is a smaller break than that.
+  if (req.body && req.body.file !== undefined) {
+    return res.status(400).json({
+      error: 'bad_request',
+      message: 'Name the workbook in the query string (?file=<id>); the body field is no longer accepted'
+    });
+  }
+
+  const fileId = (req.query.file && isValidFileId(req.query.file)) ? req.query.file : 'default';
 
   // The owner, admins/super admins, and users shared as 'editor' may edit a file
   // (the shared 'default' workbook is exempt). Reads are unrestricted; writes are

@@ -420,6 +420,29 @@ test('POST /api/cells validates cell ID, prototype keys, and strict payload sche
     const res18 = await makeRequest('http://localhost:31262/api/cells', 'POST', textFormatPayload, { Cookie: cookie });
     assert.strictEqual(res18.statusCode, 200);
     assert.strictEqual(res18.data.success, true);
+
+    // 19. Naming the workbook in the BODY is refused, not quietly ignored (#273).
+    // A load balancer cannot see the body, so an id hidden there is hashed on no
+    // key and can be written by a replica that is not the file's owner. Ignoring it
+    // instead would be worse than the hole it closes: the request would fall
+    // through to the DEFAULT workbook and write the caller's cell into a different
+    // document, which is exactly the silent corruption the 400 exists to prevent.
+    const bodyFilePayload = { cellId: 'A16', formula: '', value: 'x', style: {}, file: 'a'.repeat(24) };
+    const res19 = await makeRequest('http://localhost:31262/api/cells', 'POST', bodyFilePayload, { Cookie: cookie });
+    assert.strictEqual(res19.statusCode, 400);
+    assert.strictEqual(res19.data.error, 'bad_request');
+    assert.match(res19.data.message, /query string/, 'the error says where the id belongs');
+
+    // ...and nothing was written, to this workbook or any other.
+    const afterReject = await makeRequest('http://localhost:31262/api/cells', 'GET', null, { Cookie: cookie });
+    assert.strictEqual(afterReject.statusCode, 200);
+    assert.ok(!afterReject.data.A16, 'a refused write leaves no cell behind');
+
+    // 20. The same edit is accepted when the workbook is named in the query string.
+    const queryFilePayload = { cellId: 'A16', formula: '', value: 'x', style: {} };
+    const res20 = await makeRequest('http://localhost:31262/api/cells?file=default', 'POST', queryFilePayload, { Cookie: cookie });
+    assert.strictEqual(res20.statusCode, 200);
+    assert.strictEqual(res20.data.success, true);
   } finally {
     child.kill();
     await new Promise(resolve => setTimeout(resolve, 300));
