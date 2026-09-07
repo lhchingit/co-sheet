@@ -536,12 +536,30 @@ const getColWidth = (colLetter, sheetName = activeSheetName) => {
   const w = m && m[colLetter];
   return (typeof w === 'number' && isFinite(w)) ? w : DEFAULT_COL_WIDTH;
 };
+/**
+ * Pixels of text width a cell in `colLetter` has, i.e. the column's track minus
+ * the cell's own padding and gridline border. What a wrapped cell's text breaks
+ * against.
+ * @param {string} colLetter
+ * @param {string} [sheetName]
+ * @returns {number}
+ */
+const cellContentWidth = (colLetter, sheetName = activeSheetName) =>
+  getColWidth(colLetter, sheetName) - CELL_CONTENT_INSET;
+
+// Bumped whenever a column width changes. A wrapped row's height depends on the
+// width its text wraps against, so a resize invalidates the scanned model even
+// though no cell was touched and cellsVersion did not move (#278). Every other
+// modelled height is width-independent, which is why nothing needed this before.
+let colWidthsVersion = 0;
+
 // Font-driven row heights for the active sheet: row number -> px, for rows a
 // large-font cell grows past the default. Rebuilt from the model each render by
 // scanActiveSheetModel (deterministic via getCellMinHeight, no DOM), so
 // getRowHeight is authoritative for these rows and a windowed render can size and
-// map their off-screen tracks. Wrapped-text growth needs real text measurement
-// and is not modelled here (see sheetHasWrappedRows).
+// map their off-screen tracks. Wrapped cells are in here too: their line count is
+// measured with canvas text metrics rather than counted (#278), so a wrapped row
+// no longer costs the sheet its windowing.
 let autoFontRowHeights = Object.create(null);
 // Set when a cell write would give its row a height the map above doesn't hold.
 // Most font-size changes never reach a render — setCellFontSize, a style paste,
@@ -552,6 +570,8 @@ let autoFontRowHeights = Object.create(null);
 // than run per write, which keeps a bulk edit to one rescan and leaves the
 // drag-select hot path at a single boolean test.
 let autoFontRowHeightsStale = false;
+// Column-width version the memoized sheet scan was taken at; see colWidthsVersion.
+let scannedColWidths = -1;
 
 /**
  * Flags the font-driven row-height map stale when rendering `cellId` with `style`
@@ -565,9 +585,9 @@ let autoFontRowHeightsStale = false;
  */
 const markAutoFontRowHeightStale = (cellId, value, style) => {
   if (autoFontRowHeightsStale) return;
-  const wanted = modelledCellHeight(value, style);
   const coord = parseCellCoord(cellId);
   if (!coord) return;
+  const wanted = modelledCellHeight(value, style, cellContentWidth(coord.colLetter));
   const modelled = autoFontRowHeights[coord.row];
   if (wanted === null ? modelled != null : !(modelled >= wanted)) autoFontRowHeightsStale = true;
 };
@@ -1054,6 +1074,7 @@ function handleSocketMessage(event) {
       if (payload.sheetColors) sheetColors = payload.sheetColors;
       if (payload.hiddenSheets) hiddenSheets = payload.hiddenSheets;
       colWidths = (payload.colWidths && typeof payload.colWidths === 'object') ? payload.colWidths : Object.create(null);
+      colWidthsVersion++;
       rowHeights = (payload.rowHeights && typeof payload.rowHeights === 'object') ? payload.rowHeights : Object.create(null);
       colCounts = (payload.colCounts && typeof payload.colCounts === 'object') ? payload.colCounts : Object.create(null);
       rowCounts = (payload.rowCounts && typeof payload.rowCounts === 'object') ? payload.rowCounts : Object.create(null);
@@ -1257,6 +1278,9 @@ function handleSocketMessage(event) {
       const dimMap = ensureKey(map, sheet, () => Object.create(null));
       const key = dimension === 'col' ? col : row;
       if (key != null) setKey(dimMap, key, size);
+      // A narrower column re-wraps its text onto more lines, so the scanned model
+      // is stale even though no cell changed (#278).
+      if (dimension === 'col') colWidthsVersion++;
       // Re-render only when the change lands on the sheet currently in view.
       if (sheet === activeSheetName) renderSpreadsheetGrid();
     }
@@ -3477,13 +3501,16 @@ let renderedColCount = DEFAULT_COLS;
  * parseCellCoord, whose regex and result object are wasteful at this scale.
  *
  * @returns {{maxColIndex: number, fontRowHeights: Object, hasWrappedRows: boolean,
- *   cellCount: number}}
+ *   hasUnmodelledWrap: boolean, cellCount: number}}
  *   maxColIndex is the rightmost populated column (floored at the default grid
- *   width); fontRowHeights maps a row to the height a large-font cell grows it to;
- *   hasWrappedRows is true if any cell wraps, whose height the model cannot
- *   predict — such sheets fall back to the full render; cellCount is how many
- *   entries the sheet holds, reported here because this walk passes every one of
- *   them anyway and a later `Object.keys(...).length` would walk them again.
+ *   width); fontRowHeights maps a row to the height its tallest cell grows it to,
+ *   wrapped cells included (their line count is measured — see wrappedLineCount);
+ *   hasWrappedRows is true if any cell wraps at all, which only the row-band
+ *   recycling guard cares about; hasUnmodelledWrap is true only for a wrap this
+ *   environment could NOT measure, and is what still forces the full render;
+ *   cellCount is how many entries the sheet holds, reported here because this walk
+ *   passes every one of them anyway and a later `Object.keys(...).length` would
+ *   walk them again.
  */
 // The last model handed out, with the two things that decide whether it still
 // describes the sheet: the exact cell map it walked, and the write counter at the
@@ -3495,15 +3522,35 @@ let scannedVersion = -1;
 
 const scanActiveSheetModel = () => {
   const cells = localSheets[activeSheetName];
-  if (scannedModel && scannedCells === cells && scannedVersion === cellsVersion) return scannedModel;
+  if (scannedModel && scannedCells === cells && scannedVersion === cellsVersion
+      && scannedColWidths === colWidthsVersion) return scannedModel;
   let maxColIndex = DEFAULT_COLS - 1;
   const fontRowHeights = Object.create(null);
   const merges = [];
   let hasWrappedRows = false;
+  let hasUnmodelledWrap = false;
   let cellCount = 0;
+  // Content widths resolved once per column rather than per wrapped cell: a
+  // column's width is the same for every cell in it, and getColWidth walks the
+  // hidden-column list on each call.
+  //
+  // A Map, not an object: the key comes from a cell id in the workbook, which
+  // arrives from the server and therefore from other users. The loop below only
+  // ever hands this an [A-Z]+ run it parsed itself, but a Map has no property
+  // semantics to abuse either way, and keeping it out of an object's key space
+  // means nothing has to be argued about (CodeQL js/remote-property-injection).
+  const contentWidths = new Map();
+  const contentWidthFor = (colLetter) => {
+    const known = contentWidths.get(colLetter);
+    if (known !== undefined) return known;
+    const w = cellContentWidth(colLetter);
+    contentWidths.set(colLetter, w);
+    return w;
+  };
   if (!cells) {
-    const empty = { maxColIndex, fontRowHeights, merges, hasWrappedRows, cellCount };
+    const empty = { maxColIndex, fontRowHeights, merges, hasWrappedRows, hasUnmodelledWrap, cellCount };
     scannedModel = empty; scannedCells = cells; scannedVersion = cellsVersion;
+    scannedColWidths = colWidthsVersion;
     return empty;
   }
 
@@ -3542,15 +3589,29 @@ const scanActiveSheetModel = () => {
     // `val ?`); 0 / false count as present. Above the default font size, or drawn
     // on more than one line because its value carries a break (#240) -- the model
     // has to hold both, or the rows below a broken cell are placed too high.
-    const minHeight = modelledCellHeight(cell.value, style);
+    const wraps = !!(style && style.textWrap === 'wrap');
+    let minHeight;
+    if (wraps && cell.value != null && cell.value !== '') {
+      // Asked for as a line count rather than through modelledCellHeight, because
+      // a null height is ambiguous: getCellMinHeight returns null both for a cell
+      // it cannot model AND for one that simply fits the default row. Only the
+      // first must force a full render, and a wrapped cell short enough to fit on
+      // one line is the overwhelmingly common case (#278).
+      const lines = wrappedLineCount(cell.value, cellFontCss(style), contentWidthFor(id.slice(0, i)));
+      if (lines === null) hasUnmodelledWrap = true; // no canvas in this environment
+      else minHeight = getCellMinHeight(style && style.fontSize, lines);
+    } else {
+      minHeight = modelledCellHeight(cell.value, style);
+    }
     if (!minHeight) continue;
     const row = parseInt(id.slice(i), 10);
     if (!(fontRowHeights[row] >= minHeight)) fontRowHeights[row] = minHeight;
   }
-  const model = { maxColIndex, fontRowHeights, merges, hasWrappedRows, cellCount };
+  const model = { maxColIndex, fontRowHeights, merges, hasWrappedRows, hasUnmodelledWrap, cellCount };
   scannedModel = model;
   scannedCells = cells;
   scannedVersion = cellsVersion;
+  scannedColWidths = colWidthsVersion;
   return model;
 };
 
@@ -3945,9 +4006,9 @@ const renderSpreadsheetGrid = () => {
   // This render's scan is the rebuild any pending flag was asking for.
   autoFontRowHeightsStale = false;
   // Merges are windowed (the render force-includes anchor rows whose span reaches
-  // into the window); only wrapped text — whose row height isn't modelled — still
-  // forces the full render.
-  const windowActive = windowingEnabled && !isHistoryMode && !sheetModel.hasWrappedRows;
+  // into the window) and wrapped rows are measured (#278), so the only thing left
+  // that forces a full render is a wrap this environment could not measure at all.
+  const windowActive = windowingEnabled && !isHistoryMode && !sheetModel.hasUnmodelledWrap;
   activeSheetWindowed = windowActive;
   const rowWin = windowActive ? computeRowWindow() : null;
   renderedRowStart = windowActive ? rowWin.start : 1;
@@ -4574,6 +4635,7 @@ function startDimensionResize(dimension, key, headerEl, clientStart) {
       const map = isCol ? colWidths : rowHeights;
       const dimMap = ensureKey(map, activeSheetName, () => Object.create(null));
       setKey(dimMap, key, newSize);
+      if (isCol) colWidthsVersion++; // see the remote resize handler
       renderSpreadsheetGrid();
       if (socket && socket.readyState === WebSocket.OPEN) {
         const payload = { dimension, size: newSize };
@@ -6455,6 +6517,19 @@ const clampFontSize = (size) => {
 // template and every overlay measurement are built from (see rowTop), so a value
 // under the real box height lets `minmax(..., auto)` grow the track past what the
 // model believes and puts the selection frame in the wrong place.
+// Horizontal box a cell spends before its text: `padding: 0.2em 3px` on both
+// sides plus the 1px `border-right` that draws the gridline, under
+// `box-sizing: border-box`. Subtracted from a column's track width to get the
+// width text actually wraps against. Keep in sync with .grid-cell in
+// private/index.html.
+const CELL_CONTENT_INSET = 7;
+
+// Fallback base font for measurement, matching `.grid-cell`'s inherited
+// `text-body-sm font-body-sm` (12px/400 Roboto). Only used before a cell has ever
+// been rendered — after that the real computed font is read from the page, so a
+// stylesheet change cannot silently drift from this constant.
+const FALLBACK_CELL_FONT = '400 12px Roboto, sans-serif';
+
 const CELL_LINE_HEIGHT_FACTOR = 1.2;   // .grid-cell `line-height`
 const CELL_VERTICAL_PADDING_EM = 0.4;  // .grid-cell `padding: 0.2em ...`, top + bottom
 const CELL_GRIDLINE_HEIGHT = 1;        // .grid-cell `border-bottom`
@@ -6474,6 +6549,174 @@ const DEFAULT_CELL_FONT_PX = 12;
  * @param {number} fontSize - Font size in points.
  * @returns {number|null} Height in px, or null to use the default row height.
  */
+// A detached 2D canvas context, created once and only ever measured from —
+// nothing is drawn and it is never attached, so it costs no layout and no paint.
+// `undefined` means "not tried yet"; `null` means this environment has no canvas
+// (a test sandbox, a hardened browser), which the callers treat as "cannot model
+// a wrapped row" and fall back to the full render rather than guess at geometry.
+let wrapMeasureCtx;
+
+/** The measurement context, or null where canvas is unavailable. */
+const getWrapMeasureCtx = () => {
+  if (wrapMeasureCtx !== undefined) return wrapMeasureCtx;
+  try {
+    const canvas = document.createElement('canvas');
+    wrapMeasureCtx = (canvas && typeof canvas.getContext === 'function')
+      ? canvas.getContext('2d')
+      : null;
+    // A context that cannot measure is no context at all.
+    if (wrapMeasureCtx && typeof wrapMeasureCtx.measureText !== 'function') wrapMeasureCtx = null;
+  } catch (e) {
+    wrapMeasureCtx = null;
+  }
+  return wrapMeasureCtx;
+};
+
+// The page's real base cell font, resolved once from a rendered cell. Read from
+// the page rather than assembled from constants so the measurement inherits
+// whatever the stylesheet actually resolved — including the fallback face when
+// Roboto has not loaded, which measures differently.
+let baseCellFontCss = '';
+
+/** `font` shorthand for a cell carrying no font styles of its own. */
+const getBaseCellFont = () => {
+  if (baseCellFontCss) return baseCellFontCss;
+  try {
+    const probe = document.querySelector('.grid-cell');
+    if (probe && typeof getComputedStyle === 'function') {
+      const cs = getComputedStyle(probe);
+      const family = cs && cs.fontFamily;
+      const size = cs && cs.fontSize;
+      if (family && size) {
+        baseCellFontCss = `${cs.fontStyle || 'normal'} ${cs.fontWeight || '400'} ${size} ${family}`;
+        return baseCellFontCss;
+      }
+    }
+  } catch (e) { /* fall through to the constant */ }
+  // Deliberately not cached: the next call retries once a cell exists, so the
+  // first render's measurements are the only ones that can use the fallback.
+  return FALLBACK_CELL_FONT;
+};
+
+/**
+ * The `font` shorthand a cell's text is drawn with, so measureText sees the same
+ * glyphs the renderer does. Mirrors what renderSpreadsheetGrid applies inline:
+ * fontFamily through resolveFontFamily, fontSize in points, bold and italic.
+ * @param {{fontFamily?: string, fontSize?: number, bold?: boolean, italic?: boolean}|null|undefined} style
+ * @returns {string}
+ */
+const cellFontCss = (style) => {
+  const base = getBaseCellFont();
+  if (!style || (!style.fontFamily && !style.fontSize && !style.bold && !style.italic)) return base;
+  // Pull the family and size out of the base so per-cell overrides can replace
+  // just those parts; the base is always `<style> <weight> <size> <family>`.
+  const m = /^(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/.exec(base);
+  const baseWeight = m ? m[2] : '400';
+  const baseSize = m ? m[3] : '12px';
+  const baseFamily = m ? m[4] : 'Roboto, sans-serif';
+  const size = style.fontSize ? `${style.fontSize * PT_TO_PX}px` : baseSize;
+  const family = style.fontFamily ? resolveFontFamily(style.fontFamily) : baseFamily;
+  const weight = style.bold ? '700' : baseWeight;
+  const fontStyle = style.italic ? 'italic' : 'normal';
+  return `${fontStyle} ${weight} ${size} ${family}`;
+};
+
+/**
+ * How many lines `text` occupies when wrapped inside `contentWidth` pixels.
+ *
+ * Mirrors what the browser does to a `.grid-cell` carrying textWrap 'wrap':
+ * `white-space: pre-wrap` keeps explicit breaks and wraps at spaces, and
+ * `word-break: break-word` lets a word too long for the line break inside itself.
+ *
+ * @param {string} text
+ * @param {string} fontCss  A `font` shorthand.
+ * @param {number} contentWidth  Pixels available for text.
+ * @returns {number|null} Line count, or null when nothing here can measure.
+ */
+const wrappedLineCount = (text, fontCss, contentWidth) => {
+  const ctx = getWrapMeasureCtx();
+  if (!ctx) return null;
+  if (!(contentWidth > 0)) return 1; // a collapsed/hidden column wraps nothing
+  ctx.font = fontCss;
+  const widthOf = (str) => ctx.measureText(str).width;
+
+  let lines = 0;
+  for (const hardLine of String(text).split('\n')) {
+    if (hardLine === '') { lines++; continue; }
+    // The whole line fits: one measurement, no word walk. This is the common case
+    // — the scan runs over every wrapped cell in the sheet, and most cells are
+    // shorter than their column.
+    if (widthOf(hardLine) <= contentWidth) { lines++; continue; }
+    lines += wrapSegmentLines(hardLine, widthOf, contentWidth);
+  }
+  return lines || 1;
+};
+
+/**
+ * Lines one hard line breaks into. Greedy, space-separated, with a word wider than
+ * the whole line broken character by character (`word-break: break-word`).
+ * @param {string} hardLine
+ * @param {(s: string) => number} widthOf
+ * @param {number} contentWidth
+ * @returns {number}
+ */
+const wrapSegmentLines = (hardLine, widthOf, contentWidth) => {
+  let lines = 1;
+  let current = '';
+  // Split on spaces but keep them: pre-wrap does not collapse runs of spaces, and
+  // a trailing space is what allows the break in the first place.
+  const words = hardLine.split(' ');
+  for (let i = 0; i < words.length; i++) {
+    const word = i === 0 ? words[i] : ' ' + words[i];
+    const candidate = current + word;
+    if (current === '' || widthOf(candidate) <= contentWidth) {
+      // A single word wider than the line has to break inside itself; the
+      // remainder becomes the current line and keeps accumulating.
+      if (current === '' && widthOf(word) > contentWidth) {
+        const broken = breakLongWord(word, widthOf, contentWidth);
+        lines += broken.lines;
+        current = broken.remainder;
+        continue;
+      }
+      current = candidate;
+    } else {
+      lines++;
+      const bare = words[i];
+      if (widthOf(bare) > contentWidth) {
+        const broken = breakLongWord(bare, widthOf, contentWidth);
+        lines += broken.lines;
+        current = broken.remainder;
+      } else {
+        current = bare;
+      }
+    }
+  }
+  return lines;
+};
+
+/**
+ * Break a word wider than the line. Returns how many FULL lines it consumed and
+ * what is left over on the line still being filled.
+ * @param {string} word
+ * @param {(s: string) => number} widthOf
+ * @param {number} contentWidth
+ * @returns {{ lines: number, remainder: string }}
+ */
+const breakLongWord = (word, widthOf, contentWidth) => {
+  let lines = 0;
+  let current = '';
+  for (const ch of word) {
+    const candidate = current + ch;
+    if (current !== '' && widthOf(candidate) > contentWidth) {
+      lines++;
+      current = ch;
+    } else {
+      current = candidate;
+    }
+  }
+  return { lines, remainder: current };
+};
+
 const getCellMinHeight = (fontSize, lines = 1) => {
   const size = clampFontSize(fontSize);
   // No explicit font size and a single line is the default box, which the default
@@ -6523,11 +6766,19 @@ const cellWhiteSpace = (val, style) => {
  * @param {{fontSize?: number, textWrap?: string}|null|undefined} style
  * @returns {number|null}
  */
-const modelledCellHeight = (value, style) => {
+const modelledCellHeight = (value, style, contentWidth) => {
   if (value == null || value === '') return null;
-  // A wrapped cell's height depends on where the text breaks against the column
-  // width, which only a render can know: that path is measured, not modelled.
-  if (style && style.textWrap === 'wrap') return null;
+  // A wrapped cell's height depends on where its text breaks against the column,
+  // so the line count is measured rather than counted. Everything after that is
+  // the same model every other cell uses. Without a width to wrap against (an
+  // older caller, a column we cannot resolve) or without canvas, it stays
+  // unmodellable and the caller falls back to rendering every row (#278).
+  if (style && style.textWrap === 'wrap') {
+    if (!(contentWidth > 0)) return null;
+    const lines = wrappedLineCount(value, cellFontCss(style), contentWidth);
+    if (lines === null) return null;
+    return getCellMinHeight(style && style.fontSize, lines);
+  }
   return getCellMinHeight(style && style.fontSize, cellLineCount(value));
 };
 
